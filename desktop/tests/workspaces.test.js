@@ -9,6 +9,29 @@ const source = fs.readFileSync(new URL("../ui/workspaces.js", import.meta.url), 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const item = title => ({label:title, window:{title, appId:"fixture", monitor:1, rect:{width:640,height:400}}, launch:{program:"fixture", args:[], workingDirectory:"", newWindow:false}});
 const profile = (id, name) => ({id,name,platform:"linux",items:[item(name + " window")]});
+
+test("Firefox profile, tabs, active tab and capture notes survive review and save",async()=>{
+    const p=profile("browser","Research");
+    p.items[0].browser={profilePath:"/profiles/work",profileName:"Work",tabs:[{url:"https://example.test/one",title:"One"}],activeTab:1};
+    p.items[0].captureNote="Review captured tabs.";
+    const e=await editor({profiles:[p]});
+    await e.click('[data-action="edit"]');
+    assert.equal(e.document.querySelector(".browser-settings").hidden,false);
+    assert.equal(e.document.querySelector(".capture-note").textContent,"Review captured tabs.");
+    e.input('[data-browser="profilePath"]',"/profiles/another path");
+    e.input('[data-browser="tabs"]',"https://example.test/one\nhttps://example.test/two?q=a%20b");
+    e.input('[data-browser="activeTab"]',"2");
+    await e.click("#save-workspace");
+    const browser=e.stored().profiles[0].items[0].browser;
+    assert.equal(browser.profilePath,"/profiles/another path");
+    assert.equal(browser.tabs[0].title,"One");
+    assert.equal(browser.tabs[1].url,"https://example.test/two?q=a%20b");
+    assert.equal(browser.activeTab,2);
+    await e.click('[data-action="edit"]');
+    e.change(".restore-browser",false);
+    await e.click("#save-workspace");
+    assert.equal(e.stored().profiles[0].items[0].browser,null);
+});
 async function editor({profiles = [], failSave = false, failLoad = false} = {}) {
     const {window,document} = parseHTML(html);
     Object.defineProperty(window.HTMLSelectElement.prototype,"value", {configurable:true,

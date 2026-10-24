@@ -24,4 +24,9 @@ for attempt in $(seq 1 60); do
     sleep 0.2
 done
 export WAYLAND_DISPLAY=warp-test QT_QPA_PLATFORM=wayland
-python3 "$root/tests/kde/live.py" "$root/src-tauri/kwin/warp.js"
+if [[ "${2:-}" == "--gui" ]]; then
+    shift 2
+    python3 "$root/tests/kde/gui.py" "$@"
+else
+    python3 "$root/tests/kde/live.py" "$root/src-tauri/kwin/warp.js"
+fi

@@ -29,6 +29,10 @@ pub struct WorkspaceItem {
     pub label: String,
     pub window: WindowInfo,
     pub launch: LaunchSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<crate::firefox::Browser>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub capture_note: String,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
@@ -85,6 +89,9 @@ impl WorkspaceStore {
                 return Err("Unknown workspace platform.".into());
             }
             for item in &profile.items {
+                if let Some(browser) = &item.browser {
+                    browser.validate()?;
+                }
                 let w = &item.window;
                 for rect in [w.rect, w.work_area] {
                     if rect.width <= 0
@@ -179,6 +186,8 @@ pub fn capture(windows: Vec<WindowInfo>, name: String) -> Workspace {
                     label,
                     window,
                     launch,
+                    browser: None,
+                    capture_note: String::new(),
                 }
             })
             .collect(),
@@ -233,6 +242,7 @@ pub fn restore(
         return Err("This workspace was captured on another operating system. Import or adapt its app commands before launching it here.".into());
     }
     let mut used = HashSet::new();
+    let mut browser_matcher = crate::firefox::Matcher::default();
     let mut results = Vec::new();
     for item in &profile.items {
         if cancelled.load(Ordering::Relaxed) {
@@ -240,7 +250,12 @@ pub fn restore(
         }
         let mut launched = false;
         let result = (|| {
-            let windows = crate::platform::snapshot(app)?;
+            let mut windows = crate::platform::snapshot(app)?;
+            if let Some(browser) = &item.browser {
+                windows.retain(|w| {
+                    !crate::firefox::is_firefox(w) || browser_matcher.matches(w, browser)
+                });
+            }
             let existing = if item.launch.new_window {
                 None
             } else {
@@ -249,16 +264,25 @@ pub fn restore(
             let target = if let Some(window) = existing {
                 window
             } else {
-                let before: HashSet<_> = windows.iter().map(|w| w.id.clone()).collect();
-                launch(&item.launch)?;
+                // Include all preexisting browser windows, even other profiles.
+                let before: HashSet<_> = crate::platform::snapshot(app)?
+                    .iter()
+                    .map(|w| w.id.clone())
+                    .collect();
+                let commands = if let Some(browser) = &item.browser {
+                    browser.launch_commands(&item.launch)?
+                } else {
+                    vec![item.launch.clone()]
+                };
+                launch(&commands[0])?;
                 launched = true;
                 let deadline = Instant::now() + Duration::from_secs(12);
-                loop {
+                let new_window = loop {
                     if cancelled.load(Ordering::Relaxed) {
                         return Err("Workspace restore canceled.".into());
                     }
                     let windows = crate::platform::snapshot(app)?;
-                    let excluded: HashSet<_> = if item.launch.new_window {
+                    let excluded: HashSet<_> = if item.launch.new_window || item.browser.is_some() {
                         used.union(&before).cloned().collect()
                     } else {
                         used.clone()
@@ -273,7 +297,17 @@ pub fn restore(
                         );
                     }
                     std::thread::sleep(Duration::from_millis(150));
+                };
+                // Additional tabs are sent after the new browser window exists.
+                // Keep the selected tab last, matching the original app.
+                for command in commands.iter().skip(1) {
+                    if cancelled.load(Ordering::Relaxed) {
+                        return Err("Workspace restore canceled.".into());
+                    }
+                    crate::platform::focus_window(app, &new_window)?;
+                    launch(command)?;
                 }
+                new_window
             };
             used.insert(target.id.clone());
             crate::platform::restore_window(app, &target, &item.window)

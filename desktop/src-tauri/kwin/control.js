@@ -63,10 +63,13 @@
             window.fullScreen = false;
             window.setMaximize(false, false);
             Warp.send(window, output);
-            window.frameGeometry = Warp.relative(placement.rect, placement.workArea, Warp.area(output));
+            var requested = Warp.relative(placement.rect, placement.workArea, Warp.area(output));
+            window.frameGeometry = requested;
             window.setMaximize(placement.maximizedVertical, placement.maximizedHorizontal);
             window.fullScreen = placement.fullscreen;
             window.minimized = placement.minimized;
+            reply(job, rect(requested));
+            return;
         } else if (command.kind === "focus") Warp.focus(window);
         else throw new Error("Unknown window command.");
         reply(job, true);

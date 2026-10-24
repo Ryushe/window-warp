@@ -16,12 +16,15 @@ A standalone Tauri 2 application for Windows and **KDE Plasma 5.27 and 6**, with
 - Startup registration controls (Windows user Run entry or KDE autostart).
 - Workspace capture with review, selection, rename, delete, reorder, and update suggestions.
 - Workspace restore with separate window matching, launch commands, placement/state restoration, cancellation, and per-app results.
+- Firefox profile and compressed-session capture, editable tab URLs/selection, and profile-specific restore.
 - Local versioned JSON settings, written through a temporary file.
 - Single-instance behavior. Closing the editor hides it to the tray.
 
 Normal launches start **paused**. Save changes, then click **Enable shortcuts**. A registered login launch uses `--startup` to enable saved shortcuts and hide the editor. Editing shortcuts requires pausing first. Default keys use Ctrl+Alt; every key can be changed, including to Super/Win/Meta combinations when the desktop allows them. Stop or pause conflicting AutoHotkey bindings before reusing their keys.
 
-Open **Workspaces → Capture current**, choose which windows to keep, and save a name. Capture creates a review draft. Each app has editable launch arguments and an option to always open a new window. **Open workspace** reuses matching windows or launches missing apps, then restores placement. Browser profiles/tabs and terminal shells are still being ported; their automatic specialization is not yet available.
+Open **Workspaces → Capture current**, choose which windows to keep, and save a name. Capture creates a review draft. Each app has editable launch arguments and an option to always open a new window. **Open workspace** reuses matching windows or launches missing apps, then restores placement.
+
+Firefox captures its profile, tab URLs, and selected tab from its last readable session file. Review them under **Firefox profile and tabs**. If the browser has not written its session yet, or the window cannot be matched reliably, the editor shows a note and allows manual entry. Restore opens the selected tab last, matching the original app's behavior. Existing profile windows are reused unless **Always open a new window** is checked. Capture does not modify browser profiles. Terminal shell specialization remains in progress.
 
 ## Development
 
@@ -58,7 +61,7 @@ For app identifiers, use the exact resource class or desktop file ID. KWin's win
 
 ## Scope and verification
 
-The full feature port is in progress; [PARITY.md](PARITY.md) tracks the source-derived requirements and verification gaps. INI import, tap/hold gestures, radial selection, and browser/terminal specialization remain pending. Workspace capture/reuse/launch and per-axis maximization/fullscreen restoration have passed native KDE tests. Startup registration passes a KDE toggle test; actual login launches and Windows registration still need validation. Moving windows across displays with different DPI, desktop-imposed minimum sizes, and elevated Windows applications also needs manual coverage. Existing Windows preview installers predate these ongoing changes.
+The full feature port is in progress; [PARITY.md](PARITY.md) tracks the source-derived requirements and verification gaps. INI import, tap/hold gestures, radial selection, and terminal specialization remain pending. Workspace capture/reuse/launch, per-axis maximization/fullscreen, and Firefox tab restoration have passed native KDE tests. Startup registration passes a KDE toggle test; actual login launches and Windows registration still need validation. Live Windows Firefox, mixed-DPI displays, desktop-imposed minimum sizes, and elevated Windows applications also need coverage. Existing Windows preview installers predate these ongoing changes.
 
 ```sh
 npm test
@@ -80,6 +83,8 @@ Manual acceptance on each OS: enable the app; push a floating window across two 
 - `src-tauri/src/linux.rs`: KWin session integration via qdbus, with arguments passed directly without a shell.
 - `src-tauri/src/linux_control.rs`: session-bus command bridge for workspace capture and restore.
 - `src-tauri/src/workspaces.rs`: workspace storage, matching, launch, restore, and cancellation.
+- `src-tauri/src/firefox.rs`: profile discovery and Mozilla LZ4 session capture, tab selection, and profile launch commands.
+- `src-tauri/src/process_info.rs`: argument boundaries from `/proc` or Windows CIM and `CommandLineToArgvW`.
 - `src-tauri/kwin/warp.js`: compositor-side window management and shortcuts.
 
 Settings live in Tauri's per-user configuration directory under `com.windowwarp.desktop/settings.json`; workspaces use `workspaces.json` beside it. The editor displays the settings path. Existing AHK INI files are not imported or modified.

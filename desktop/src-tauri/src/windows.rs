@@ -227,6 +227,20 @@ pub fn restore_window(
 ) -> Result<(), String> {
     unsafe { restore_native(current, saved) }
 }
+pub fn focus_window(_: &AppHandle, current: &crate::workspaces::WindowInfo) -> Result<(), String> {
+    unsafe {
+        let hwnd = current
+            .id
+            .parse::<usize>()
+            .map_err(|_| "Invalid window ID.")? as HWND;
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if IsWindow(hwnd) == 0 || pid != current.pid {
+            return Err("The selected window has closed or changed identity.".into());
+        }
+        focus(hwnd)
+    }
+}
 unsafe fn restore_native(
     current: &crate::workspaces::WindowInfo,
     saved: &crate::workspaces::WindowInfo,

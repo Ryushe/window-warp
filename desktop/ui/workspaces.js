@@ -34,7 +34,7 @@
             const fragment = select("#workspace-card-template").content.cloneNode(true);
             const card = fragment.querySelector("article");
             card.querySelector(".workspace-title").textContent = profile.name;
-            card.querySelector(".workspace-summary").textContent = `${profile.items.length} windows · ${profile.platform === "windows" ? "Windows" : "Linux / KDE"}`;
+            card.querySelector(".workspace-summary").textContent = `${profile.items.length} ${profile.items.length === 1 ? "window" : "windows"} · ${profile.platform === "windows" ? "Windows" : "Linux / KDE"}`;
             card.querySelectorAll("[data-action]").forEach(button => button.addEventListener("click", () => {
                 const action = button.dataset.action;
                 if (action === "delete" || action === "cancel-delete") { card.querySelector(".workspace-delete-confirm").hidden = action !== "delete"; return; }
@@ -73,6 +73,22 @@
             const fragment = select("#workspace-item-template").content.cloneNode(true);
             fragment.querySelector(".window-title").textContent = item.label || item.window.title;
             fragment.querySelector(".window-placement").textContent = `${item.window.appId} · Monitor ${item.window.monitor} · ${item.window.rect.width} × ${item.window.rect.height}`;
+            const note = fragment.querySelector(".capture-note");
+            note.textContent = item.captureNote || "";
+            note.hidden = !item.captureNote;
+            if (item.browser) {
+                const browser = item.browser;
+                fragment.querySelector(".browser-settings").hidden = false;
+                fragment.querySelector(".restore-browser").addEventListener("change", event => { item.browser = event.target.checked ? browser : null; });
+                fragment.querySelectorAll("[data-browser]").forEach(input => {
+                    const field = input.dataset.browser;
+                    input.value = field === "tabs" ? browser.tabs.map(t => t.url).join("\n") : browser[field];
+                    input.addEventListener("input", () => {
+                        if (field === "tabs") browser.tabs = input.value.split(/\r?\n/).filter(Boolean).map(url => ({url, title:browser.tabs.find(t => t.url === url)?.title || ""}));
+                        else browser[field] = field === "activeTab" ? Number(input.value) : input.value;
+                    });
+                });
+            }
             const include = fragment.querySelector(".include-window");
             include.addEventListener("change", () => { selected[index] = include.checked; count(); controls(); });
             fragment.querySelectorAll("[data-launch]").forEach(input => {

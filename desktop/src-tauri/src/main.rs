@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod config;
+mod firefox;
 mod geometry;
 #[cfg(target_os = "linux")]
 mod linux_control;
@@ -9,6 +10,7 @@ mod platform;
 #[cfg(target_os = "linux")]
 #[path = "linux.rs"]
 mod platform;
+mod process_info;
 mod startup;
 mod workspaces;
 
@@ -124,8 +126,12 @@ async fn capture_workspace(app: AppHandle, name: String) -> Result<serde_json::V
         let windows = platform::snapshot(&app)?;
         let store = workspaces::load(&app)?;
         let suggested = workspaces::best_match(&store.profiles, &windows);
-        Ok(serde_json::json!({"profile":workspaces::capture(windows, name), "suggestedId":suggested}))
-    }).await.map_err(|e| e.to_string())?
+        let mut profile = workspaces::capture(windows, name);
+        firefox::enrich(&mut profile.items);
+        Ok(serde_json::json!({"profile":profile, "suggestedId":suggested}))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 async fn get_windows(app: AppHandle) -> Result<Vec<workspaces::WindowInfo>, String> {

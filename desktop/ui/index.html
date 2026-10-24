@@ -67,6 +67,18 @@
     </article>
   </template>
   <template id="workspace-card-template"><article class="workspace-card"><h3 class="workspace-title"></h3><p class="workspace-summary"></p><div class="workspace-actions"><button data-action="restore" class="primary">Open workspace</button><button data-action="edit">Edit</button><button data-action="update">Update from current</button><button data-action="up" aria-label="Move workspace up">↑</button><button data-action="down" aria-label="Move workspace down">↓</button><button data-action="delete">Delete</button></div><div class="workspace-delete-confirm" hidden><p>Delete this saved workspace? Open windows will stay open.</p><button data-action="confirm-delete">Delete workspace</button><button data-action="cancel-delete">Keep it</button></div></article></template>
-  <template id="workspace-item-template"><article class="workspace-item"><label class="enabled-field"><input type="checkbox" class="include-window" checked><span class="window-title"></span></label><p class="window-placement"></p><details><summary>App launch settings</summary><label>Program<input data-launch="program" spellcheck="false"></label><label>Arguments (one per line)<textarea data-launch="args" rows="3" spellcheck="false"></textarea></label><label>Working directory<input data-launch="workingDirectory" spellcheck="false"></label><label class="enabled-field"><input type="checkbox" data-launch="newWindow">Always open a new window</label></details></article></template>
+  <template id="workspace-item-template"><article class="workspace-item">
+    <label class="enabled-field"><input type="checkbox" class="include-window" checked><span class="window-title"></span></label>
+    <p class="window-placement"></p><p class="capture-note" hidden></p>
+    <details class="browser-settings" hidden><summary>Firefox profile and tabs</summary>
+      <label class="enabled-field"><input type="checkbox" class="restore-browser" checked>Restore this Firefox profile and its tabs</label>
+      <label>Profile folder<input data-browser="profilePath" spellcheck="false"></label>
+      <label>Profile name (used when no folder is set)<input data-browser="profileName"></label>
+      <label>Tab URLs (one per line)<textarea data-browser="tabs" rows="5" spellcheck="false"></textarea></label>
+      <label>Selected tab number<input data-browser="activeTab" type="number" min="1" step="1"></label>
+      <small>The selected tab opens last. Existing matching browser windows are reused unless “Always open a new window” is checked.</small>
+    </details>
+    <details><summary>App launch settings</summary><label>Program<input data-launch="program" spellcheck="false"></label><label>Arguments (one per line)<textarea data-launch="args" rows="3" spellcheck="false"></textarea></label><label>Working directory<input data-launch="workingDirectory" spellcheck="false"></label><label class="enabled-field"><input type="checkbox" data-launch="newWindow">Always open a new window</label></details>
+  </article></template>
 </body>
 </html>

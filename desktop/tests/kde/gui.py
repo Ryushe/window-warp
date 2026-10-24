@@ -77,6 +77,8 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
     environment.update({"TAURI_WEBVIEW_AUTOMATION": "true", "TAURI_AUTOMATION": "true", "GDK_BACKEND": "wayland", "XDG_CONFIG_HOME": temporary + "/config", "XDG_DATA_HOME": temporary + "/data", "XDG_CACHE_HOME": temporary + "/cache"})
     driver = subprocess.Popen([driver_binary, f"--port={port}", "--host=127.0.0.1"], env=environment, stdout=log, stderr=log, start_new_session=True)
     fixture = None
+    browser_fixture = None
+    other_browser_fixture = None
     launched_pids = set()
     try:
         for _ in range(50):
@@ -186,9 +188,125 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         screenshot = request("GET", f"/session/{session}/screenshot")
         (output / "window-warp-workspaces-kde.png").write_bytes(base64.b64decode(screenshot))
         report = {"passed": True, "checks": ["native editor renders", "save persists settings", "enable loads KWin script", "pause unloads KWin script", "startup creates and removes isolated autostart entry", "native workspace capture", "workspace persistence", "native workspace reuse and separate placements", "workspace launch creates a new window without consuming existing ones", "per-axis maximization and fullscreen workspace restoration", "workspace browser renders saved profiles"], "screenshot": str(output / "window-warp-workspaces-kde.png")}
+        if "--firefox" in sys.argv:
+            # Run this option only in nested.sh's isolated compositor/session bus.
+            assert os.environ.get("WAYLAND_DISPLAY") == "warp-test", "Firefox test requires the isolated compositor"
+            browser_profile = Path(temporary) / "firefox-profile"
+            browser_profile.mkdir()
+            preferences = {"browser.shell.checkDefaultBrowser": False, "browser.sessionstore.interval": 1000,
+                           "browser.startup.homepage_override.mstone": "ignore", "browser.startup.page": 0,
+                           "browser.aboutwelcome.enabled": False, "browser.newtabpage.enabled": False,
+                           "browser.tabs.warnOnClose": False, "datareporting.policy.dataSubmissionEnabled": False}
+            (browser_profile / "user.js").write_text("\n".join(f"user_pref({json.dumps(key)}, {json.dumps(value)});" for key, value in preferences.items()))
+            urls = []
+            for label in ["First", "Second"]:
+                page = Path(temporary) / f"firefox-{label}.html"
+                page.write_text(f"<!doctype html><title>Warp {label} Firefox fixture</title><p>{label} owned fixture</p>")
+                urls.append(page.as_uri())
+            browser_env = environment | {"MOZ_ENABLE_WAYLAND": "1"}
+            browser_fixture = subprocess.Popen(["firefox", "--new-instance", "--profile", str(browser_profile), urls[0]], env=browser_env, stdout=log, stderr=log, start_new_session=True)
+            first_loaded = False
+            for _ in range(60):
+                first_loaded = any(w["pid"] == browser_fixture.pid and "Warp First Firefox fixture" in w["title"] for w in invoke("get_windows"))
+                if first_loaded:
+                    break
+                time.sleep(0.5)
+            assert first_loaded, "First owned Firefox page did not finish loading"
+            subprocess.run(["firefox", "--profile", str(browser_profile), "--new-tab", urls[1]], env=browser_env, stdout=log, stderr=log, check=True, timeout=15)
+            browser_capture = None
+            for _ in range(90):
+                draft = invoke("capture_workspace", {"name": "Firefox fixture"})["profile"]
+                draft["items"] = [item for item in draft["items"] if item["window"]["pid"] == browser_fixture.pid]
+                if len(draft["items"]) == 1:
+                    captured_browser = draft["items"][0].get("browser", {})
+                    tabs = captured_browser.get("tabs", [])
+                    if len(tabs) == 2 and all(tab["title"].startswith("Warp ") for tab in tabs):
+                        active_title = tabs[captured_browser["activeTab"] - 1]["title"]
+                        if active_title in draft["items"][0]["window"]["title"]:
+                            browser_capture = draft
+                            break
+                if browser_fixture.poll() is not None:
+                    raise AssertionError("Owned Firefox process exited before capture")
+                time.sleep(0.5)
+            assert browser_capture, {"error": "Firefox session tabs were not captured", "ownedCapture": draft["items"]}
+            browser = browser_capture["items"][0]["browser"]
+            assert browser["profilePath"] == str(browser_profile)
+            assert {tab["url"] for tab in browser["tabs"]} == set(urls)
+            assert browser["tabs"][browser["activeTab"] - 1]["title"] in browser_capture["items"][0]["window"]["title"]
+            invoke("save_workspaces", {"store": {"version": 1, "profiles": [browser_capture]}})
+            result = invoke("restore_workspace", {"id": browser_capture["id"]})
+            assert result[0]["restored"] and not result[0]["launched"], result
+            browser_capture["items"][0]["launch"]["newWindow"] = True
+            invoke("save_workspaces", {"store": {"version": 1, "profiles": [browser_capture]}})
+            result = invoke("restore_workspace", {"id": browser_capture["id"]})
+            assert result[0]["restored"] and result[0]["launched"], result
+            restored = []
+            for _ in range(90):
+                draft = invoke("capture_workspace", {"name": "Check browser restore"})["profile"]
+                restored = [item for item in draft["items"] if item["window"]["pid"] == browser_fixture.pid and item["window"]["id"] != browser_capture["items"][0]["window"]["id"]]
+                if len(restored) == 1 and len(restored[0].get("browser", {}).get("tabs", [])) == 2:
+                    break
+                time.sleep(0.5)
+            assert len(restored) == 1, "Profile launch did not create exactly one new browser window"
+            restored_browser = restored[0]["browser"]
+            assert {tab["url"] for tab in restored_browser["tabs"]} == set(urls)
+            assert restored_browser["tabs"][restored_browser["activeTab"] - 1]["url"] == browser["tabs"][browser["activeTab"] - 1]["url"]
+            report["checks"].extend(["real Firefox compressed session/profile/tab capture", "reuse existing Firefox profile window", "new Firefox window restores both URLs and selected tab"])
+            # A second profile with identical titles must not be borrowed.
+            other_profile = Path(temporary) / "other-firefox-profile"
+            other_profile.mkdir()
+            (other_profile / "user.js").write_text((browser_profile / "user.js").read_text())
+            other_browser_fixture = subprocess.Popen(["firefox", "--new-instance", "--profile", str(other_profile), browser["tabs"][browser["activeTab"] - 1]["url"]], env=browser_env, stdout=log, stderr=log, start_new_session=True)
+            other_windows = []
+            for _ in range(60):
+                other_windows = [w for w in invoke("get_windows") if w["pid"] == other_browser_fixture.pid]
+                if other_windows and "Firefox fixture" in other_windows[0]["title"]:
+                    break
+                time.sleep(0.5)
+            assert len(other_windows) == 1, "Second owned Firefox profile did not open"
+            other_geometry = other_windows[0]["rect"]
+            browser_capture["items"][0]["launch"]["newWindow"] = False
+            browser_capture["items"][0]["window"].update({"maximizedHorizontal": False, "maximizedVertical": False, "fullscreen": False})
+            source_area = browser_capture["items"][0]["window"]["workArea"]
+            browser_capture["items"][0]["window"]["rect"].update({"x": source_area["x"] + 150, "y": source_area["y"] + 100, "width": 700, "height": 500})
+            invoke("save_workspaces", {"store": {"version": 1, "profiles": [browser_capture]}})
+            result = invoke("restore_workspace", {"id": browser_capture["id"]})
+            assert result[0]["restored"] and not result[0]["launched"], result
+            for _ in range(30):
+                after = invoke("get_windows")
+                if any(w["pid"] == browser_fixture.pid and w["rect"] == browser_capture["items"][0]["window"]["rect"] for w in after):
+                    break
+                time.sleep(0.1)
+            assert [w for w in after if w["pid"] == other_browser_fixture.pid][0]["rect"] == other_geometry
+            assert any(w["pid"] == browser_fixture.pid and w["rect"] == browser_capture["items"][0]["window"]["rect"] for w in after), {
+                "expected": browser_capture["items"][0]["window"]["rect"],
+                "ownedWindows": [{"rect": w["rect"], "maximizedHorizontal": w["maximizedHorizontal"], "maximizedVertical": w["maximizedVertical"]} for w in after if w["pid"] == browser_fixture.pid]}
+            report["checks"].append("identical titles in another Firefox profile do not steal the restore")
+            evaluate("location.reload(); return true;")
+            wait_for("return document.querySelectorAll('.binding').length === 5 && !document.querySelector('#toggle').disabled")
+            click("#show-workspaces")
+            wait_for("return document.querySelectorAll('#workspace-list article').length === 1")
+            click('[data-action="edit"]')
+            evaluate("const panel=document.querySelector('.browser-settings'); panel.open=true; panel.scrollIntoView(); return true;")
+            assert evaluate("return document.querySelector('[data-browser=profilePath]').value") == str(browser_profile)
+            screenshot = request("GET", f"/session/{session}/screenshot")
+            (output / "window-warp-firefox-kde.png").write_bytes(base64.b64decode(screenshot))
+            report["screenshot"] = str(output / "window-warp-firefox-kde.png")
         (output / "gui-result.json").write_text(json.dumps(report, indent=2))
         print(json.dumps(report, indent=2), flush=True)
     finally:
+        if other_browser_fixture:
+            try:
+                os.killpg(other_browser_fixture.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            other_browser_fixture.wait(timeout=10)
+        if browser_fixture:
+            try:
+                os.killpg(browser_fixture.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            browser_fixture.wait(timeout=10)
         for pid in launched_pids:
             try:
                 command_line = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")

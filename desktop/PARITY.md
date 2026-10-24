@@ -20,7 +20,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | Settings persistence and startup registration | Partial | KDE native toggle creates/removes isolated autostart entry; Windows toggle and actual login/startup launch pending |
 | Workspace capture/create/update, best-match update selection, rename/delete/reorder/browser | Partial | Implemented; Rust matching/persistence model and Node editor tests pass; KDE native capture/save/browser pass; full Windows editor workflow pending |
 | Workspace launch/reuse, exclude already-consumed windows, wait for new windows, restore placement/state | Partial | KDE native two-window reuse, forced new launch, placement, per-axis maximize/fullscreen pass; Windows owned-window placement/maximize/minimize pass; Windows multi-window launch workflow pending |
-| Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Pending | Synthetic profiles plus real fixture browser windows |
+| Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Partial | Implemented; synthetic codec/profile/launch/editor tests pass; Firefox 158 live capture, reuse, and new-window tab/selection restore pass on isolated KDE; live Windows browser path pending |
 | Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Pending | Shell/profile fixtures and native launch checks |
 | Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Pending | Argument-safe launch tests and native fixtures |
 | Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Pending | Fixtures including disabled keys, legacy terminal fields, browser tabs |
@@ -70,3 +70,20 @@ Next substantial work: browser/terminal specialization and INI migration;
 press/release events, shared gesture state machine, native hold tile/radial,
 pointer centering, and remaining editor/global-hotkey behavior. Keep all rows
 above in scope, including unverified Windows and Plasma 6 paths.
+
+## Firefox increment — final native verification still open
+
+25 Node tests, 26 Windows Rust tests (with ordinary CIM access), and 21 Linux
+Rust tests pass. The Firefox codec/profile/editor/launch paths are implemented.
+An initial 14-check native run passed real Firefox 158 session capture, window
+reuse, two-tab launch, and selected-tab restoration. Follow-up runs found stale
+session selection and a Firefox Wayland unmaximize/resize race; source now
+reconciles selection with a unique live title and verifies/retries floating size.
+
+The final two-profile/geometry/editor run has not passed on this latest source.
+The last run stopped at WebDriver session creation while Portafort was under
+high unrelated workload. Its process is terminal; do not treat it as still running.
+Resume `tests/kde/nested.sh --gui ... --firefox` when load permits. The current
+binary is on Portafort at `~/.cache/window-warp-01a16f69/window-warp`; the build
+receipt is Hoster `hoster-warp-build-20261024-firefox-resize` (exit 0).
+Live Windows Firefox and the native browser-editor screenshot remain unverified.

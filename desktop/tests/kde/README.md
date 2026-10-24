@@ -35,6 +35,26 @@ Run in a KDE Wayland session with `XDG_CURRENT_DESKTOP=KDE` and `QT_QPA_PLATFORM
 
 The native driver capabilities and automation environment variables match Tauri's [WebDriver implementation](https://github.com/tauri-apps/tauri/tree/dev/crates/tauri-driver/src).
 
+### Firefox profiles and tabs
+
+With Firefox installed, run the native UI test inside the separate compositor:
+
+```sh
+dbus-run-session -- bash tests/kde/nested.sh "$PWD" --gui \
+  /absolute/path/to/window-warp /absolute/path/to/WebKitWebDriver \
+  ./firefox-test-results --firefox
+```
+
+This creates temporary Firefox profiles and local HTML pages, captures real
+compressed session files, verifies existing-window reuse, and restores a new
+window with both URLs and the selected tab. A second profile with identical page
+titles checks profile isolation. Only the fixture browser process groups are
+terminated afterward; existing browser profiles are not changed.
+
+The codec follows Mozilla's [IOUtils implementation](https://github.com/mozilla-firefox/firefox/blob/main/xpcom/ioutils/IOUtils.cpp),
+including the eight-byte magic and four-byte size prefix. Launch flags follow
+Mozilla's [command-line reference](https://github.com/mozilla-firefox/firefox/blob/main/browser/docs/CommandLineParameters.md).
+
 ## Reproducible Linux build environment
 
 `Dockerfile` creates an Ubuntu 24.04 builder; `build.sh` runs Node tests, Rust release tests, a Linux executable build, and Debian packaging. Mount only this source directory at `/work`, run as UID/GID 1000, and constrain container resources as appropriate for the build host. No privileged container or Docker socket mount is required.

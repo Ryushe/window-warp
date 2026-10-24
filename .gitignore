@@ -7,3 +7,4 @@ window_manager_apps.ini
 desktop/node_modules/
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
+desktop/tests/**/__pycache__/
