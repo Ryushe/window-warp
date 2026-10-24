@@ -7,8 +7,8 @@
 - Base commit: `7b907778f0022d73fb3527b82c0ab7ecedf8124d`
 - Intended eventual target: `main`; promotion/merge has not been requested
 - Last updated: 2026-10-24
-- Latest immutable recovery checkpoint: none yet; this dossier accompanies the first application checkpoint
-- Feature implementation commits: pending checkpoint
+- Latest immutable recovery checkpoint: `abfc95efba1476f08fa760a31dbb2f6e895e474c`
+- Feature implementation commits: `abfc95e` (desktop application and workspace foundation)
 - Canonical references: original root AHK files; `desktop/PARITY.md`
 
 ## Intent and implemented contract
@@ -57,6 +57,9 @@ commands use a persistent session-bus service and an unassigned KWin action.
 Resume browser/terminal specialization and INI migration; then gesture/radial,
 pointer, and outstanding editor/global-hotkey behavior. Preserve all checklist rows.
 Native KDE fixture tests and local Node/Rust tests are ready for reuse.
+The implementation checkpoint is reachable from the owning branch; the subsequent
+dossier-only commit records its identity. The working tree was clean after the
+implementation checkpoint. `main` remains at the base commit and no AHK file differs.
 
 Integration requires completed parity evidence, independent review, verified
 remote state, and explicit selection/authorization of the integration target.
