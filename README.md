@@ -2,6 +2,10 @@
 
 The replacement for Alt+Tab that you've been looking for. Switch to apps immediately, push apps away and pull them back. But best of all, be in control of your workflow. 
 
+## Standalone desktop app
+
+A new Windows and KDE Plasma 5.27/6 application is being developed in [`desktop/`](desktop/README.md). It runs without AutoHotkey and includes a settings editor, tray controls, configurable shortcuts, monitor push/pull, tiling, and switching between open app windows. This is an early preview; the existing AutoHotkey version below still has additional features.
+
 ## Setup
 
 1. Install AutoHotkey v2.

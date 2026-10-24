@@ -1,0 +1,80 @@
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+pub fn relative(rect: Rect, source: Rect, target: Rect) -> Rect {
+    let width = ((rect.width as f64 / source.width.max(1) as f64 * target.width as f64).round()
+        as i32)
+        .clamp(1, target.width.max(1));
+    let height = ((rect.height as f64 / source.height.max(1) as f64 * target.height as f64).round()
+        as i32)
+        .clamp(1, target.height.max(1));
+    let x = target.x
+        + ((rect.x - source.x) as f64 / source.width.max(1) as f64 * target.width as f64).round()
+            as i32;
+    let y = target.y
+        + ((rect.y - source.y) as f64 / source.height.max(1) as f64 * target.height as f64).round()
+            as i32;
+    Rect {
+        x: x.clamp(target.x, target.x + target.width - width),
+        y: y.clamp(target.y, target.y + target.height - height),
+        width,
+        height,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn scales_between_negative_origin_and_portrait_monitor() {
+        let source = Rect {
+            x: -1920,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        let target = Rect {
+            x: 0,
+            y: 40,
+            width: 1080,
+            height: 1920,
+        };
+        let rect = Rect {
+            x: -960,
+            y: 0,
+            width: 960,
+            height: 1080,
+        };
+        assert_eq!(
+            relative(rect, source, target),
+            Rect {
+                x: 540,
+                y: 40,
+                width: 540,
+                height: 1920
+            }
+        );
+    }
+    #[test]
+    fn clamps_oversized_offscreen_window() {
+        let area = Rect {
+            x: 0,
+            y: 40,
+            width: 1280,
+            height: 680,
+        };
+        let rect = Rect {
+            x: -100,
+            y: -100,
+            width: 2000,
+            height: 1200,
+        };
+        assert_eq!(relative(rect, area, area), area);
+    }
+}

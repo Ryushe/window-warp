@@ -2,3 +2,8 @@ workspace_openers.ini
 windows_warp_settings.ini
 hotkey_registry.ini
 window_manager_apps.ini
+
+# Standalone desktop application
+desktop/node_modules/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/

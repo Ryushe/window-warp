@@ -1,0 +1,87 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import vm from "node:vm";
+import {parseHTML} from "linkedom";
+
+const html = fs.readFileSync(new URL("../ui/index.html", import.meta.url), "utf8");
+const source = fs.readFileSync(new URL("../ui/workspaces.js", import.meta.url), "utf8");
+const tick = () => new Promise(resolve => setImmediate(resolve));
+const item = title => ({label:title, window:{title, appId:"fixture", monitor:1, rect:{width:640,height:400}}, launch:{program:"fixture", args:[], workingDirectory:"", newWindow:false}});
+const profile = (id, name) => ({id,name,platform:"linux",items:[item(name + " window")]});
+async function editor({profiles = [], failSave = false, failLoad = false} = {}) {
+    const {window,document} = parseHTML(html);
+    Object.defineProperty(window.HTMLSelectElement.prototype,"value", {configurable:true,
+        get(){return this.querySelector("option[selected]")?.value ?? this.querySelector("option")?.value;},
+        set(value){this.querySelectorAll("option").forEach(o => o.removeAttribute("selected")); [...this.querySelectorAll("option")].find(o=>o.value===value)?.setAttribute("selected","");}
+    });
+    const calls = [];
+    let stored = {version:1, profiles:structuredClone(profiles)};
+    window.__TAURI__ = {core:{invoke:async(command,args) => {
+        calls.push({command,args:structuredClone(args)});
+        if (command === "get_workspaces") {if(failLoad) throw "Unreadable workspace file"; return structuredClone(stored);}
+        if (command === "capture_workspace") return {profile:{id:"captured",name:args.name,platform:"linux",items:[item("First"),item("Second")]},suggestedId:profiles[0]?.id};
+        if (command === "save_workspaces") {if(failSave) throw "Disk is read-only"; stored=structuredClone(args.store); return structuredClone(stored);}
+        if (command === "restore_workspace") return [{label:"Fixture",restored:false,launched:false,error:"Missing app"}];
+        if (command === "cancel_workspace_restore") return;
+        throw new Error(command);
+    }}};
+    vm.runInNewContext(source,{window,document});
+    const result = {window,document,calls,stored:()=>stored,
+        async click(selector){document.querySelector(selector).click();await tick();},
+        input(selector,value){const input=document.querySelector(selector);input.value=value;input.dispatchEvent(new window.Event("input"));},
+        change(selector,checked){const input=document.querySelector(selector);input.checked=checked;input.dispatchEvent(new window.Event("change"));}
+    };
+    await result.click("#show-workspaces");
+    return result;
+}
+test("capture is a review draft; excluded windows and edited arguments persist on Save",async()=>{
+    const e=await editor();
+    await e.click("#capture-workspace");
+    assert.equal(e.calls.some(c=>c.command==="save_workspaces"),false);
+    e.input("#workspace-name","Research");
+    e.input('[data-launch="args"]',"one argument with spaces\n--new-window");
+    e.change(".workspace-item:nth-child(2) .include-window",false);
+    await e.click("#save-workspace");
+    assert.equal(e.stored().profiles[0].name,"Research");
+    assert.equal(e.stored().profiles[0].items.length,1);
+    assert.deepEqual(e.stored().profiles[0].items[0].launch.args,["one argument with spaces","--new-window"]);
+});
+test("update preserves workspace identity; rename and reordering persist",async()=>{
+    const e=await editor({profiles:[profile("a","A"),profile("b","B")]});
+    await e.click('[data-action="update"]');
+    e.input("#workspace-name","Updated A");
+    await e.click("#save-workspace");
+    assert.equal(e.stored().profiles[0].id,"a");
+    assert.equal(e.stored().profiles[0].items.length,2);
+    await e.click('[data-action="down"]');
+    assert.deepEqual(e.stored().profiles.map(p=>p.id),["b","a"]);
+    await e.click('[data-action="edit"]');
+    e.input("#workspace-name","Renamed B");
+    await e.click("#save-workspace");
+    assert.equal(e.stored().profiles[0].name,"Renamed B");
+});
+test("failed save keeps the draft and deletion requires a concrete confirmation",async()=>{
+    const e=await editor({profiles:[profile("a","A")],failSave:true});
+    await e.click('[data-action="edit"]');
+    e.input("#workspace-name","Unsaved");
+    await e.click("#save-workspace");
+    assert.equal(e.document.querySelector("#workspace-editor").hidden,false);
+    assert.equal(e.document.querySelector("#workspace-name").value,"Unsaved");
+    assert.equal(e.stored().profiles[0].name,"A");
+    const calls=e.calls.length;
+    await e.click('[data-action="delete"]');
+    assert.equal(e.calls.length,calls);
+    assert.equal(e.document.querySelector(".workspace-delete-confirm").hidden,false);
+    await e.click('[data-action="cancel-delete"]');
+    assert.equal(e.document.querySelector(".workspace-delete-confirm").hidden,true);
+});
+test("unreadable store prevents capture and restore failures are shown per app",async()=>{
+    const bad=await editor({failLoad:true});
+    assert.equal(bad.document.querySelector("#capture-workspace").disabled,true);
+    const e=await editor({profiles:[profile("a","A")]});
+    await e.click('[data-action="restore"]');
+    assert.match(e.document.querySelector("#workspace-results").textContent,/Missing app/);
+    assert.match(e.document.querySelector("#message").textContent,/Restored 0 of 1/);
+    assert.equal(e.document.querySelector("#cancel-restore").hidden,true);
+});
