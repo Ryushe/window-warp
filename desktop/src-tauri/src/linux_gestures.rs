@@ -32,6 +32,7 @@ enum Event {
         id: String,
         point: Point,
     },
+    Configure(Option<Config>, mpsc::SyncSender<Result<(), String>>),
     Failed(String),
     Stop,
 }
@@ -80,43 +81,70 @@ pub fn stop() -> Result<(), String> {
     Ok(())
 }
 
-pub fn start(app: &AppHandle, config: &Config) -> Result<Vec<Option<String>>, String> {
-    stop()?;
-    let generation = uuid::Uuid::new_v4();
-    let ids: Vec<_> = config
-        .bindings
-        .iter()
-        .enumerate()
-        .map(|(index, binding)| {
-            (binding.enabled && binding.action == "pull-app")
-                .then(|| format!("window-warp-hold-{generation}-{index}"))
+/// Hook names are derived from canonical shortcut bytes, not config row indices.
+/// The same physical chord therefore keeps its cancellation guard across edits.
+fn script_name(shortcut: &str) -> String {
+    format!(
+        "window-warp-gesture-{}",
+        shortcut
+            .as_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    )
+}
+pub(crate) fn owns_script(name: &str) -> bool {
+    name.strip_prefix("window-warp-gesture-")
+        .is_some_and(|suffix| {
+            !suffix.is_empty()
+                && suffix.len() % 2 == 0
+                && suffix.bytes().all(|b| b.is_ascii_hexdigit())
         })
-        .collect();
-    // KGlobalAccel retains key ownership for inactive action IDs. Reuse the
-    // native ID across activation, while callback IDs identify this generation.
-    let native_ids: HashMap<_, _> = ids
-        .iter()
-        .enumerate()
-        .filter_map(|(index, id)| {
-            id.clone().map(|id| {
-                (
-                    format!(
-                        "window-warp-hold-{index}-{}",
-                        config.bindings[index].shortcut
-                    ),
-                    id,
-                )
-            })
-        })
-        .collect();
-    let bindings: HashMap<_, _> = ids
-        .iter()
-        .zip(&config.bindings)
-        .filter_map(|(id, binding)| id.clone().map(|id| (id, binding.clone())))
-        .collect();
-    if bindings.is_empty() {
-        return Ok(ids);
+}
+
+pub fn start(app: &AppHandle, config: &Config) -> Result<(), String> {
+    let failed = RUNNING
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .is_some_and(|r| r.reader.is_finished() || r.worker.is_finished());
+    if failed {
+        stop()?;
     }
+    let sender = {
+        let mut current = RUNNING.lock().map_err(|e| e.to_string())?;
+        if current.is_none() {
+            *current = Some(new_running(app)?);
+        }
+        current.as_ref().unwrap().sender.clone()
+    };
+    configure(&sender, Some(config.clone()))
+}
+
+/// Returns false only before the first activation (startup crash cleanup).
+pub fn pause() -> Result<bool, String> {
+    let sender = RUNNING
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .map(|r| r.sender.clone());
+    if let Some(sender) = sender {
+        configure(&sender, None)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+fn configure(sender: &mpsc::Sender<Event>, config: Option<Config>) -> Result<(), String> {
+    let (reply, result) = mpsc::sync_channel(1);
+    sender
+        .send(Event::Configure(config, reply))
+        .map_err(|_| "KDE gesture worker stopped.")?;
+    result
+        .recv()
+        .map_err(|_| "KDE gesture worker stopped before activation completed.")?
+}
+fn new_running(app: &AppHandle) -> Result<Running, String> {
     let connection = zbus::blocking::connection::Builder::session()
         .map_err(|e| e.to_string())?
         .method_timeout(Duration::from_secs(5))
@@ -135,11 +163,10 @@ pub fn start(app: &AppHandle, config: &Config) -> Result<Vec<Option<String>>, St
         .map_err(|e| e.to_string())?;
     let (sender, receiver) = mpsc::channel();
     let alive = Arc::new(AtomicBool::new(true));
-    let (worker_app, settings, worker_alive) =
-        (app.clone(), config.settings.clone(), alive.clone());
+    let worker_app = app.clone();
     let worker = std::thread::Builder::new()
         .name("kde-hold-actions".into())
-        .spawn(move || run(&worker_app, bindings, settings, receiver, worker_alive))
+        .spawn(move || run(&worker_app, receiver))
         .map_err(|e| e.to_string())?;
     let (events, reader_alive) = (sender.clone(), alive.clone());
     let reader = std::thread::Builder::new()
@@ -165,11 +192,11 @@ pub fn start(app: &AppHandle, config: &Config) -> Result<Vec<Option<String>>, St
                 };
                 match message.body().deserialize::<(String, String, i64)>() {
                     Ok((component, native_id, _)) if component == "kwin" => {
-                        let Some(id) = native_ids.get(&native_id) else {
+                        if !owns_script(&native_id) {
                             continue;
-                        };
+                        }
                         let _ = events.send(Event::Key {
-                            id: id.clone(),
+                            id: native_id,
                             pressed,
                             at: Instant::now(),
                         });
@@ -196,16 +223,25 @@ pub fn start(app: &AppHandle, config: &Config) -> Result<Vec<Option<String>>, St
             return Err(format!("Cannot start KDE key listener: {error}"));
         }
     };
-    *RUNNING.lock().map_err(|e| e.to_string())? = Some(Running {
+    Ok(Running {
         sender,
         alive,
         connection,
         reader,
         worker,
-    });
-    Ok(ids)
+    })
 }
 
+#[derive(Clone, PartialEq)]
+struct Desired {
+    binding: Binding,
+    settings: Settings,
+}
+struct Slot {
+    spec: Desired,
+    callback: String,
+    pending: Option<Pending>,
+}
 struct Pending {
     press: Press,
     started: Instant,
@@ -213,9 +249,10 @@ struct Pending {
     released: bool,
     point: Option<Point>,
     held: bool,
+    cancelled: bool,
 }
 impl Pending {
-    fn new(settings: &Settings, at: Instant) -> Self {
+    fn new(settings: &Settings, at: Instant, cancelled: bool) -> Self {
         Self {
             press: Press::new(settings.hold_delay_ms, settings.hold_tile_enabled),
             started: at,
@@ -223,9 +260,13 @@ impl Pending {
             released: false,
             point: None,
             held: false,
+            cancelled,
         }
     }
     fn deadline(&self, settings: &Settings) -> Option<Instant> {
+        if self.cancelled && self.native_pressed {
+            return None;
+        }
         if !self.native_pressed || self.point.is_none() {
             Some(self.started + Duration::from_secs(5))
         } else if settings.hold_tile_enabled && !self.held {
@@ -234,18 +275,213 @@ impl Pending {
             None
         }
     }
+    fn action(&mut self) -> Option<Action> {
+        if self.cancelled {
+            None
+        } else {
+            self.press.advance(self.started.elapsed(), !self.released)
+        }
+    }
 }
-
-fn run(
-    app: &AppHandle,
-    bindings: HashMap<String, Binding>,
-    settings: Settings,
-    receiver: mpsc::Receiver<Event>,
-    alive: Arc<AtomicBool>,
-) {
-    let mut pending: HashMap<String, Pending> = HashMap::new();
-    while alive.load(Ordering::SeqCst) {
-        let deadline = pending.values().filter_map(|p| p.deadline(&settings)).min();
+struct Controller {
+    desired: Option<Config>,
+    slots: HashMap<String, Slot>,
+}
+impl Controller {
+    fn configure(&mut self, app: &AppHandle, config: Option<Config>) -> Result<(), String> {
+        // Cancel before any native hook is removed. Already-held hooks remain
+        // installed solely to observe release, including across a later resume.
+        for slot in self.slots.values_mut() {
+            if let Some(pending) = &mut slot.pending {
+                pending.cancelled = true;
+            }
+        }
+        self.desired = config;
+        let result = (|| {
+            self.reconcile(app)?;
+            if let Some(config) = &self.desired {
+                crate::linux_control::request(app, serde_json::json!({"kind":"reset-app-pulls"}))?;
+                crate::platform::enable_window_actions(app, config)
+            } else {
+                crate::platform::disable_window_actions()
+            }
+        })();
+        if let Err(error) = result {
+            self.desired = None;
+            let cleanup = self
+                .reconcile(app)
+                .and_then(|_| crate::platform::disable_window_actions());
+            return Err(format!(
+                "{error}{}",
+                cleanup
+                    .err()
+                    .map(|e| format!("; cleanup: {e}"))
+                    .unwrap_or_default()
+            ));
+        }
+        Ok(())
+    }
+    fn reconcile(&mut self, app: &AppHandle) -> Result<(), String> {
+        let desired: HashMap<_, _> = self
+            .desired
+            .as_ref()
+            .map(|config| {
+                config
+                    .bindings
+                    .iter()
+                    .filter(|b| b.enabled && b.action == "pull-app")
+                    .map(|b| {
+                        (
+                            script_name(&b.shortcut),
+                            Desired {
+                                binding: b.clone(),
+                                settings: config.settings.clone(),
+                            },
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let obsolete: Vec<_> = self
+            .slots
+            .iter()
+            .filter(|(id, slot)| slot.pending.is_none() && desired.get(*id) != Some(&slot.spec))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in obsolete {
+            crate::platform::unload_script(&id)?;
+            self.slots.remove(&id);
+        }
+        for (id, spec) in desired {
+            if self.slots.contains_key(&id) {
+                continue;
+            }
+            let callback = uuid::Uuid::new_v4().to_string();
+            let config = Config {
+                version: 1,
+                bindings: vec![spec.binding.clone()],
+                settings: spec.settings.clone(),
+            };
+            let source = format!(
+                "var WARP_HOLD_IDS = {};\nvar WARP_HOLD_NATIVE_IDS = {};\n{}",
+                serde_json::json!([callback]),
+                serde_json::json!([id]),
+                crate::platform::shortcut_source(app, &config)?
+            );
+            crate::platform::load_script(app, &id, &format!("{id}.js"), &source)?;
+            self.slots.insert(
+                id,
+                Slot {
+                    spec,
+                    callback,
+                    pending: None,
+                },
+            );
+        }
+        Ok(())
+    }
+    fn finish(&mut self, app: &AppHandle) {
+        self.desired = None;
+        for (id, _) in self.slots.drain() {
+            if let Err(error) = crate::platform::unload_script(&id) {
+                let _ = app.emit("warp-error", error);
+            }
+        }
+        if let Err(error) = crate::platform::disable_window_actions() {
+            let _ = app.emit("warp-error", error);
+        }
+    }
+    fn advance(&mut self, app: &AppHandle) -> Result<(), String> {
+        let mut released_guards = Vec::new();
+        for (id, slot) in &mut self.slots {
+            let Some(p) = slot.pending.as_mut() else {
+                continue;
+            };
+            if p.cancelled && p.released {
+                slot.pending = None;
+                released_guards.push(id.clone());
+                continue;
+            }
+            if p.cancelled && p.native_pressed {
+                continue;
+            }
+            if !p.native_pressed || p.point.is_none() {
+                if p.started.elapsed() >= Duration::from_secs(5) {
+                    if p.native_pressed {
+                        let _ = app.emit("warp-error", "KWin did not provide the app shortcut's pointer position. Pause and enable shortcuts to retry.");
+                    }
+                    slot.pending = None;
+                    released_guards.push(id.clone());
+                }
+                continue;
+            }
+            if let Some(action) = p.action() {
+                p.held = action == Action::Hold;
+                let pointer = if p.held { p.point } else { None };
+                if let Err(error) = crate::linux_control::request(
+                    app,
+                    serde_json::json!({
+                        "kind":"app-pull", "binding":slot.spec.binding, "settings":slot.spec.settings, "pointer":pointer
+                    }),
+                ) {
+                    let _ = app.emit("warp-error", error);
+                    p.cancelled = true;
+                }
+            }
+            if p.press.finished() {
+                slot.pending = None;
+            }
+        }
+        if !released_guards.is_empty() {
+            self.reconcile(app)?;
+            // An edit can assign a guarded chord to a non-gesture action.
+            // Re-register those actions after the old chord releases its key.
+            if let Some(config) = &self.desired {
+                let reassigned: Vec<_> = config
+                    .bindings
+                    .iter()
+                    .filter(|b| {
+                        b.enabled
+                            && b.action != "pull-app"
+                            && released_guards.contains(&script_name(&b.shortcut))
+                    })
+                    .collect();
+                if reassigned.iter().any(|b| b.action == "toggle-pause") {
+                    crate::platform::configure_pause(app, config)?;
+                }
+                if reassigned.iter().any(|b| b.action != "toggle-pause") {
+                    crate::platform::enable_window_actions(app, config)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+fn report_failure(app: &AppHandle, message: String) {
+    let _ = app.emit("warp-error", message);
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(error) = crate::set_enabled_blocking(app.clone(), false) {
+            let _ = app.emit("warp-error", error);
+        }
+        crate::show(&app);
+    });
+}
+fn run(app: &AppHandle, receiver: mpsc::Receiver<Event>) {
+    let mut state = Controller {
+        desired: None,
+        slots: HashMap::new(),
+    };
+    loop {
+        let deadline = state
+            .slots
+            .values()
+            .filter_map(|s| {
+                s.pending
+                    .as_ref()
+                    .and_then(|p| p.deadline(&s.spec.settings))
+            })
+            .min();
         let received = match deadline {
             Some(deadline) => {
                 receiver.recv_timeout(deadline.saturating_duration_since(Instant::now()))
@@ -258,66 +494,92 @@ fn run(
         match received {
             Ok(event) => events.push(event),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                state.finish(app);
+                return;
+            }
         }
-        // Process already-arrived releases before a timer; never synthesize a
-        // hold after the compositor has deactivated the chord.
         events.extend(receiver.try_iter());
         for event in events {
             match event {
-                Event::Stop => return,
-                Event::Failed(message) => {
-                    let _ = app.emit("warp-error", message);
-                    let app = app.clone();
-                    tauri::async_runtime::spawn_blocking(move || {
-                        if let Err(error) = crate::set_enabled_blocking(app.clone(), false) {
-                            let _ = app.emit("warp-error", error);
-                        }
-                        crate::show(&app);
-                    });
+                Event::Stop => {
+                    state.finish(app);
                     return;
                 }
-                Event::Key { id, pressed, at } if bindings.contains_key(&id) => {
-                    if pressed {
-                        let p = pending
-                            .entry(id)
-                            .or_insert_with(|| Pending::new(&settings, at));
-                        if !p.native_pressed {
-                            p.native_pressed = true;
-                            p.started = at;
+                Event::Configure(config, reply) => {
+                    let _ = reply.send(state.configure(app, config));
+                }
+                Event::Failed(message) => {
+                    state.finish(app);
+                    report_failure(app, message);
+                }
+                Event::Key { id, pressed, at } => {
+                    if let Some(slot) = state.slots.get_mut(&id) {
+                        if pressed {
+                            let p = slot.pending.get_or_insert_with(|| {
+                                Pending::new(&slot.spec.settings, at, state.desired.is_none())
+                            });
+                            if !p.native_pressed {
+                                p.native_pressed = true;
+                                p.started = at;
+                            }
+                        } else if let Some(p) = slot.pending.as_mut() {
+                            p.released = true;
                         }
-                    } else if let Some(p) = pending.get_mut(&id) {
-                        p.released = true;
                     }
                 }
-                Event::Pointer { id, point } if bindings.contains_key(&id) => {
-                    pending
-                        .entry(id)
-                        .or_insert_with(|| Pending::new(&settings, Instant::now()))
-                        .point
-                        .get_or_insert(point);
+                Event::Pointer { id, point } => {
+                    if let Some(slot) = state.slots.values_mut().find(|s| s.callback == id) {
+                        slot.pending
+                            .get_or_insert_with(|| {
+                                Pending::new(
+                                    &slot.spec.settings,
+                                    Instant::now(),
+                                    state.desired.is_none(),
+                                )
+                            })
+                            .point
+                            .get_or_insert(point);
+                    }
                 }
-                _ => {}
             }
         }
-        pending.retain(|id, p| {
-            if !alive.load(Ordering::SeqCst) { return false; }
-            if !p.native_pressed || p.point.is_none() {
-                if p.started.elapsed() >= Duration::from_secs(5) {
-                    if p.native_pressed { let _ = app.emit("warp-error", "KWin did not provide the app shortcut's pointer position. Pause and enable shortcuts to retry."); }
-                    return false;
-                }
-                return true;
-            }
-            if let Some(action) = p.press.advance(p.started.elapsed(), !p.released) {
-                p.held = action == Action::Hold;
-                let pointer = if p.held { p.point } else { None };
-                let result = crate::linux_control::request(app, serde_json::json!({
-                    "kind":"app-pull", "binding":bindings[id], "settings":settings, "pointer":pointer
-                }));
-                if let Err(error) = result { let _ = app.emit("warp-error", error); return false; }
-            }
-            !p.press.finished()
-        });
+        if let Err(error) = state.advance(app) {
+            state.finish(app);
+            report_failure(app, error);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn cancellation_survives_deadline_and_has_no_action_on_release() {
+        let mut p = Pending::new(
+            &Settings::default(),
+            Instant::now() - Duration::from_secs(10),
+            true,
+        );
+        p.native_pressed = true;
+        p.point = Some(Point { x: 1, y: 2 });
+        assert!(p.deadline(&Settings::default()).is_none());
+        assert_eq!(p.action(), None);
+        p.released = true;
+        assert_eq!(p.action(), None);
+    }
+    #[test]
+    fn hook_identity_tracks_the_chord_and_cannot_name_an_unrelated_script() {
+        assert_eq!(script_name("Ctrl+J"), script_name("Ctrl+J"));
+        assert_ne!(script_name("Ctrl+J"), script_name("Ctrl+K"));
+        assert!(owns_script(&script_name("Super+BracketLeft")));
+        for foreign in [
+            "window-warp-session",
+            "window-warp-gesture-",
+            "window-warp-gesture-../file",
+            "window-warp-gesture-0",
+        ] {
+            assert!(!owns_script(foreign));
+        }
     }
 }

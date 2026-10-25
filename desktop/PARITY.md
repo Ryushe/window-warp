@@ -13,7 +13,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | Maximize/restore toggle (original “fullscreen”); graceful close | Partial | Implemented both OSes; live KDE verified; Windows owned-window action verification pending |
 | App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Implemented both OSes; tiled burner round trip live KDE verified; other layouts and Windows live checks pending |
 | App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE focus-last and minimized checks pass; Windows native behavior checks pending |
-| Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE native key delivery verifies tap, hold, repeats, pause cancellation and disabled hold; resume before key release has a reproduced cancellation bug |
+| Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE native key delivery verifies tap, hold, repeats, pause cancellation and disabled hold; resume before key release and reassignment while held now pass; overlapping distinct chords and live Plasma 6 remain |
 | Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows mouse tile uses the key-down pointer position; KDE hold tile now passes native key delivery; both radial overlays remain pending |
 | Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed reassignment tested; native KDE current-app capture and physical-key reassignment pass; Windows native current-app capture, key recording, reassignment and persistence pass |
 | Global pause/resume hotkey stays available while paused; editor/workspace/update hotkeys | Partial | Implemented with separate pause registration; native KDE KGlobalAccel action dispatch passes; Windows OS key delivery, lifecycle and registration-failure recovery pass; KDE native pause/app-pull key delivery passes; editor/workspace key delivery remains direct-dispatch coverage |
@@ -303,3 +303,34 @@ from autorepeat. Latest receipt: `hoster-warp-gui-20261024-kde-resume-cleanup`
 (exit 1, expected cancellation assertion). This is a known incomplete behavior,
 not merely missing coverage. Preserve the assertion and fix the native release
 lifecycle before claiming gesture parity. Do not use a delay heuristic to mask it.
+
+
+## KDE held-key cancellation and script readiness
+
+The cancellation regression above is resolved. Each app chord has an independent
+hook; pause removes unheld hooks and retains only the cancelled held hook until
+its release signal. The worker survives pause/resume, ignores cancelled repeats,
+and applies an edited binding after the old chord releases. Ordinary window
+shortcuts still unload on pause. A fresh press after cancellation is verified.
+
+Native testing also exposed Plasma 5 reusing a numeric script ID already occupied
+by another script. The loader detects an occupied endpoint, uses KWin's scripting
+startup method, and requires an acknowledgement from its own new script. Loading
+metadata alone can no longer report successful activation of an unstarted script.
+
+`hoster-warp-build-20261024-kde-ready` builds the executable and Debian package
+(exit 0; 43 Rust and 40 Node tests). Added readiness/ownership assertions then pass
+all 44 Linux Rust tests in `hoster-warp-tests-20261024-kde-ready` (exit 0), without
+changing production code. Windows Rust tests pass 48, with the same two opt-in
+terminal tests ignored. Local Node tests pass 40; formatting and syntax checks pass.
+
+`hoster-warp-gui-20261024-kde-ready` passes all 22 native checks with
+`--hold --resume-held --reassign-native` (exit 0). Receipt and inspected paused
+editor screenshot: `src-tauri/target/kde-validation/held-cancellation/`.
+Nested logs: `/tmp/window-warp-nested.v4ck3M` on Portafort. The new assertions cover
+pause via the app command while a native key remains down, removal of another
+unheld gesture hook, fresh input after release, and reassignment while held.
+The separate pause hotkey's native delivery is also covered; two overlapping
+physical global chords still need their own check. Live Plasma 6, physical
+portrait/mixed-DPI outputs, radial selection, pointer/retile behavior, migration,
+and all other unfinished rows remain required.

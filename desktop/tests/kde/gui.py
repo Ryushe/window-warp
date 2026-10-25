@@ -274,10 +274,11 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             state_item = json.loads(json.dumps(state_item))
             state_item["window"] = hold_windows[0]
             config = invoke("get_config")
-            config["bindings"][-1]["appMatch"] = state_item["window"]["appId"]
+            hold_index = len(config["bindings"]) - 1
+            config["bindings"][hold_index]["appMatch"] = state_item["window"]["appId"]
             config["bindings"][5]["shortcut"] = "Ctrl+Alt+Shift+P"
             config["bindings"][1].update({"action":"focus-app", "appMatch":state_item["window"]["appId"]})
-            config["bindings"][-1].update({"shortcut":"Ctrl+Alt+Shift+J", "mainMonitorAction":"focus-last"})
+            config["bindings"][hold_index].update({"shortcut":"Ctrl+Alt+Shift+J", "mainMonitorAction":"focus-last"})
             config["settings"].update({"mainMonitor":1, "holdDelayMs":600, "holdTileEnabled":True})
             invoke("save_config", {"config":config})
             target = state_item["window"]
@@ -380,28 +381,58 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
 
                 if "--resume-held" in sys.argv:
                     config["settings"]["holdTileEnabled"] = True
+                    config["bindings"].append(dict(config["bindings"][hold_index], shortcut="Ctrl+Alt+Shift+L", label="Unheld gesture"))
                     invoke("save_config", {"config":config})
                     invoke("set_enabled", {"enabled":True})
                     reset_window()
                     chord(36)
                     time.sleep(0.08)
                     invoke("set_enabled", {"enabled":False})
+                    names = subprocess.check_output(["qdbus", "org.kde.kglobalaccel", "/component/kwin", "org.kde.kglobalaccel.Component.shortcutNames"], text=True).splitlines()
+                    assert sum(name.startswith("window-warp-gesture-") for name in names) == 1, "Pause must retain only the already-held chord"
+                    assert not kwin_loaded(), "Pause must still unload ordinary window actions"
                     invoke("set_enabled", {"enabled":True})
                     time.sleep(1.4)
                     keys.release()
                     time.sleep(0.15)
                     assert owned()["active"] and owned()["rect"] == initial, "Resuming while the chord remains held must not restart a cancelled gesture"
                     invoke("set_enabled", {"enabled":False})
-                    report["checks"].append("KDE pause/resume before release does not revive a cancelled gesture")
+                    invoke("set_enabled", {"enabled":True})
+                    reset_window()
+                    keys.pointer(area["x"]+20, area["y"]+20)
+                    chord(36)
+                    wait_window(lambda w:w["rect"] == dict(area,width=area["width"]//2), "a fresh press after cancellation still works")
+                    keys.release()
+                    reset_window()
+                    invoke("set_enabled", {"enabled":False})
+                    report["checks"].append("KDE pause/resume cancels held input, releases unrelated hooks, and accepts a fresh press")
 
                 if "--reassign-native" in sys.argv:
                     def shortcut_names():
                         return set(subprocess.check_output(["qdbus", "org.kde.kglobalaccel", "/component/kwin", "org.kde.kglobalaccel.Component.shortcutNames"], text=True).splitlines())
                     foreign_shortcuts = {name for name in shortcut_names() if not name.startswith("window-warp-")}
-                    config["bindings"][-1]["shortcut"] = "Ctrl+Alt+Shift+K"
+                    invoke("set_enabled", {"enabled":True})
+                    reset_window()
+                    chord(36)
+                    time.sleep(0.08)
+                    invoke("set_enabled", {"enabled":False})
+                    config["bindings"][hold_index]["shortcut"] = "Ctrl+Alt+Shift+K"
                     config["bindings"][1].update({"shortcut":"Ctrl+Alt+Shift+J", "action":"tile-left", "appMatch":""})
                     invoke("save_config", {"config":config})
                     invoke("set_enabled", {"enabled":True})
+                    time.sleep(0.8)
+                    assert owned()["rect"] == initial, "Editing a held chord must not revive its old or new action"
+                    keys.release()
+                    # Wait for the new action to own the key after guard release.
+                    action_id = "window-warp-tile-left-1-Ctrl-Alt-Shift-J"
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        assigned = subprocess.check_output(["gdbus", "call", "--session", "--dest", "org.kde.kglobalaccel", "--object-path", "/kglobalaccel", "--method", "org.kde.KGlobalAccel.shortcut", json.dumps(["kwin",action_id,"",""])], text=True)
+                        if re.search(r"[1-9]", assigned):
+                            break
+                        time.sleep(0.05)
+                    else:
+                        raise AssertionError({"message":"Reassigned action did not acquire the released key", "assigned":assigned, "ownedIds":sorted(name for name in shortcut_names() if name.startswith("window-warp-")), "status":invoke("get_status"), "config":invoke("get_config"), "scripts":{"main":kwin_loaded(),"pause":kwin_loaded("window-warp-pause-session")}, "page":evaluate("return document.body.innerText")})
                     chord(36)
                     keys.release()
                     wait_window(lambda w:w["rect"] == dict(area,width=area["width"]//2), "reassigned key reaches its new action")
@@ -410,10 +441,10 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                     assert foreign_shortcuts <= after, "Cleanup removed another app's shortcut"
                     assert "window-warp-control-dispatch" in after
                     assert any(name.startswith("window-warp-toggle-pause-") for name in after)
-                    assert not any(name.startswith("window-warp-hold-") for name in after)
+                    assert not any(name.startswith(("window-warp-hold-", "window-warp-gesture-")) for name in after)
                     report["checks"].append("KDE native key ownership follows reassignment between actions without removing other shortcuts")
             evaluate("location.reload(); return true;")
-            wait_for("return document.querySelectorAll('.binding').length === 10 && !document.querySelector('#toggle').disabled")
+            wait_for(f"return document.querySelectorAll('.binding').length === {len(config['bindings'])} && !document.querySelector('#toggle').disabled")
             evaluate("document.querySelector('#hold-delay').closest('details').open=true; document.querySelector('#hold-enabled').scrollIntoView({block:'center'}); return true;")
             screenshot = request("GET", f"/session/{session}/screenshot")
             (output / "window-warp-hold-kde.png").write_bytes(base64.b64decode(screenshot))

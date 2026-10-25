@@ -132,8 +132,8 @@ dbus-run-session -- bash tests/kde/nested.sh "$PWD" --input-probe
 
 Unlike direct `invokeShortcut` dispatch, this exercises real compositor key
 press, autorepeat and modifier release. It still uses virtual outputs rather
-than physical devices. Plasma 6 and pause/resume while a key remains held need
-separate acceptance checks.
+than physical devices. Plasma 6 and overlapping distinct global chords need separate acceptance
+checks. Pause/resume while held is covered by the regression below.
 
 Implementation references: [KGlobalAccel signals](https://github.com/KDE/kglobalaccel/blob/v5.115.0/src/runtime/component.cpp),
 [KDE fake-input protocol](https://github.com/KDE/plasma-wayland-protocols/blob/master/src/protocols/fake-input.xml),
@@ -148,6 +148,18 @@ an action by ID through D-Bus.
 
 `--hold --resume-held` is the explicit cancellation regression: pause and resume
 before releasing the original chord, then assert neither tap nor hold runs.
-It currently reproduces a known KDE autorepeat bug and is not a passing parity
-gate. Keep it failing until the native release lifecycle is fixed; a timing
-workaround or removing the assertion does not satisfy the original behavior.
+It now passes with per-chord hooks: only the cancelled held hook remains during
+pause, unrelated hooks are removed, resume cannot revive the gesture, and a new
+press works after release. `--reassign-native` also edits the held chord before
+resuming, checks that neither old nor replacement action fires early, and waits
+for the new action's real key reservation before testing its next press. It uses
+`gdbus` (GLib tools) for the reservation query.
+
+
+The combined command `--hold --resume-held --reassign-native` passes 22 native
+checks on Plasma 5.27. The loader acknowledges each script using a one-use ticket.
+This catches Plasma 5's reused numeric D-Bus IDs when scripts unload out of order;
+on an observed occupied ID it uses the supported scripting startup entry point.
+See [KWin 5 loader implementation](https://github.com/KDE/kwin/blob/v5.27.11/src/scripting/scripting.cpp).
+Physical displays, Plasma 6, and overlapping distinct held global chords remain
+separate coverage gaps. A cancellation guard has no timer-based suppression.

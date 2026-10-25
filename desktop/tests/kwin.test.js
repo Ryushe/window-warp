@@ -6,7 +6,7 @@ import fs from "node:fs";
 const source = fs.readFileSync(new URL("../src-tauri/kwin/warp.js", import.meta.url), "utf8");
 const controlSource = fs.readFileSync(new URL("../src-tauri/kwin/control.js", import.meta.url), "utf8");
 const clone = (value) => JSON.parse(JSON.stringify(value));
-function fixture(bindings, legacy = false, settings = {mainMonitor: 1, burnerMonitor: 2}, holdIds) {
+function fixture(bindings, legacy = false, settings = {mainMonitor: 1, burnerMonitor: 2}, holdIds, nativeIds) {
     const left = { name: "left", geometry: { x: -1920, y: 0, width: 1920, height: 1080 } };
     const right = { name: "right", geometry: { x: 0, y: 40, width: 1081, height: 1920 } };
     const window = { internalId: "a", resourceClass: "firefox", desktopFileName: "firefox", output: left,
@@ -31,7 +31,7 @@ function fixture(bindings, legacy = false, settings = {mainMonitor: 1, burnerMon
     const calls = [];
     const context = { workspace, KWin: { MaximizeArea: 0 }, print: () => {},
         WARP_APP: {service:"fixture",token:"test"}, callDBus: (...args) => calls.push(args),
-        WARP_HOLD_IDS: holdIds,
+        WARP_HOLD_IDS: holdIds, WARP_HOLD_NATIVE_IDS: nativeIds,
         WARP_CONFIG: { bindings, settings }, registerShortcut: (id, label, key, callback) => { shortcuts.set(label, { id, key, callback }); return true; } };
     vm.runInNewContext(source, context);
     return { workspace, window, left, right, shortcuts, calls, warp:context.Warp, trigger: (label) => shortcuts.get("Window Warp: " + label).callback() };
@@ -78,6 +78,11 @@ test("native hold binding captures its pointer and defers action to press/releas
     resumed.workspace.cursorPos = {x:1,y:2};
     resumed.trigger("App");
     assert.equal(resumed.calls[0][5],"next-generation-0");
+    const independent = fixture([binding],false,undefined,["private-callback"],["window-warp-gesture-1234"]);
+    assert.equal(independent.shortcuts.get("Window Warp: App").id,"window-warp-gesture-1234");
+    independent.workspace.cursorPos = {x:3,y:4};
+    independent.trigger("App");
+    assert.equal(independent.calls[0][5],"private-callback");
 });
 
 for (const legacy of [false,true]) test(`held app pull tiles on main using portrait pointer halves on Plasma ${legacy ? 5 : 6}`, () => {

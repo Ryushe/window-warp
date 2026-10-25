@@ -1,5 +1,29 @@
 use crate::config::Config;
-use std::{fs, process::Command};
+use std::{
+    collections::HashMap,
+    fs,
+    process::Command,
+    sync::{mpsc, LazyLock, Mutex},
+};
+
+static SCRIPT_READY: LazyLock<Mutex<HashMap<String, mpsc::SyncSender<()>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+struct ScriptTicket(String);
+impl Drop for ScriptTicket {
+    fn drop(&mut self) {
+        if let Ok(mut pending) = SCRIPT_READY.lock() {
+            pending.remove(&self.0);
+        }
+    }
+}
+pub(crate) fn script_ready(ticket: &str) {
+    if let Ok(mut pending) = SCRIPT_READY.lock() {
+        if let Some(reply) = pending.remove(ticket) {
+            let _ = reply.send(());
+        }
+    }
+}
+
 use tauri::{AppHandle, Manager};
 
 const SCRIPT_NAME: &str = "window-warp-session";
@@ -121,7 +145,7 @@ pub fn configure_pause(app: &AppHandle, config: &Config) -> Result<(), String> {
     let source = shortcut_source(app, &pause)?;
     load_script(app, "window-warp-pause-session", "kwin-pause.js", &source)
 }
-fn shortcut_source(app: &AppHandle, config: &Config) -> Result<String, String> {
+pub(crate) fn shortcut_source(app: &AppHandle, config: &Config) -> Result<String, String> {
     Ok(format!(
         "var WARP_APP = {};\nvar WARP_CONFIG = {};\n{}",
         crate::linux_control::descriptor(app)?,
@@ -130,28 +154,28 @@ fn shortcut_source(app: &AppHandle, config: &Config) -> Result<String, String> {
     ))
 }
 pub fn enable(app: &AppHandle, config: &Config) -> Result<(), String> {
+    // Create the authenticated endpoint before the gesture worker installs hooks.
+    crate::linux_control::descriptor(app)?;
+    crate::linux_gestures::start(app, config)
+}
+
+pub(crate) fn enable_window_actions(app: &AppHandle, config: &Config) -> Result<(), String> {
     let mut active = config.clone();
     active.bindings.retain(|b| b.action != "toggle-pause");
-    let source = shortcut_source(app, &active)?;
-    let ids = crate::linux_gestures::start(app, &active)?;
-    let source = format!(
-        "var WARP_HOLD_IDS = {};\n{source}",
-        serde_json::to_string(&ids).map_err(|e| e.to_string())?
-    );
-    let result = crate::linux_control::request(app, serde_json::json!({"kind":"reset-app-pulls"}))
-        .and_then(|_| load_script(app, SCRIPT_NAME, "kwin-session.js", &source));
-    if let Err(error) = result {
-        let cleanup = crate::linux_gestures::stop();
-        return Err(format!(
-            "{error}{}",
-            cleanup
-                .err()
-                .map(|e| format!("; hold cleanup failed: {e}"))
-                .unwrap_or_default()
-        ));
+    // Keep indices stable for the non-gesture action IDs.
+    for binding in &mut active.bindings {
+        if binding.action == "pull-app" {
+            binding.enabled = false;
+        }
     }
-    Ok(())
+    let source = shortcut_source(app, &active)?;
+    load_script(app, SCRIPT_NAME, "kwin-session.js", &source)
 }
+
+pub(crate) fn disable_window_actions() -> Result<(), String> {
+    unload_script(SCRIPT_NAME)
+}
+
 pub fn shutdown(app: &AppHandle) {
     let _ = crate::linux_gestures::stop();
     let _ = unload_script("window-warp-pause-session");
@@ -168,7 +192,17 @@ pub fn load_script(
     let directory = app.path().app_data_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
     let path = directory.join(filename);
+    let ticket = ScriptTicket(uuid::Uuid::new_v4().to_string());
+    let (reply, ready) = mpsc::sync_channel(1);
+    SCRIPT_READY
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(ticket.0.clone(), reply);
+    let source = format!("{source}\ncallDBus(\"com.windowwarp.Control\", \"/Control\", \"com.windowwarp.Control\", \"ScriptReady\", {});", serde_json::to_string(&ticket.0).map_err(|e| e.to_string())?);
     fs::write(&path, source).map_err(|e| e.to_string())?;
+    // Plasma 5 assigns IDs from its current script count. Removing an earlier
+    // script can leave another object at the ID returned by the next load.
+    let previous_paths = call(&program, &[])?;
     let id = call(
         &program,
         &[
@@ -200,7 +234,22 @@ pub fn load_script(
     } else {
         legacy_path
     };
-    let result = call(&program, &[&path, "org.kde.kwin.Script.run"]);
+    let occupied = previous_paths.lines().any(|line| line.trim() == path);
+    let result = if occupied {
+        // The per-object endpoint belongs to an older script. KWin's supported
+        // startup entry point starts loaded scripts without relying on that ID.
+        call(&program, &["/Scripting", "org.kde.kwin.Scripting.start"])
+    } else {
+        call(&program, &[&path, "org.kde.kwin.Script.run"])
+    }
+    .and_then(|_| {
+        ready
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .map(|_| String::new())
+            .map_err(|_| {
+                format!("KWin did not finish starting {name}. Its shortcuts remain paused.")
+            })
+    });
     if let Err(error) = result {
         let _ = unload_script(name);
         return Err(error);
@@ -208,8 +257,18 @@ pub fn load_script(
     Ok(())
 }
 pub fn disable(_: &AppHandle) -> Result<(), String> {
-    crate::linux_gestures::stop()?;
-    unload_script(SCRIPT_NAME)
+    if crate::linux_gestures::pause()? {
+        return Ok(());
+    }
+    disable_window_actions()?;
+    // No worker exists during startup; reclaim hooks left by a previous crash.
+    for id in shortcut_names()?
+        .into_iter()
+        .filter(|id| crate::linux_gestures::owns_script(id))
+    {
+        unload_script(&id)?;
+    }
+    Ok(())
 }
 pub fn unload_script(name: &str) -> Result<(), String> {
     let program = qdbus()?;
@@ -233,6 +292,9 @@ pub fn unload_script(name: &str) -> Result<(), String> {
 // saved key reservations, which can block our own edited/reassigned bindings.
 // Remove only the action family belonging to the script we just unloaded.
 fn owns_shortcut(script: &str, id: &str) -> bool {
+    if crate::linux_gestures::owns_script(script) {
+        return id == script;
+    }
     match script {
         "window-warp-pause-session" => id.starts_with("window-warp-toggle-pause-"),
         "window-warp-control-session" => id == "window-warp-control-dispatch",
@@ -257,6 +319,24 @@ fn owns_shortcut(script: &str, id: &str) -> bool {
         .any(|action| id.starts_with(&format!("window-warp-{action}-"))),
         _ => false,
     }
+}
+
+fn shortcut_names() -> Result<Vec<String>, String> {
+    let connection = zbus::blocking::connection::Builder::session()
+        .map_err(|e| e.to_string())?
+        .method_timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let component = zbus::blocking::Proxy::new(
+        &connection,
+        "org.kde.kglobalaccel",
+        "/component/kwin",
+        "org.kde.kglobalaccel.Component",
+    )
+    .map_err(|e| e.to_string())?;
+    component
+        .call("shortcutNames", &())
+        .map_err(|e| format!("Cannot inspect KDE shortcut reservations: {e}"))
 }
 
 fn forget_script_shortcuts(script: &str) -> Result<(), String> {
@@ -295,6 +375,28 @@ mod shortcut_tests {
     use super::*;
 
     #[test]
+    fn script_completion_requires_a_live_one_use_ticket() {
+        let ticket = ScriptTicket(uuid::Uuid::new_v4().to_string());
+        let (reply, ready) = mpsc::sync_channel(1);
+        SCRIPT_READY.lock().unwrap().insert(ticket.0.clone(), reply);
+        script_ready("unknown-ticket");
+        assert!(matches!(ready.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        script_ready(&ticket.0);
+        assert!(ready.try_recv().is_ok());
+        script_ready(&ticket.0);
+        assert!(matches!(
+            ready.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+        let expired = ScriptTicket(uuid::Uuid::new_v4().to_string());
+        let name = expired.0.clone();
+        let (reply, _ready) = mpsc::sync_channel(1);
+        SCRIPT_READY.lock().unwrap().insert(name.clone(), reply);
+        drop(expired);
+        assert!(!SCRIPT_READY.lock().unwrap().contains_key(&name));
+    }
+
+    #[test]
     fn action_cleanup_preserves_pause_control_and_foreign_shortcuts() {
         for id in [
             "window-warp-hold-2-Ctrl+Alt+J",
@@ -316,6 +418,15 @@ mod shortcut_tests {
 
     #[test]
     fn pause_and_control_cleanup_are_separate() {
+        assert!(owns_shortcut(
+            "window-warp-gesture-1234",
+            "window-warp-gesture-1234"
+        ));
+        assert!(!owns_shortcut(
+            "window-warp-gesture-1234",
+            "window-warp-gesture-5678"
+        ));
+        assert!(!owns_shortcut(SCRIPT_NAME, "window-warp-gesture-1234"));
         assert!(owns_shortcut(
             "window-warp-pause-session",
             "window-warp-toggle-pause-0-Ctrl-Alt-P"

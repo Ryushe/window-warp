@@ -185,7 +185,7 @@ var Warp = (function () {
         // for a reused action name when the user edits a binding.
         var id = "window-warp-" + binding.action + "-" + index + "-" + shortcut.replace(/[^a-z0-9]/gi, "-");
         var holdId = typeof WARP_HOLD_IDS !== "undefined" && WARP_HOLD_IDS[index];
-        if (holdId) id = "window-warp-hold-" + index + "-" + binding.shortcut;
+        if (holdId) id = typeof WARP_HOLD_NATIVE_IDS !== "undefined" ? WARP_HOLD_NATIVE_IDS[index] : "window-warp-hold-" + index + "-" + binding.shortcut;
         if (!registerShortcut(id, "Window Warp: " + binding.label, shortcut, function () {
             try {
                 if (holdId) {

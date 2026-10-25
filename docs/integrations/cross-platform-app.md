@@ -471,3 +471,70 @@ both radial pickers, pointer/retile behavior, INI migration and remaining platfo
 checks. These requirements remain in `desktop/PARITY.md`; this checkpoint is
 partial feature work. No merge, push, user-session activation or final installer
 release is claimed.
+
+
+## KDE held-key guard lifecycle and acknowledged script startup
+
+The current native cancellation bug is fixed. `linux_gestures.rs` now owns a
+persistent worker and per-chord KWin hooks. A cancelled held hook stays registered
+only to observe release; unheld hooks and ordinary window actions are removed on
+pause. Resume preserves cancellation. A config edit is reconciled after release;
+if the old chord becomes a normal action or pause key, its registration is
+refreshed at that boundary. Hook IDs derive from canonical shortcut bytes, while
+callback tickets identify a particular loaded hook. No time-based suppression is
+used. Script ownership cleanup excludes other chord hooks, pause and control.
+Startup reclaims owned per-chord scripts left by a prior crash, and shutdown
+joins the worker and removes its hooks.
+
+The expanded fixture first passed cancellation but exposed a KWin 5 loader bug:
+`loadScript` chooses `scripts.size()` as its ID. Removing an earlier script can
+reuse an existing D-Bus endpoint; calling `run` then starts the wrong object and
+leaves the new script loaded but unstarted. The implementation was verified in
+KDE v5.27.11 `src/scripting/scripting.cpp` and `.h`, safe-fetch records
+`20261025T040206Z-6f467128cf` and `20261025T040454Z-71622246b2`.
+
+`linux.rs::load_script` now snapshots exported paths before loading, detects an
+occupied ID and uses KWin's supported `Scripting.start` entry point in that case.
+That API also reconciles configured KWin plugins; the README documents this.
+Every new script sends a unique one-use readiness ticket through the existing
+local endpoint. Activation waits for that acknowledgement, and failed/timed-out
+loads are unloaded. The ticket grants no action/config authority and is removed
+on completion or error. Normal per-object startup remains used for unused IDs.
+This corrects a concrete native failure, rather than assuming a successful
+`loadScript` or `run` response means the new script executed.
+
+Validation: Linux build `hoster-warp-build-20261024-kde-ready` is inactive with
+exit 0, 43 Rust / 40 Node tests, executable and Debian package. A subsequent
+unit-test-only source update adds readiness-ticket and hook-isolation assertions;
+`hoster-warp-tests-20261024-kde-ready` exits 0 with all 44 Linux Rust tests. Runtime
+sources match the tested binary; only Rust test code changed after packaging.
+`cargo test --manifest-path desktop/src-tauri/Cargo.toml --offline` with normal CIM
+access and `CARGO_INCREMENTAL=0` passes 48 Windows tests, two existing opt-in
+terminal tests ignored. Node tests pass 40; JS/Python syntax, Rust formatting and
+whitespace checks pass. No root AHK file changed.
+
+Native `hoster-warp-gui-20261024-kde-ready` exits 0 with all 22 checks for
+`--hold --resume-held --reassign-native`. The fixture adds a second unheld app
+chord to prove pause retains only the held guard. It tests a fresh press after
+release, then edits a held chord and proves neither old nor new action runs
+until a subsequent press. It waits for the replacement's actual KGlobalAccel key
+reservation using gdbus. Report, signal log and inspected paused-editor screenshot
+are under `desktop/src-tauri/target/kde-validation/held-cancellation/`; remote
+`~/.cache/window-warp-01a16f69/gui-kde-ready/`. Nested logs:
+`/tmp/window-warp-nested.v4ck3M`. The screenshot shows the paused editor with the
+fixture's eleven bindings; no UI layout change was needed.
+
+Earlier failures are terminal evidence: `kde-guards` reached reassignment after
+passing cancellation but had a fixture index error, corrected by tracking the
+original binding index. `kde-guards-combined`, `kde-guards-diagnostic` and
+`kde-guards-state` exposed the unstarted-script/key-handoff issue fixed above.
+All task build/test/GUI units from this increment are terminal.
+
+Next substantial feature work: both radial selectors, pointer centering and
+retile timeout, complete INI migration and remaining app-launch/platform checks.
+Also add a native check for two distinct overlapping physical global chords;
+current cancellation invokes the app command while holding a native chord, with
+pause-key delivery verified separately. Do not generalize that to every keyboard
+interaction. Plasma 6, physical display coverage, final installers and independent
+release review remain pending. Keep every PARITY row in scope. No merge, push or
+user-session installation/activation occurred.

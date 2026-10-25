@@ -28,6 +28,12 @@ struct Endpoint {
 }
 #[zbus::interface(name = "com.windowwarp.Control")]
 impl Endpoint {
+    // The unguessable, one-use ticket acknowledges only a pending local load.
+    // It grants no action or configuration authority.
+    fn script_ready(&self, ticket: &str) {
+        crate::platform::script_ready(ticket);
+    }
+
     fn gesture_pointer(&self, token: &str, id: &str, pointer: &str) {
         if token == self.token {
             crate::linux_gestures::pointer(id, pointer);

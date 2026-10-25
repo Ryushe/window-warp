@@ -52,13 +52,15 @@ Build outputs are under `src-tauri/target/release/`; installers are under its `b
 
 Use a Plasma 5.27 or 6 session (Wayland or X11) and Qt's qdbus executable. Supported executable names are `qdbus6`, `qdbus-qt6`, `/usr/lib/qt6/bin/qdbus`, and `qdbus`. Package names differ by distribution; for example `qdbus` for Plasma 5, or `qdbus-qt6` / `qt6-tools` for Plasma 6. The app detects the script-object path and the script adapts to each version's window, desktop, and output APIs.
 
-The application loads session-only KWin scripts via the session D-Bus service. KWin registers the shortcuts and performs window operations, so native Wayland windows do not depend on X11 automation. Pause unloads the window-action script; the pause/resume binding and workspace command bridge remain available. Quit unloads all three scripts. After a crash, the app replaces the corresponding script on next use. If needed, manually unload them with your qdbus executable:
+The application loads session-only KWin scripts via the session D-Bus service. KWin registers the shortcuts and performs window operations, so native Wayland windows do not depend on X11 automation. Pause unloads window actions and unheld app-gesture hooks. A cancelled held hook stays installed solely until release, so resuming cannot restart it from autorepeat. The pause/resume binding and workspace command bridge remain available. Quit removes the owned hooks; startup also reclaims hooks left by a crash. The three shared scripts can be manually unloaded with your qdbus executable:
 
 ```sh
 qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript window-warp-session
 qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript window-warp-pause-session
 qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript window-warp-control-session
 ```
+
+When KWin reuses a script D-Bus ID, the app uses the scripting startup entry point, which also reconciles configured KWin plugins. Each new script must acknowledge startup before activation succeeds.
 
 Window Warp removes its own inactive key reservations when pausing or reconfiguring, so saved key reassignments can take effect. Configure its keys in the app. Other desktop shortcuts can still conflict; inspect **System Settings → Keyboard → Shortcuts → KWin** if a key does not fire. Loading the script alone does not prove every key is available. Runtime KWin messages can be found in the user journal (`journalctl --user -b`, search for `Window Warp`). The app requires access to the session bus and is not currently packaged as a sandboxed Flatpak.
 
