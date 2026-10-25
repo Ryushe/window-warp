@@ -7,7 +7,7 @@
 - Base commit: `7b907778f0022d73fb3527b82c0ab7ecedf8124d`
 - Intended eventual target: `main`; promotion/merge has not been requested
 - Last updated: 2026-10-25
-- Latest immutable recovery checkpoint: `b1c173bef678b473dd4c22034883acac4a522891`
+- Latest immutable recovery checkpoint: `5206f662c1dbceaef66f1bcc34b1fc98636cb358`
 - Feature implementation commits: `abfc95e` (desktop/workspace foundation), `ee7bee4` (Firefox profiles/tabs), `c09d79c` (terminal capture/editor/restore), `491a9d8` (KDE Firefox caption correction and complete 15-check native run), `5e6373d` (WSL distribution discovery and native directory restoration), `02d4e02` (reviewed shortcut reassignment and 12-check native KDE run), `b216f0c` (persistent pause and application control hotkeys, 15 native KDE checks), `d49e380` (14 native Windows application checks), `9794b75` (Windows tap/hold, activation deadlock correction, 18 Windows and 15 KDE native checks), `b63cb1d` (KDE native tap/hold, Wayland editor focus, 20 native KDE checks), `41fbc70` (KDE key reservation cleanup, 21 native KDE checks, held-key regression reproduced), `da23019` (held-key cancellation and deferred reassignment, verified script startup, 22 native KDE checks), `61233ff` (shared radial picker, 26 native KDE checks; initial 22 native Windows pass later superseded by rapid Escape regression), `4a92065` (reviewed INI migration and native import receipts), `9ccbaa7` (portable fixture line endings)
 - Canonical references: original root AHK files; `desktop/PARITY.md`
 
@@ -2304,3 +2304,9 @@ Final staged review preserves exact packaged companion sources. The ordinary
 whitespace check reports only an extra final blank line in CMakeLists.txt and
 PROTOCOL.md; the check with `core.whitespace=-blank-at-eof` passes. These two
 nonfunctional warnings are retained to preserve package/source hash identity.
+
+Recovery checkpoint `5206f662c1dbceaef66f1bcc34b1fc98636cb358` contains the
+reviewed native companion, Rust integration, packaging and final evidence above.
+This follow-up changes only the dossier to record the immutable implementation
+SHA. Resume the open PARITY gates from this feature branch; the full-port goal
+remains active. No merge, push, installer execution or normal-session activation.
