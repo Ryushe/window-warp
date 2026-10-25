@@ -10,6 +10,24 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const item = title => ({label:title, window:{title, appId:"fixture", monitor:1, rect:{width:640,height:400}}, launch:{program:"fixture", args:[], workingDirectory:"", newWindow:false}});
 const profile = (id, name) => ({id,name,platform:"linux",items:[item(name + " window")]});
 
+test("imported workspace stays a draft, preserves existing drafts and permits platform/placement adaptation",async()=>{
+    const e=await editor();
+    const p=profile("imported","Imported");p.platform="windows";
+    p.items[0].window.workArea={x:0,y:0,width:1920,height:1080};
+    await e.window.reviewImportedWorkspace(p);
+    assert.equal(e.calls.some(c=>c.command==="save_workspaces"),false);
+    await assert.rejects(()=>e.window.reviewImportedWorkspace(profile("next","Next")),/Save or cancel/);
+    e.input("#workspace-platform","linux");
+    e.input('[data-window="appId"]',"org.kde.konsole");
+    e.input('[data-area="width"]',"1280");
+    e.input('[data-rect="x"]',"40");
+    await e.click("#save-workspace");
+    const saved=e.stored().profiles[0];
+    assert.equal(saved.platform,"linux");assert.equal(saved.items[0].window.appId,"org.kde.konsole");
+    assert.equal(saved.items[0].window.workArea.width,1280);assert.equal(saved.items[0].window.rect.x,40);
+    assert.equal(p.platform,"windows");
+});
+
 test("terminal profile, WSL identity and shell arguments remain editable in a workspace draft", async()=>{
     const p=profile("terminal","Development");
     p.items[0].terminal={kind:"windows-terminal",profileName:"Ubuntu",shell:"wsl.exe",shellArgs:[],wslDistro:"Ubuntu",wslUser:"",workingDirectory:"/home/alice"};
@@ -28,6 +46,10 @@ test("terminal profile, WSL identity and shell arguments remain editable in a wo
     assert.equal(terminal.workingDirectory,"/home/alice/my work");
     assert.deepEqual(terminal.shellArgs,["--exec","/bin/bash","--noprofile"]);
     await e.click('[data-action="edit"]');
+    e.input('[data-terminal="kind"]',"konsole");
+    assert.equal(e.document.querySelector(".wsl-settings").hidden,false,"saved WSL fields remain reachable for clearing during adaptation");
+    e.input('[data-terminal="wslDistro"]',"");e.input('[data-terminal="wslUser"]',"");
+    assert.equal(e.document.querySelector(".wsl-settings").hidden,true);
     e.change(".restore-terminal",false);
     await e.click("#save-workspace");
     assert.equal(e.stored().profiles[0].items[0].terminal,null);

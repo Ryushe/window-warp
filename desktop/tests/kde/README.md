@@ -173,3 +173,11 @@ checks. `window-warp-radial-kde.png` captures the actual overlay through its
 WebKit window. The fixture uses its own app identity and terminates all nine
 owned windows during cleanup. Its pointer and key injection remains restricted
 to the private nested compositor.
+
+
+Add `--import` to test legacy INI review through WebKit's File/DataTransfer API.
+It decodes UTF-16, retains Windows app matches as disabled Linux drafts, proves
+review never saves, then explicitly saves a Windows-scoped terminal workspace.
+The baseline plus import passes 17 checks in `hoster-warp-gui-20261024-import`.
+Its screenshot is `window-warp-import-kde.png`. Windows separately verifies
+native selection of actual files from disk.

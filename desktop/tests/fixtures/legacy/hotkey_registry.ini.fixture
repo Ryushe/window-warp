@@ -1,0 +1,79 @@
+[Meta]
+count=11
+[Hotkey1]
+id=wm.move-left
+hotkey=#x
+action=Move window left
+source=script
+script=window_manager.ahk
+disabledHotkey=
+[Hotkey2]
+id=wm.move-right
+hotkey=#c
+action=Move window right
+source=script
+script=window_manager.ahk
+disabledHotkey=
+[Hotkey3]
+id=wm.move-left-center
+hotkey=#^x
+action=Move window left and center mouse
+source=script
+script=window_manager.ahk
+disabledHotkey=
+[Hotkey4]
+id=wm.move-right-center
+hotkey=#^c
+action=Move window right and center mouse
+source=script
+script=window_manager.ahk
+disabledHotkey=
+[Hotkey5]
+id=wm.open-builder
+hotkey=#b
+action=Open hotkey builder
+source=script
+script=window_manager.ahk
+disabledHotkey=
+[Hotkey6]
+id=wm.open-opener
+hotkey=#o
+action=Open workspace opener
+source=script
+script=window_manager.ahk
+disabledHotkey=
+[Hotkey7]
+id=wm.update-workspace
+hotkey=#y
+action=Update workspace
+source=script
+script=window_manager.ahk
+disabledHotkey=
+[Hotkey8]
+id=wm.pull-recent
+hotkey=#r
+action=Pull most recent window
+source=script
+script=window_manager.ahk
+disabledHotkey=
+[Hotkey9]
+id=wm.toggle-suspend
+hotkey=#;
+action=Toggle hotkeys
+source=script
+script=window_manager.ahk
+disabledHotkey=
+[Hotkey10]
+id=fullscreen.toggle
+hotkey=#z
+action=Toggle fullscreen
+source=script
+script=fullscreen.ahk
+disabledHotkey=
+[Hotkey11]
+id=kill.close-active
+hotkey=#q
+action=Close active window
+source=script
+script=kill.ahk
+disabledHotkey=

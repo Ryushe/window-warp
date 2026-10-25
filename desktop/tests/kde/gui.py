@@ -710,6 +710,44 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             screenshot = request("GET", f"/session/{session}/screenshot")
             (output / "window-warp-terminal-kde.png").write_bytes(base64.b64decode(screenshot))
             report["screenshot"] = str(output / "window-warp-terminal-kde.png")
+        if "--import" in sys.argv:
+            invoke("set_enabled", {"enabled": False})
+            wait_for("return !document.querySelector('#import-files').disabled")
+            if not evaluate("return document.querySelector('#workspace-editor').hidden"):
+                click("#discard-workspace")
+            before_config = invoke("get_config")
+            before_store = invoke("get_workspaces")
+            app_ini = "[Meta]\ncount=1\n[App1]\nlabel=Imported Windows app\nhotkey=#x\nmatch=ahk_exe app.exe"
+            workspace_ini = "[Meta]\ncount=1\n[Profile1]\nid=legacy-id\nname=Imported workspace\nitemCount=1\n[Profile1Item1]\nprocessName=WindowsTerminal.exe\npath=C:\\WindowsApps\\Terminal.exe\ntitle=Development\nterminalCommand=wsl.exe -d \"Ubuntu\"\nprofileName=Dev\nx=100\ny=100\nw=600\nh=400\nmonitorIndex=1"
+            encoded = [base64.b64encode(text.encode("utf-16")).decode() for text in [app_ini, workspace_ini]]
+            evaluate("const transfer=new DataTransfer();" + "".join(
+                f"transfer.items.add(new File([Uint8Array.from(atob({json.dumps(data)}),c=>c.charCodeAt(0))], 'fixture-{index}.ini'));"
+                for index, data in enumerate(encoded)
+            ) + "const input=document.querySelector('#import-files');input.files=transfer.files;document.querySelector('#legacy-import').open=true;input.dispatchEvent(new Event('change'));return true;")
+            wait_for("return document.querySelectorAll('#import-results article').length===2 && !document.querySelector('#apply-import').disabled")
+            assert invoke("get_config") == before_config
+            assert invoke("get_workspaces") == before_store
+            assert "Disabled for Linux review" in evaluate("return document.querySelector('#import-results').textContent")
+            click("#apply-import")
+            assert invoke("get_config") == before_config
+            click("#save")
+            wait_for("return document.querySelector('#message').textContent.startsWith('Saved.')")
+            imported = invoke("get_config")["bindings"][-1]
+            assert imported["appMatch"] == "app.exe" and not imported["enabled"]
+            report["checks"].append("native WebKit UTF-16 import preserves Windows app identity as a disabled Linux review draft until explicit Save")
+            click("#import-results article:last-child button")
+            wait_for("return !document.querySelector('#workspace-editor').hidden")
+            assert invoke("get_workspaces") == before_store
+            assert evaluate("return document.querySelector('#workspace-platform').value") == "windows"
+            assert evaluate("return document.querySelector('[data-terminal=wslDistro]').value") == "Ubuntu"
+            screenshot = request("GET", f"/session/{session}/screenshot")
+            (output / "window-warp-import-kde.png").write_bytes(base64.b64decode(screenshot))
+            click("#save-workspace")
+            wait_for("return document.querySelector('#message').textContent==='Workspace saved.'")
+            saved = invoke("get_workspaces")["profiles"][-1]
+            assert saved["platform"] == "windows" and saved["id"] != "legacy-id"
+            assert saved["items"][0]["terminal"]["wslDistro"] == "Ubuntu"
+            report["checks"].append("native KDE imported Windows workspace preserves terminal identity, requires Save and remains platform scoped")
         (output / "gui-result.json").write_text(json.dumps(report, indent=2))
         print(json.dumps(report, indent=2), flush=True)
     finally:

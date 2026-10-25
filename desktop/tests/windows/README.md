@@ -58,3 +58,16 @@ foreground eligibility. Its screenshot was inspected and the ordinary debug
 build was successfully restored. Earlier memory and release-focus failures are
 superseded by this fresh build and native run. Existing preview installers are
 unchanged and do not contain this work.
+
+
+INI coverage selects actual UTF-16 files through the native WebView file input,
+checks that review does not save, preserves a disabled key and an unsupported
+match, then explicitly saves shortcuts and a two-window terminal/Firefox
+workspace. The latest import run has 23 passing checks and one explicit skip:
+`WARP-NATIVE-0f28c784-4d06-4f64-b58e-ee75d3bfab14`.
+
+**Known failure:** rapid Escape down/up can be missed while a radial chord is
+held. The default fixture repeats this regression five times and still fails
+intermittently. `--skip-escape` is a diagnostic option for unrelated work only;
+it records the skip and is not a full native acceptance gate. It supersedes the
+earlier unqualified Escape success claim above. Keep the immediate key events.

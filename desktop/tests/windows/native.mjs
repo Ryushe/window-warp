@@ -303,13 +303,19 @@ try {
     assert.equal((await readSecond()).active,false);
     checks.push("radial release inside the dead zone cancels without selecting or moving a window");
 
-    await native("pointer",center); await native("hold_start",{key:0x7d}); await radialOpen();
-    await native("pointer",{x:center.x,y:center.y+90});
-    await until(()=>invoke("radial_view"),v=>v?.selected===1,"select before Escape");
-    await native("held_tap",{key:0x1b}); await radialClosed();
-    await native("key_up"); await sleep(100);
-    assert.equal((await readSecond()).active,false);
+    if (process.argv.includes("--skip-escape")) {
+        skipped.push("Known fast Escape cancellation failure: diagnostic --skip-escape run, not a complete native acceptance receipt");
+    } else {
+    for (let attempt=0; attempt<5; attempt++) {
+        await native("pointer",center); await native("hold_start",{key:0x7d}); await radialOpen();
+        await native("pointer",{x:center.x,y:center.y+90});
+        await until(()=>invoke("radial_view"),v=>v?.selected===1,"select before Escape");
+        await native("held_tap",{key:0x1b}); await radialClosed();
+        await native("key_up"); await sleep(100);
+        assert.equal((await readSecond()).active,false);
+    }
     checks.push("native Escape cancels a selected radial gesture without applying it on release");
+    }
 
     await native("pointer",center); await native("hold_start",{key:0x7d}); await radialOpen();
     await invoke("set_enabled",{enabled:false}); await radialClosed();
@@ -369,6 +375,51 @@ try {
     assert.deepEqual(launched[0].rect,launch.items[0].window.rect);
     await screenshot("workspaces.png");
     checks.push("workspace launch opens a distinct owned process and restores its placement");
+
+    await invoke("set_enabled",{enabled:false}); await paused(true);
+    await wait("!document.querySelector('#import-files').disabled", "import available while paused");
+    const beforeImport = await invoke("get_config");
+    const importFiles = [
+        ["apps.ini", "[Meta]\ncount=2\n[App1]\nlabel=Imported disabled app\nhotkey=\ndisabledHotkey=^!+F22\nmatch=ahk_exe fixture.exe\n[App2]\nlabel=Needs manual match\nhotkey=#f\nmatch=ahk_class Unknown"],
+        ["settings.ini", "[Settings]\nholdDelayMs=850\nholdTileEnabled=1\nholdMode=radial"],
+        ["workspaces.ini", "[Meta]\ncount=1\n[Profile1]\nid=legacy-id\nname=Imported workspace\nitemCount=2\n[Profile1Item1]\nprocessName=WindowsTerminal.exe\npath=C:\\WindowsApps\\Terminal.exe\ntitle=Development\nterminalCommand=wsl.exe -d \"Ubuntu\"\nprofileName=Dev\nx=100\ny=100\nw=600\nh=400\nmonitorIndex=1\n[Profile1Item2]\nprocessName=firefox.exe\npath=firefox.exe\ntitle=Research\nbrowserProfileName=Work\nbrowserUrlCount=2\nbrowserUrl1=https://example.test/one\nbrowserUrl2=https://example.test/two?a=1;b=2\nbrowserActiveTab=2\nx=150\ny=150\nw=700\nh=500\nmonitorIndex=1"]
+    ].map(([name,text])=>{const file=path.join(output,name);fs.writeFileSync(file,Buffer.concat([Buffer.from([255,254]),Buffer.from(text,"utf16le")]));return file;});
+    await evaluate("document.querySelector('#legacy-import').open=true");
+    const dom = await cdp("DOM.getDocument");
+    const fileNode = await cdp("DOM.querySelector",{nodeId:dom.root.nodeId,selector:"#import-files"});
+    await cdp("DOM.setFileInputFiles",{nodeId:fileNode.nodeId,files:importFiles});
+    await wait("document.querySelectorAll('#import-results article').length === 4", "INI file review");
+    assert.deepEqual(await invoke("get_config"),beforeImport);
+    assert.deepEqual(await invoke("get_workspaces"),store);
+    assert.ok((await evaluate("document.querySelector('#import-results').textContent")).includes("manual conversion"));
+    await screenshot("import-review.png");
+    await click("#apply-import");
+    assert.deepEqual(await invoke("get_config"),beforeImport);
+    await click("#save");
+    await wait("document.querySelector('#message').textContent.startsWith('Saved.')", "imported shortcuts explicitly saved");
+    const importedConfig = await invoke("get_config");
+    assert.equal(importedConfig.bindings.length,beforeImport.bindings.length+1);
+    assert.equal(importedConfig.bindings.at(-1).enabled,false);
+    assert.equal(importedConfig.bindings.at(-1).shortcut,"Ctrl+Alt+Shift+F22");
+    assert.equal(importedConfig.settings.holdDelayMs,850);
+    checks.push("native UTF-16 INI review preserves unsupported entries and disabled keys without saving until explicit Save");
+    await click("#import-results article:last-child button");
+    await wait("!document.querySelector('#workspace-editor').hidden", "imported workspace draft");
+    assert.deepEqual(await invoke("get_workspaces"),store);
+    assert.equal(await evaluate("document.querySelector('[data-terminal=wslDistro]').value"),"Ubuntu");
+    assert.equal(await evaluate("document.querySelector('.workspace-item:nth-child(2) [data-browser=activeTab]').value"),"2");
+    await input('[data-rect="x"]',"120");
+    await screenshot("import-workspace.png");
+    await click("#save-workspace");
+    await wait("document.querySelector('#message').textContent === 'Workspace saved.'", "imported workspace explicitly saved");
+    const importedStore = await invoke("get_workspaces");
+    assert.equal(importedStore.profiles.length,store.profiles.length+1);
+    const importedProfile = importedStore.profiles.at(-1);
+    assert.notEqual(importedProfile.id,"legacy-id");
+    assert.equal(importedProfile.items[0].terminal.wslDistro,"Ubuntu");
+    assert.equal(importedProfile.items[0].window.rect.x,120);
+    assert.equal(importedProfile.items[1].browser.tabs[1].url,"https://example.test/two?a=1;b=2");
+    checks.push("native workspace INI import reviews terminal, Firefox and editable placement before saving a new profile");
 
     const priorStartup = await native("startup_value");
     if (priorStartup === null) {

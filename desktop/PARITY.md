@@ -14,7 +14,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Implemented both OSes; tiled burner round trip live KDE verified; other layouts and Windows live checks pending |
 | App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE focus-last and minimized checks pass; Windows native behavior checks pending |
 | Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE native key delivery verifies tap, hold, repeats, pause cancellation and disabled hold; resume before key release and reassignment while held now pass; overlapping distinct chords and live Plasma 6 remain |
-| Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows mouse tile uses the key-down pointer position; KDE hold tile and radial selection/cancellation pass native key delivery; shared eight-slot geometry/order and both overlays implemented; Windows radial release selection and cancellation pass the native fixture |
+| Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows mouse tile uses the key-down pointer position; KDE hold tile and radial selection/cancellation pass native key delivery; shared eight-slot geometry/order and both overlays implemented; Windows release selection/dead-zone/pause pass; rapid Escape has an intermittent failure requiring correction |
 | Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed reassignment tested; native KDE current-app capture and physical-key reassignment pass; Windows native current-app capture, key recording, reassignment and persistence pass |
 | Global pause/resume hotkey stays available while paused; editor/workspace/update hotkeys | Partial | Implemented with separate pause registration; native KDE KGlobalAccel action dispatch passes; Windows OS key delivery, lifecycle and registration-failure recovery pass; KDE native pause/app-pull key delivery passes; editor/workspace key delivery remains direct-dispatch coverage |
 | Settings persistence and startup registration | Partial | Windows Run entry and KDE autostart toggles pass; actual login/startup launches remain pending |
@@ -23,7 +23,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Partial | 15 native KDE checks pass on the caption-fix build, including tabs/selection, same-title profile isolation, floating geometry and editor; codec/profile/launch tests pass; live Windows browser path pending |
 | Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native Ubuntu capture/directory restoration passes; legacy launchers, prompt fallback, and ambiguity have regression coverage; native PowerShell/custom-profile variants still required |
 | Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Partial | Ordinary executable launch and argument boundaries pass native Windows/KDE fixtures; packaged Windows and Linux desktop-entry launch remain |
-| Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Pending | Fixtures including disabled keys, legacy terminal fields, browser tabs |
+| Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Partial | Review/import/save verified natively on Windows and KDE; disabled keys, terminal fields, Firefox tabs and geometry retained; center actions, packaged launch and unsupported AHK matches still need conversion |
 | Single instance, tray, settings failures, session cleanup, installers | Partial | Windows native single instance, registration failures and process-exit key release pass; final tray/graceful-exit and installer checks remain |
 
 ## Platform investigation
@@ -410,3 +410,45 @@ successfully (`restore-build.log`, exit 0).
 The current Windows Rust suite passes 50 tests, with the two existing opt-in
 terminal tests ignored. No runtime code changed after the verified Linux radial
 receipt. INI migration and all other unfinished rows remain in scope.
+
+
+## Reviewed INI migration and newly reproduced Escape regression
+
+The app now reads the four original INI formats into review entries. Shortcuts
+append to existing unsaved edits; settings merge only fields present in the INI;
+workspaces open as new drafts. Persistence remains in the existing explicit Save
+flows. Unsupported entries retain their original fields in the review. Linux
+imports preserve Windows identity, disable app shortcuts for adaptation and keep
+workspaces Windows-scoped until edited. Reference work areas and window matching
+fields are editable because legacy files omit the original display work areas.
+
+53 Node tests and 50 Windows Rust tests pass (two opt-in terminal tests ignored).
+`hoster-warp-build-20261024-import` exits 0 with 46 Linux Rust tests, 52 Node tests,
+executable and Debian package. `hoster-warp-gui-20261024-import` exits 0 with 17
+native KDE checks, including UTF-16 review, explicit Save and Windows-platform
+preservation. Report and inspected screenshot: `src-tauri/target/kde-validation/import/`.
+Nested logs: `/tmp/window-warp-nested.Q6JAxp` on Portafort.
+
+The Windows diagnostic run `node desktop/tests/windows/native.mjs --skip-escape`
+passes 23 checks with one explicit skip. Receipt:
+`src-tauri/target/windows-validation/WARP-NATIVE-0f28c784-4d06-4f64-b58e-ee75d3bfab14/`.
+It verifies actual UTF-16 file selection, disabled-key persistence, unsupported
+match review, workspace terminal/browser fields and edited geometry. Both import
+screenshots were inspected; the normal debug build restored successfully.
+This is not a complete native acceptance result.
+
+Repeated default runs exposed intermittent Windows cancellation failure for an
+immediate Escape down/up while modifiers stay held. The earlier 22-check pass
+did not establish reliability. Latest failed receipt:
+`WARP-NATIVE-3c6bd49d-01ac-4a29-9a99-359cadb4f35f/result.json`.
+The default fixture retains the assertion and now repeats it five times. A
+temporary low-level hook experiment did not reliably receive injected events
+and was removed; no experimental hook remains in production. Fix this before
+claiming radial completion. Do not increase the test key duration to hide it.
+
+After native receipts, focused Node coverage added known terminal-title shell
+inference, removed an inapplicable packaged-launch note for Windows Terminal,
+and kept WSL fields reachable while adapting to Konsole. Those refinements pass
+53 Node tests; native binaries above predate them. Existing Windows installers
+remain old. Resume with reliable Windows Escape cancellation, then pointer/retile,
+remaining migration/launch cases, platform acceptance and all unfinished rows.

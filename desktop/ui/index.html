@@ -7,6 +7,8 @@
   <link rel="stylesheet" href="style.css">
   <script src="app.js" defer></script>
   <script src="workspaces.js" defer></script>
+  <script src="legacy-import.js" defer></script>
+  <script src="import-ui.js" defer></script>
 </head>
 <body>
   <aside>
@@ -23,6 +25,14 @@
       <button class="primary" id="toggle" disabled>Enable shortcuts <span aria-hidden="true">↗</span></button>
     </section>
     <div class="notice" id="message" role="status" aria-live="polite">Loading your shortcuts…</div>
+    <details id="legacy-import"><summary>Import AutoHotkey settings</summary>
+      <p>Select your apps, shared hotkeys, settings or workspace INI files. Review the results below. Imported shortcuts are added to your draft; each workspace opens for review. Save in the editor to apply.</p>
+      <label>INI files<input id="import-files" type="file" accept=".ini" multiple disabled></label>
+      <p>UTF-8 and UTF-16 files are detected automatically. Older ANSI files use Windows-1252; check names after importing.</p>
+      <div id="import-results"></div>
+      <button id="apply-import" hidden disabled>Add selected shortcuts and settings to draft</button>
+      <button id="clear-import" hidden>Clear import review</button>
+    </details>
     <div id="shortcuts-page">
     <section aria-labelledby="shortcuts-heading" class="editor">
       <div class="section-title"><div><h2 id="shortcuts-heading">Your shortcuts</h2><p id="edit-hint">Pause shortcuts to make changes.</p></div><button id="add" disabled>+ Add shortcut</button></div>
@@ -54,6 +64,7 @@
       <div id="workspace-editor" hidden>
         <div class="section-title"><h2>Review workspace</h2><button id="discard-workspace">Cancel</button></div>
         <label>Name<input id="workspace-name" maxlength="240" placeholder="e.g. Research"></label>
+        <label>Workspace platform<select id="workspace-platform"><option value="windows">Windows</option><option value="linux">Linux / KDE</option></select></label>
         <label id="workspace-update-choice" hidden>Save as<select id="workspace-target"><option value="">New workspace</option></select><small id="workspace-suggestion"></small></label>
         <div id="workspace-items"></div>
         <div class="editor-footer"><span id="workspace-item-count"></span><button id="save-workspace" class="primary">Save workspace</button></div>
@@ -76,6 +87,14 @@
   <template id="workspace-item-template"><article class="workspace-item">
     <label class="enabled-field"><input type="checkbox" class="include-window" checked><span class="window-title"></span></label>
     <p class="window-placement"></p><p class="capture-note" hidden></p>
+    <details><summary>Window matching and placement</summary>
+      <label>App identifier<input data-window="appId" spellcheck="false"></label>
+      <label>Desktop file ID (Linux)<input data-window="desktopId" spellcheck="false"></label>
+      <label>Monitor number<input data-window="monitor" type="number" min="1" max="100"></label>
+      <div class="monitor-settings"><label>Left<input data-rect="x" type="number"></label><label>Top<input data-rect="y" type="number"></label><label>Width<input data-rect="width" type="number" min="1"></label><label>Height<input data-rect="height" type="number" min="1"></label></div>
+      <p>Reference monitor work area (used to scale placement after a display change):</p>
+      <div class="monitor-settings"><label>Left<input data-area="x" type="number"></label><label>Top<input data-area="y" type="number"></label><label>Width<input data-area="width" type="number" min="1"></label><label>Height<input data-area="height" type="number" min="1"></label></div>
+    </details>
     <details class="browser-settings" hidden><summary>Firefox profile and tabs</summary>
       <label class="enabled-field"><input type="checkbox" class="restore-browser" checked>Restore this Firefox profile and its tabs</label>
       <label>Profile folder<input data-browser="profilePath" spellcheck="false"></label>
@@ -85,6 +104,7 @@
       <small>The selected tab opens last. Existing matching browser windows are reused unless “Always open a new window” is checked.</small>
     </details>
     <details class="terminal-settings" hidden><summary class="terminal-summary">Terminal session</summary>
+      <label>Terminal app<select data-terminal="kind"><option value="windows-terminal">Windows Terminal</option><option value="konsole">Konsole</option></select></label>
       <label class="enabled-field"><input type="checkbox" class="restore-terminal" checked>Restore this terminal session</label>
       <label>Profile name<input data-terminal="profileName" spellcheck="false"></label>
       <label class="konsole-profile">Konsole profile file (takes priority over its name)<input data-terminal="profilePath" spellcheck="false"></label>

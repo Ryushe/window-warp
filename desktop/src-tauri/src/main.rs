@@ -214,6 +214,25 @@ async fn get_windows(app: AppHandle) -> Result<Vec<workspaces::WindowInfo>, Stri
         .map_err(|e| e.to_string())?
 }
 #[tauri::command]
+fn get_import_monitors(app: AppHandle) -> Result<Vec<geometry::Rect>, String> {
+    let mut areas: Vec<_> = app
+        .available_monitors()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|monitor| {
+            let area = monitor.work_area();
+            geometry::Rect {
+                x: area.position.x,
+                y: area.position.y,
+                width: area.size.width as i32,
+                height: area.size.height as i32,
+            }
+        })
+        .collect();
+    areas.sort_by_key(|r| (r.x, r.y));
+    Ok(areas)
+}
+#[tauri::command]
 async fn restore_workspace(
     app: AppHandle,
     id: String,
@@ -352,6 +371,7 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            get_import_monitors,
             get_config,
             save_config,
             preview_shortcut_reassignment,

@@ -26,6 +26,8 @@ function controls() {
     $("#main-monitor").disabled = $("#burner-monitor").disabled = busy || enabled || !config;
     $("#hold-mode").disabled = $("#hold-enabled").disabled = $("#hold-delay").disabled = busy || enabled || !config;
     $("#startup").disabled = busy || !startupKnown;
+    $("#import-files").disabled = busy || enabled || !config;
+    $("#apply-import").disabled = busy || enabled || !config;
     $("#edit-hint").textContent = enabled ? "Pause shortcuts to make changes." : "Changes take effect after saving and enabling.";
     $("#save-status").textContent = dirty ? "Unsaved changes" : "Stored on this device";
 }

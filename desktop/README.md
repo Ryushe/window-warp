@@ -68,7 +68,7 @@ For app identifiers, use the exact resource class or desktop file ID. KWin's win
 
 ## Scope and verification
 
-The full feature port is in progress; [PARITY.md](PARITY.md) tracks the source-derived requirements and verification gaps. INI import, pointer centering and timed retiling remain pending. The radial picker is implemented on both platforms and passes native Windows and KDE selection/cancellation checks. Tap/hold tiling is implemented on Windows and KDE; see the checklist for native coverage and remaining gesture cases. Terminal capture and new-window restoration have passed native cmd, WSL, and Konsole fixtures; additional profile variants remain to be verified. Workspace capture/reuse/launch, per-axis maximization/fullscreen, and Firefox tab restoration have passed native KDE tests. Startup registration passes native Windows and KDE toggle tests; actual login launches still need validation. Live Windows Firefox, mixed-DPI displays, desktop-imposed minimum sizes, and elevated Windows applications also need coverage. Existing Windows preview installers predate these ongoing changes.
+The full feature port is in progress; [PARITY.md](PARITY.md) tracks the source-derived requirements and verification gaps. Reviewed INI import is available; pointer centering and timed retiling remain pending. The radial picker is implemented on both platforms and passes native Windows/KDE release-selection checks; rapid Escape cancellation on Windows is still unreliable. Tap/hold tiling is implemented on Windows and KDE; see the checklist for native coverage and remaining gesture cases. Terminal capture and new-window restoration have passed native cmd, WSL, and Konsole fixtures; additional profile variants remain to be verified. Workspace capture/reuse/launch, per-axis maximization/fullscreen, and Firefox tab restoration have passed native KDE tests. Startup registration passes native Windows and KDE toggle tests; actual login launches still need validation. Live Windows Firefox, mixed-DPI displays, desktop-imposed minimum sizes, and elevated Windows applications also need coverage. Existing Windows preview installers predate these ongoing changes.
 
 ```sh
 npm test
@@ -97,7 +97,7 @@ Manual acceptance on each OS: enable the app; push a floating window across two 
 - `src-tauri/src/process_info.rs`: argument boundaries from `/proc` or Windows CIM and `CommandLineToArgvW`.
 - `src-tauri/kwin/warp.js`: compositor-side window management and shortcuts.
 
-Settings live in Tauri's per-user configuration directory under `com.windowwarp.desktop/settings.json`; workspaces use `workspaces.json` beside it. The editor displays the settings path. Existing AHK INI files are not imported or modified.
+Settings live in Tauri's per-user configuration directory under `com.windowwarp.desktop/settings.json`; workspaces use `workspaces.json` beside it. The editor displays the settings path. Use **Import AutoHotkey settings** to select existing INI files. The originals are never modified.
 
 ## Radial window picker
 
@@ -113,5 +113,28 @@ existing settings continue to use mouse tiling.
 The overlay is clamped to the work area containing the original pointer. Native
 pointer updates run only while a picker is visible. On KDE, KWin positions and
 focuses the overlay, including on Wayland. More than four labels use a compact
-layout to keep all eight readable without overlap. Native Windows and KDE fixtures verify selection on release, dead-zone and Escape
-cancellation, and pause/resume while held. See PARITY.md for remaining coverage.
+layout to keep all eight readable without overlap. Native Windows and KDE fixtures verify selection on release, dead-zone
+cancellation and pause/resume while held. Rapid Escape cancellation on Windows
+has a known intermittent failure; see PARITY.md.
+
+
+## Importing the original INIs
+
+Select `window_manager_apps.ini`, `hotkey_registry.ini`,
+`windows_warp_settings.ini`, and/or `workspace_openers.ini` in the import panel.
+UTF-8 and BOM-marked UTF-16 are detected; older ANSI files use Windows-1252.
+Review each entry, then add selected shortcuts/settings to the existing draft
+and use **Save changes**. Existing shortcuts remain; conflicting keys can be
+reassigned through the editor. Disabled keys retain their assignments.
+
+Each workspace opens separately for review and requires **Save workspace**.
+Legacy shell fields, Firefox profiles/tabs and saved placement are retained.
+Old INIs omit monitor work areas, so the importer uses current work areas with
+an explicit review note. The editor exposes reference areas, app identifiers,
+platform, terminal kind and launch fields for adaptation. On Linux, imported
+Windows app shortcuts start disabled and workspaces remain Windows-scoped.
+
+Unsupported shared actions (including move-and-center), compound AHK match
+expressions and unrecognized key syntax remain visible with the original
+settings and an explanation. They are not silently converted. Full migration
+parity still depends on the remaining action and packaged-launch features.

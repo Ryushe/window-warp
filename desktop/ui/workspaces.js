@@ -59,6 +59,7 @@
         draft = profile; editingId = id; selected = profile.items.map(() => true);
         select("#workspace-editor").hidden = false;
         select("#workspace-name").value = profile.name;
+        select("#workspace-platform").value = profile.platform;
         select("#workspace-update-choice").hidden = !captured || !store.profiles.length;
         const target = select("#workspace-target");
         target.replaceChildren();
@@ -76,6 +77,15 @@
             const note = fragment.querySelector(".capture-note");
             note.textContent = item.captureNote || "";
             note.hidden = !item.captureNote;
+            fragment.querySelectorAll("[data-window], [data-rect], [data-area]").forEach(input => {
+                const field = input.dataset.window || input.dataset.rect || input.dataset.area;
+                const target = input.dataset.rect ? item.window.rect : input.dataset.area ? (item.window.workArea ||= {}) : item.window;
+                input.value = target[field] ?? "";
+                input.addEventListener("input", () => {
+                    target[field] = input.type === "number" ? Number(input.value) : input.value;
+                    if (field === "monitor") item.window.monitorName = "";
+                });
+            });
             if (item.browser) {
                 const browser = item.browser;
                 fragment.querySelector(".browser-settings").hidden = false;
@@ -93,15 +103,25 @@
             if (item.terminal) {
                 const terminal = item.terminal;
                 fragment.querySelector(".terminal-settings").hidden = false;
-                fragment.querySelector(".terminal-summary").textContent = terminal.kind === "konsole" ? "Konsole session" : "Windows Terminal session";
-                fragment.querySelector(".wsl-settings").hidden = terminal.kind !== "windows-terminal";
-                fragment.querySelector(".konsole-profile").hidden = terminal.kind !== "konsole";
+                // Keep references after the DocumentFragment is inserted into the page.
+                const summary = fragment.querySelector(".terminal-summary");
+                const wslFields = fragment.querySelector(".wsl-settings");
+                const konsoleFields = fragment.querySelector(".konsole-profile");
+                const terminalFields = () => {
+                    summary.textContent = terminal.kind === "konsole" ? "Konsole session" : "Windows Terminal session";
+                    wslFields.hidden = terminal.kind !== "windows-terminal" && !terminal.wslDistro && !terminal.wslUser;
+                    konsoleFields.hidden = terminal.kind !== "konsole";
+                };
+                terminalFields();
                 fragment.querySelector(".restore-terminal").addEventListener("change", event => { item.terminal = event.target.checked ? terminal : null; });
                 fragment.querySelectorAll("[data-terminal]").forEach(input => {
                     const field = input.dataset.terminal;
                     input.value = field === "shellArgs" ? terminal.shellArgs.join("\n") : terminal[field] || "";
                     input.addEventListener("input", () => {
                         terminal[field] = field === "shellArgs" ? input.value.split(/\r?\n/).filter(Boolean) : input.value;
+                        if (["kind", "wslDistro", "wslUser"].includes(field)) {
+                            terminalFields();
+                        }
                     });
                 });
             }
@@ -147,6 +167,7 @@
     select("#save-workspace").addEventListener("click", () => perform(async () => {
         const profile = clone(draft);
         profile.name = select("#workspace-name").value.trim();
+        profile.platform = select("#workspace-platform").value;
         if (!profile.name) throw new Error("Give this workspace a name.");
         profile.items = profile.items.filter((_, index) => selected[index]);
         if (!profile.items.length) throw new Error("Select at least one window.");
@@ -189,5 +210,16 @@
         if (!native || store || working) return;
         await perform(async () => { store = await native.core.invoke("get_workspaces"); render(); });
     });
+    window.reviewImportedWorkspace = async profile => {
+        if (working || draft) throw new Error("Save or cancel the current workspace draft before reviewing an import.");
+        await perform(async () => {
+            if (!store) { store = await native.core.invoke("get_workspaces"); render(); }
+            if (store.profiles.some(p => p.id === profile.id)) throw new Error("This imported workspace is already saved. Edit it in the workspace list.");
+            openDraft(clone(profile));
+            select("#shortcuts-page").hidden = true; select("#workspaces-page").hidden = false;
+            select("#workspace-editor").scrollIntoView?.({block:"start"});
+            say("Review the imported workspace, including its platform, app commands and reference work areas, then Save workspace.");
+        });
+    };
     controls();
 })();

@@ -602,3 +602,48 @@ in the same run, superseding the prior memory blocker. Current Windows Rust:
 
 Resume with reviewed INI migration, then the remaining PARITY requirements.
 Branch remains `codex/cross-platform-app`; no merge, push or installation.
+
+
+## Reviewed INI migration checkpoint
+
+Added pure INI decoding/conversion and a native file/review UI. The original
+files remain untouched; imported shortcuts append to unsaved edits and settings
+merge only specified fields. Each workspace opens separately for explicit Save.
+Disabled hotkeys, app behavior, terminal fields/known shell titles, Firefox tabs
+and geometry survive conversion. Unsupported entries retain their raw fields.
+Windows IDs remain disabled on Linux pending adaptation; workspace platform, app
+matching, geometry/reference work areas and terminal kind are editable.
+
+Validation: 53 Node tests, 50 Windows Rust tests (two opt-in terminal tests
+ignored), JS/Python syntax, Rust formatting and whitespace checks pass. Linux
+build `hoster-warp-build-20261024-import` is inactive/exit 0: 46 Rust, 52 Node,
+executable and Debian package. Native `hoster-warp-gui-20261024-import` is
+inactive/exit 0 with 17 checks. Inspected screenshot/report are under
+`desktop/src-tauri/target/kde-validation/import/`; nested logs
+`/tmp/window-warp-nested.Q6JAxp`. Windows `--skip-escape` diagnostic passes 23
+checks with one explicit skip in `WARP-NATIVE-0f28c784-4d06-4f64-b58e-ee75d3bfab14`.
+It verifies file selection, review, shortcut/settings save and terminal/Firefox
+workspace save; screenshots inspected and normal debug build restored.
+
+Three focused refinements after native runs have Node coverage: known terminal
+title inference, suppressing the packaged warning for wt.exe restoration, and
+keeping saved WSL fields reachable while changing terminal kind. Rebuild native
+binaries for those source refinements; do not imply installed artifact equality.
+
+**Blocking completion issue:** rapid native Escape is intermittent on Windows.
+It failed repeatedly despite the earlier passing 22-check run. The default
+fixture now repeats immediate Escape five times. Latest failure:
+`desktop/src-tauri/target/windows-validation/WARP-NATIVE-3c6bd49d-01ac-4a29-9a99-359cadb4f35f/result.json`.
+A temporary low-level Escape hook experiment (PeekMessage/GetMessage loops,
+explicit module handle, no key consumption) did not reliably observe injected
+events and was removed completely. Current production remains the previously
+committed radial adapter. Do not repeat that unproven change or lengthen the
+fixture's key press to mask the bug. AutoHotkey processes were present but not
+changed; their causal role is unproven. The owning branch is this feature branch,
+where radial behavior first appeared; main has no affected implementation.
+
+Exact resume: diagnose/fix Windows rapid Escape and pass the full native fixture
+without `--skip-escape`; then pointer centering/timed retile and the remaining
+PARITY requirements. Migration still reports center actions/unsupported matches
+and packaged launch as unresolved. No merge, push or user-session installation.
+All Hoster task build/GUI units are terminal. Memory is no longer a blocker.
