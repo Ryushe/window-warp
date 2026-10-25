@@ -7,7 +7,7 @@
 - Base commit: `7b907778f0022d73fb3527b82c0ab7ecedf8124d`
 - Intended eventual target: `main`; promotion/merge has not been requested
 - Last updated: 2026-10-25
-- Latest immutable recovery checkpoint: `9f1ab8e09fc59410daa3bcf0de21bed6e2d83b64`
+- Latest immutable recovery checkpoint: `85cdb941e49edbec30d96109f461419ec51400fd`
 - Feature implementation commits: `abfc95e` (desktop/workspace foundation), `ee7bee4` (Firefox profiles/tabs), `c09d79c` (terminal capture/editor/restore), `491a9d8` (KDE Firefox caption correction and complete 15-check native run), `5e6373d` (WSL distribution discovery and native directory restoration), `02d4e02` (reviewed shortcut reassignment and 12-check native KDE run), `b216f0c` (persistent pause and application control hotkeys, 15 native KDE checks), `d49e380` (14 native Windows application checks), `9794b75` (Windows tap/hold, activation deadlock correction, 18 Windows and 15 KDE native checks), `b63cb1d` (KDE native tap/hold, Wayland editor focus, 20 native KDE checks), `41fbc70` (KDE key reservation cleanup, 21 native KDE checks, held-key regression reproduced), `da23019` (held-key cancellation and deferred reassignment, verified script startup, 22 native KDE checks), `61233ff` (shared radial picker, 26 native KDE checks; initial 22 native Windows pass later superseded by rapid Escape regression), `4a92065` (reviewed INI migration and native import receipts), `9ccbaa7` (portable fixture line endings)
 - Canonical references: original root AHK files; `desktop/PARITY.md`
 
@@ -855,15 +855,14 @@ passes in `hoster-warp-live-20261025-retile` (inactive/exit 0).
 
 The pre-fix binary reproduces the finding in
 `hoster-warp-gui-20261025-retile-delay-before` (failed/exit 1): X remains reserved
-as `[88]` after the three-second cleanup deadline while window I/O waits. This
-checkpoint preserves that implementation and the reproducer so the red receipt
-is recoverable from branch history; it is not release-ready. The working tree's
-four-line cleanup-order correction is being tested separately. The reviewer
+as `[88]` after the three-second cleanup deadline while window I/O waits. The
+pre-fix checkpoint preserves that implementation and the reproducer so the red
+receipt is recoverable from branch history; it is superseded by the verified
+cleanup-order correction below. The reviewer
 rechecked the correction and test and reported no further findings.
 
 Pre-fix recovery commit: `316ad5d0ddb544bdaa6679801c3521f81b942dd1` on
-`codex/cross-platform-app`. The working tree differs by clearing capture before
-window I/O; this is the pending corrective commit.
+`codex/cross-platform-app`. The corrective commit below clears capture before window I/O.
 
 Corrected Windows native run
 `WARP-NATIVE-6c823d34-8ae8-4c2b-b715-295a376939a3` passes all 30 checks with the same
@@ -880,3 +879,10 @@ The independent reviewer reported no further findings on the correction/test.
 All retile build/test units are terminal. The release-wide independent review is
 still outstanding; this review covered only this increment. Next: packaged app/
 desktop-entry launch and unsupported legacy match migration, then all PARITY gaps.
+
+
+Verified retile recovery checkpoint: `85cdb941e49edbec30d96109f461419ec51400fd`
+on `codex/cross-platform-app`, following implementation/reproducer commit
+`316ad5d0ddb544bdaa6679801c3521f81b942dd1`. The dossier-only follow-up records the
+immutable SHA. The working tree is ready to continue with launch/migration work;
+no native test is left running and no user-session runtime was activated.
