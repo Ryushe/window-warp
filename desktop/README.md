@@ -5,7 +5,8 @@ A standalone Tauri 2 application for Windows and **KDE Plasma 5.27 and 6**, with
 ## Implemented
 
 - Native settings window and tray menu (open, pause, quit).
-- Editable global shortcuts with validation and duplicate detection.
+- Editable global shortcuts with validation, duplicate detection, and reviewed reassignment.
+- A pause/resume shortcut retained while paused, plus current-app editor and workspace control shortcuts.
 - Push the focused window between monitors, ordered left to right, wrapping at the ends.
 - Pull a pushed window back using a bounded in-memory history.
 - Left/right half tiling using monitor work areas.
@@ -21,6 +22,8 @@ A standalone Tauri 2 application for Windows and **KDE Plasma 5.27 and 6**, with
 - Single-instance behavior. Closing the editor hides it to the tray.
 
 Normal launches start **paused**. Save changes, then click **Enable shortcuts**. A registered login launch uses `--startup` to enable saved shortcuts and hide the editor. Editing shortcuts requires pausing first. Default keys use Ctrl+Alt; every key can be changed, including to Super/Win/Meta combinations when the desktop allows them. Stop or pause conflicting AutoHotkey bindings before reusing their keys.
+
+New configurations include **Ctrl+Alt+P** to pause/resume, **Ctrl+Alt+B** to edit the current app's shortcut, **Ctrl+Alt+O** to browse workspaces, and **Ctrl+Alt+U** to capture a workspace update for review. Existing configurations can add these actions from the editor. Opening the current-app editor pauses window shortcuts and preserves existing drafts. Resume uses saved settings; unsaved edits remain in the editor.
 
 Open **Workspaces → Capture current**, choose which windows to keep, and save a name. Capture creates a review draft. Each app has editable launch arguments and an option to always open a new window. **Open workspace** reuses matching windows or launches missing apps, then restores placement.
 
@@ -48,10 +51,11 @@ Build outputs are under `src-tauri/target/release/`; installers are under its `b
 
 Use a Plasma 5.27 or 6 session (Wayland or X11) and Qt's qdbus executable. Supported executable names are `qdbus6`, `qdbus-qt6`, `/usr/lib/qt6/bin/qdbus`, and `qdbus`. Package names differ by distribution; for example `qdbus` for Plasma 5, or `qdbus-qt6` / `qt6-tools` for Plasma 6. The app detects the script-object path and the script adapts to each version's window, desktop, and output APIs.
 
-The application loads session-only KWin scripts via the session D-Bus service. KWin registers the shortcuts and performs window operations, so native Wayland windows do not depend on X11 automation. Pause unloads the shortcut script; the workspace command bridge remains available while paused. Quit unloads both. After a crash, the app replaces the corresponding script on next use. If needed, manually unload them with your qdbus executable:
+The application loads session-only KWin scripts via the session D-Bus service. KWin registers the shortcuts and performs window operations, so native Wayland windows do not depend on X11 automation. Pause unloads the window-action script; the pause/resume binding and workspace command bridge remain available. Quit unloads all three scripts. After a crash, the app replaces the corresponding script on next use. If needed, manually unload them with your qdbus executable:
 
 ```sh
 qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript window-warp-session
+qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript window-warp-pause-session
 qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript window-warp-control-session
 ```
 
@@ -78,6 +82,7 @@ Manual acceptance on each OS: enable the app; push a floating window across two 
 ## Architecture
 
 - `ui/`: local HTML/CSS/JavaScript editor. All settings and actions pass through narrow Tauri commands; no shell or filesystem API is exposed to the webview.
+- `src-tauri/src/app_actions.rs`: application control shortcuts and pending editor/workspace requests.
 - `src-tauri/src/config.rs`: versioned configuration, canonical shortcut syntax, validation.
 - `src-tauri/src/windows.rs`: Win32 window enumeration, positioning, focus, and global shortcut registration.
 - `src-tauri/src/linux.rs`: KWin session integration via qdbus, with arguments passed directly without a shell.

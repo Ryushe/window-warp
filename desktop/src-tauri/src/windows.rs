@@ -21,6 +21,8 @@ struct Placement {
     rect: Rect,
     maximized: bool,
 }
+static ACTION_SHORTCUTS: Mutex<Vec<Shortcut>> = Mutex::new(Vec::new());
+static PAUSE_SHORTCUTS: Mutex<Vec<Shortcut>> = Mutex::new(Vec::new());
 static HISTORY: Mutex<Vec<Placement>> = Mutex::new(Vec::new());
 static PREVIOUS: LazyLock<Mutex<HashMap<String, (usize, u32)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -492,51 +494,122 @@ unsafe fn execute(binding: &Binding, settings: &Settings) -> Result<(), String> 
     Ok(())
 }
 
-pub fn enable(app: &AppHandle, config: &Config) -> Result<(), String> {
-    // Parse the entire batch before registering anything: a late parse error
-    // must never leave earlier shortcuts running while the UI says paused.
-    let bindings: Vec<_> = config.bindings.iter().filter(|b| b.enabled).collect();
-    let shortcuts: Vec<Shortcut> = config
+fn parsed_bindings(config: &Config, pause: bool) -> Result<Vec<(Binding, Shortcut)>, String> {
+    config
         .bindings
         .iter()
-        .filter(|binding| binding.enabled)
-        .map(|binding| {
-            binding
-                .shortcut
-                .parse()
-                .map_err(|e| format!("Invalid shortcut {}: {e}", binding.shortcut))
+        .filter(|b| b.enabled && (b.action == "toggle-pause") == pause)
+        .map(|b| {
+            Ok((
+                b.clone(),
+                b.shortcut
+                    .parse()
+                    .map_err(|e| format!("Invalid shortcut {}: {e}", b.shortcut))?,
+            ))
         })
-        .collect::<Result<_, _>>()?;
-    for (binding, shortcut) in bindings.into_iter().zip(shortcuts) {
-        let binding = binding.clone();
+        .collect()
+}
+
+fn unregister_tracked(
+    app: &AppHandle,
+    tracked: &mut Vec<Shortcut>,
+    keys: &[Shortcut],
+) -> Result<(), String> {
+    let mut errors = Vec::new();
+    for key in keys {
+        match app.global_shortcut().unregister(*key) {
+            Ok(()) => tracked.retain(|registered| registered != key),
+            Err(error) => errors.push(format!("{key:?}: {error}")),
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+pub fn configure_pause(app: &AppHandle, config: &Config) -> Result<(), String> {
+    let desired: Vec<_> = parsed_bindings(config, true)?
+        .into_iter()
+        .map(|(_, key)| key)
+        .collect();
+    let mut current = PAUSE_SHORTCUTS.lock().map_err(|e| e.to_string())?;
+    let additions: Vec<_> = desired
+        .iter()
+        .filter(|key| !current.contains(key))
+        .copied()
+        .collect();
+    let mut added = Vec::new();
+    for key in additions {
+        if let Err(error) = app.global_shortcut().on_shortcut(key, |app, _, event| {
+            if event.state == ShortcutState::Pressed {
+                crate::app_actions::dispatch(app, "toggle-pause");
+            }
+        }) {
+            let cleanup = unregister_tracked(app, &mut current, &added);
+            return Err(format!(
+                "Cannot register the pause shortcut {key:?}: {error}.{}",
+                cleanup
+                    .err()
+                    .map(|e| format!(" Cleanup also failed: {e}"))
+                    .unwrap_or_default()
+            ));
+        }
+        current.push(key);
+        added.push(key);
+    }
+    let removed: Vec<_> = current
+        .iter()
+        .filter(|key| !desired.contains(key))
+        .copied()
+        .collect();
+    unregister_tracked(app, &mut current, &removed)
+}
+
+pub fn enable(app: &AppHandle, config: &Config) -> Result<(), String> {
+    // Validate the whole batch before installing any window-action hooks.
+    let bindings = parsed_bindings(config, false)?;
+    let mut installed = ACTION_SHORTCUTS.lock().map_err(|e| e.to_string())?;
+    for (binding, shortcut) in bindings {
         let key = binding.shortcut.clone();
         let settings = config.settings.clone();
         if let Err(e) = app
             .global_shortcut()
             .on_shortcut(shortcut, move |app, _, event| {
                 if event.state == ShortcutState::Pressed {
-                    if let Err(message) = unsafe { execute(&binding, &settings) } {
+                    if crate::app_actions::is_control(&binding.action) {
+                        crate::app_actions::dispatch(app, &binding.action);
+                    } else if let Err(message) = unsafe { execute(&binding, &settings) } {
                         let _ = app.emit("warp-error", message);
                     }
                 }
             })
         {
-            let _ = app.global_shortcut().unregister_all();
+            let keys = installed.clone();
+            let cleanup = unregister_tracked(app, &mut installed, &keys);
             return Err(format!(
-                "Cannot register {}. It may be used by Windows or another app: {e}",
-                key
+                "Cannot register {key}. It may be used by Windows or another app: {e}{}",
+                cleanup
+                    .err()
+                    .map(|e| format!("; cleanup failed: {e}"))
+                    .unwrap_or_default()
             ));
         }
+        installed.push(shortcut);
     }
     Ok(())
 }
 pub fn disable(app: &AppHandle) -> Result<(), String> {
-    app.global_shortcut()
-        .unregister_all()
-        .map_err(|e| e.to_string())?;
+    let mut installed = ACTION_SHORTCUTS.lock().map_err(|e| e.to_string())?;
+    let keys = installed.clone();
+    unregister_tracked(app, &mut installed, &keys)?;
     HISTORY.lock().map_err(|e| e.to_string())?.clear();
     PREVIOUS.lock().map_err(|e| e.to_string())?.clear();
     Ok(())
+}
+pub fn shutdown(app: &AppHandle) {
+    let _ = app.global_shortcut().unregister_all();
 }
 
 #[cfg(test)]

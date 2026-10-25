@@ -222,3 +222,48 @@ Next concrete work: persistent pause/resume and editor/workspace control hotkeys
 including current-app capture, then the remaining gesture and INI migration
 requirements. Preserve the open terminal/profile and browser native checks in
 PARITY.md. No merge/push or user-session installation/activation was requested.
+
+## Application control shortcuts and current-app editing
+
+Implemented separate persistent pause registrations on Windows and KDE. Window
+action disable/registration rollback does not remove the pause key. Config save
+prepares its temporary file, updates pause registration, and restores the prior
+registration if applying or saving fails. Windows tracks registrations that
+failed to unregister so a subsequent cleanup can retry them. KDE uses a separate
+pause script and the authenticated, fixed-action control endpoint.
+
+Application actions capture before taking editor focus. Current-app editing
+pauses window actions and creates/reuses an app binding without discarding edits.
+Workspace update captures a review draft and selects the closest existing profile.
+Pending requests survive UI initialization; existing workspace drafts are kept.
+Pause is independent of the workspace capture busy flag. New configurations get
+Ctrl+Alt+P/B/O/U defaults; existing saved bindings are not silently expanded.
+
+41 Windows Rust tests, 34 Node tests and JS/Python syntax checks pass. The first
+native service `hoster-warp-gui-20261024-controls` passed all 15 checks, including
+registered KGlobalAccel action dispatch for pause/resume, owned current-app
+capture and workspace controls. It exited 0; nested logs are
+`/tmp/window-warp-nested.C2Zt3X`. This does not establish physical keyboard event
+delivery. Final native service
+`hoster-warp-gui-20261024-controls-focus` passed all 15 checks (inactive, exit 0),
+including the responsiveness change and a screenshot-discovered focus correction:
+the update hotkey now scrolls directly to the review draft and focuses its name.
+The final report/current-app/update screenshots are under
+`desktop/src-tauri/target/kde-validation/controls/`; both editor views were
+inspected and the review fields fit without clipping. Nested logs:
+`/tmp/window-warp-nested.JXuBXo`. Linux build
+`hoster-warp-build-20261024-controls-focus` passed 33 Rust and 34 Node tests and
+produced the executable and Debian package (inactive, exit 0). This is now the
+test binary on Portafort.
+
+Next concrete native gap: an isolated Windows application/UI fixture covering
+pause registration and rollback, current-app capture and workspace controls.
+The existing native window/terminal tests do not instantiate those app flows.
+Then continue hold/radial, pointer/retile and INI migration requirements in PARITY.
+No merge, push or user-session activation has been requested.
+
+For the Windows fixture, installed `tauri-codegen-2.7.4/src/lib.rs` confirms that
+`TAURI_CONFIG` merges a build-only JSON override. A unique test identifier and
+WebView data directory can isolate the app's settings/browser state without
+editing the production manifest or borrowing a personal browser profile. No
+Windows fixture has been implemented yet; do not count this as native evidence.

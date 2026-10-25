@@ -93,3 +93,13 @@ API sources: [Konsole session](https://github.com/KDE/konsole/blob/master/src/se
 [Konsole window](https://github.com/KDE/konsole/blob/master/src/ViewManager.h),
 [Konsole profile resolution](https://github.com/KDE/konsole/blob/master/src/profile/ProfileManager.cpp),
 [Windows Terminal parser](https://github.com/microsoft/terminal/blob/main/src/cascadia/TerminalApp/Commandline.cpp).
+
+### Application control shortcuts
+
+The default native GUI fixture also invokes registered KGlobalAccel actions for
+pause/resume, current-app editing, workspace browsing and closest-match update
+review. It verifies the pause script remains installed while window actions are
+paused, and only owned test windows are used for app capture. These checks cover
+the real app/KWin bridge; they do not inject physical keyboard events. The test
+unloads window, pause and control scripts afterward. Screenshots include
+`window-warp-current-app-kde.png` and `window-warp-update-kde.png`.

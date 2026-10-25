@@ -96,13 +96,34 @@ fn call(program: &str, args: &[&str]) -> Result<String, String> {
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
-pub fn enable(app: &AppHandle, config: &Config) -> Result<(), String> {
-    let source = format!(
-        "var WARP_CONFIG = {};\n{}",
+pub fn configure_pause(app: &AppHandle, config: &Config) -> Result<(), String> {
+    let mut pause = config.clone();
+    pause
+        .bindings
+        .retain(|b| b.enabled && b.action == "toggle-pause");
+    if pause.bindings.is_empty() {
+        return unload_script("window-warp-pause-session");
+    }
+    let source = shortcut_source(app, &pause)?;
+    load_script(app, "window-warp-pause-session", "kwin-pause.js", &source)
+}
+fn shortcut_source(app: &AppHandle, config: &Config) -> Result<String, String> {
+    Ok(format!(
+        "var WARP_APP = {};\nvar WARP_CONFIG = {};\n{}",
+        crate::linux_control::descriptor(app)?,
         serde_json::to_string(config).map_err(|e| e.to_string())?,
         include_str!("../kwin/warp.js")
-    );
+    ))
+}
+pub fn enable(app: &AppHandle, config: &Config) -> Result<(), String> {
+    let mut active = config.clone();
+    active.bindings.retain(|b| b.action != "toggle-pause");
+    let source = shortcut_source(app, &active)?;
     load_script(app, SCRIPT_NAME, "kwin-session.js", &source)
+}
+pub fn shutdown(app: &AppHandle) {
+    let _ = unload_script("window-warp-pause-session");
+    crate::linux_control::shutdown(app);
 }
 pub fn load_script(
     app: &AppHandle,

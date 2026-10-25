@@ -15,8 +15,8 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE focus-last and minimized checks pass; Windows native behavior checks pending |
 | Tap vs hold, configurable 100–5000 ms delay, disable hold | Pending | Actual press/release path, repeats, modifier-first release, pause cancellation |
 | Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Pending | Both native desktop paths and rendered overlay |
-| Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed conflict reassignment implemented and tested; current-app capture pending |
-| Global pause/resume hotkey stays available while paused; editor/workspace/update hotkeys | Pending | Lifecycle and registration tests, including conflicts |
+| Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed reassignment tested; native KDE current-app capture passes; native Windows editor workflow pending |
+| Global pause/resume hotkey stays available while paused; editor/workspace/update hotkeys | Partial | Implemented with separate pause registration; native KDE KGlobalAccel action dispatch passes; physical key delivery, Windows native lifecycle and registration-failure scenarios remain |
 | Settings persistence and startup registration | Partial | KDE native toggle creates/removes isolated autostart entry; Windows toggle and actual login/startup launch pending |
 | Workspace capture/create/update, best-match update selection, rename/delete/reorder/browser | Partial | Implemented; Rust matching/persistence model and Node editor tests pass; KDE native capture/save/browser pass; full Windows editor workflow pending |
 | Workspace launch/reuse, exclude already-consumed windows, wait for new windows, restore placement/state | Partial | KDE native two-window reuse, forced new launch, placement, per-axis maximize/fullscreen pass; Windows owned-window placement/maximize/minimize pass; Windows multi-window launch workflow pending |
@@ -162,3 +162,23 @@ tests and JavaScript syntax checks pass. Linux has 33 passing Rust tests.
 Native `hoster-warp-gui-20261024-reassignment` passed all 12 checks, including
 conflict review/cancel/save and workspace regressions. The inspected screenshot
 and report are under `src-tauri/target/kde-validation/reassignment/`.
+
+## Application control shortcuts
+
+Pause/resume uses a separate registration from window actions, retained while
+paused and removed on exit. New configurations include pause, current-app editor,
+workspace browser and workspace update keys. Existing configurations can add
+them through the action selector. The editor captures the active app before
+taking focus and pauses shortcuts; workspace updates select the closest profile
+in a review draft. Existing unsaved edits are preserved. Pause dispatch bypasses
+the busy state used by slower workspace capture.
+
+41 Windows Rust tests, 34 Node tests and syntax checks pass. The first native KDE
+control run passed 15 checks through KGlobalAccel's registered action dispatch.
+This is native lifecycle/bridge evidence, not physical keyboard injection. The final build
+`hoster-warp-build-20261024-controls-focus` passed 33 Linux Rust and 34 Node tests.
+`hoster-warp-gui-20261024-controls-focus` passed all 15 checks (exit 0). Reports
+and inspected screenshots are under `src-tauri/target/kde-validation/controls/`.
+The update shortcut scrolls to its draft and focuses the name field. Windows
+native control/UI testing and physical key delivery on both platforms remain
+required.

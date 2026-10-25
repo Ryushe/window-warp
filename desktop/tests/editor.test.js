@@ -22,6 +22,7 @@ async function editor({ failLoad = false, failSave = false, failEnable = false, 
     });
     const config = { version: 1, bindings: [{ label: "Move right", shortcut: "Ctrl+Alt+Right", action: "push-right", appMatch: "" }] };
     const calls = [];
+    const controlRequests = [];
     const listeners = new Map();
     window.__TAURI__ = {
         event: { listen: async (name, callback) => { listeners.set(name, callback); return () => {}; } },
@@ -29,6 +30,7 @@ async function editor({ failLoad = false, failSave = false, failEnable = false, 
             calls.push({ command, args });
             if (command === "get_status") return { enabled: false, platform: "windows", settingsPath: "test/settings.json" };
             if (command === "get_config") { if (failLoad) throw "Settings are unreadable"; return structuredClone(config); }
+            if (command === "take_control_request") return controlRequests.shift() || null;
             if (command === "get_startup") return false;
             if (command === "set_startup") return args.enabled;
             if (command === "preview_shortcut_reassignment") {
@@ -46,7 +48,8 @@ async function editor({ failLoad = false, failSave = false, failEnable = false, 
     };
     vm.runInNewContext(source, { window, document });
     await tick();
-    return { window, document, calls, listeners, input(selector, value) {
+    return { window, document, calls, listeners,
+        async control(request) { controlRequests.push(request); listeners.get("warp-control")(); await tick(); }, input(selector, value) {
         const field = document.querySelector(selector);
         field.value = value;
         field.dispatchEvent(new window.Event("input"));
@@ -169,4 +172,36 @@ test("editing invalidates reassignment proposals and errors preserve the draft",
     assert.match(failure.document.querySelector("#message").textContent, /modifier/);
     assert.equal(failure.document.querySelector('[data-field="enabled"]').checked, true);
     assert.equal(failure.document.querySelector('.binding:last-child [data-field="shortcut"]').value, "alt+control+right");
+});
+
+test("current-app editor requests preserve existing drafts and reuse an existing app binding", async () => {
+    const e = await editor();
+    e.input('[data-field="label"]', "Unsaved existing edit");
+    await e.control({action:"open-editor", window:{appId:"firefox.exe"}});
+    assert.equal(e.document.querySelectorAll(".binding").length, 2);
+    assert.equal(e.document.querySelector('[data-field="label"]').value, "Unsaved existing edit");
+    assert.equal(e.document.querySelector('.binding:last-child [data-field="appMatch"]').value, "firefox.exe");
+    e.input('.binding:last-child [data-field="shortcut"]', "Super+F");
+    await e.control({action:"open-editor", window:{appId:"FIREFOX.EXE"}});
+    assert.equal(e.document.querySelectorAll(".binding").length, 2);
+    assert.equal(e.document.querySelector('.binding:last-child [data-field="shortcut"]').value, "Super+F");
+    assert.equal(e.calls.some(c => c.command === "save_config"), false);
+});
+
+test("application control requests reach the workspace editor without mutating shortcuts", async () => {
+    const e = await editor();
+    let received;
+    e.window.addEventListener("warp-workspace-request", event => { received = event.detail; });
+    await e.control({action:"open-workspaces"});
+    assert.equal(received.action, "open-workspaces");
+    assert.equal(e.document.querySelectorAll(".binding").length, 1);
+});
+
+test("resuming saved shortcuts keeps unsaved editor changes clearly identified", async () => {
+    const e = await editor();
+    e.input('[data-field="label"]', "Unsaved label");
+    e.listeners.get("warp-enabled")({payload:true});
+    assert.match(e.document.querySelector("#message").textContent, /Saved shortcuts are active.*unsaved edits/);
+    assert.equal(e.document.querySelector('[data-field="label"]').value, "Unsaved label");
+    assert.equal(e.document.querySelector('[data-field="label"]').disabled, true);
 });

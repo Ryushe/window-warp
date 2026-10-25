@@ -143,3 +143,22 @@ test("unreadable store prevents capture and restore failures are shown per app",
     assert.match(e.document.querySelector("#message").textContent,/Restored 0 of 1/);
     assert.equal(e.document.querySelector("#cancel-restore").hidden,true);
 });
+
+test("workspace update hotkey selects the closest profile and preserves an existing draft", async () => {
+    const e = await editor({profiles:[profile("a","Research")]});
+    const request = {action:"update-workspace",capture:{profile:profile("new","New workspace"),suggestedId:"a"}};
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request",{detail:request}));
+    await tick();
+    assert.equal(e.document.querySelector("#workspace-target").value, "a");
+    assert.equal(e.document.querySelector("#workspace-name").value, "Research");
+    assert.equal(e.calls.some(c => c.command === "save_workspaces"), false);
+    e.input("#workspace-name", "Unsaved rename");
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request",{detail:request}));
+    await tick();
+    assert.equal(e.document.querySelector("#workspace-name").value, "Unsaved rename");
+    assert.match(e.document.querySelector("#message").textContent, /Save or cancel/);
+    await e.click("#save-workspace");
+    assert.equal(e.stored().profiles.length, 1);
+    assert.equal(e.stored().profiles[0].id, "a");
+    assert.equal(e.stored().profiles[0].name, "Unsaved rename");
+});

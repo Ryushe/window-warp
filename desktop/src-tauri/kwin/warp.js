@@ -110,6 +110,10 @@ var Warp = (function () {
         focus(window);
     }
     function run(binding, overrides) {
+        if (["toggle-pause", "open-editor", "open-workspaces", "update-workspace"].indexOf(binding.action) >= 0) {
+            callDBus(WARP_APP.service, "/Control", "com.windowwarp.Control", "Action", WARP_APP.token, binding.action);
+            return;
+        }
         if (overrides) settings = overrides;
         var all = screens();
         if (!all.length) return;
@@ -170,7 +174,7 @@ var Warp = (function () {
         shortcut = parts.join("+");
         // Include the key in the ID: KGlobalAccel otherwise keeps an old key
         // for a reused action name when the user edits a binding.
-        var id = "window-warp-" + index + "-" + shortcut.replace(/[^a-z0-9]/gi, "-");
+        var id = "window-warp-" + binding.action + "-" + index + "-" + shortcut.replace(/[^a-z0-9]/gi, "-");
         if (!registerShortcut(id, "Window Warp: " + binding.label, shortcut, function () {
             try { run(binding); } catch (error) { print("Window Warp: " + String(error)); }
         })) throw new Error("Could not register " + shortcut);

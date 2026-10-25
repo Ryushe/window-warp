@@ -27,9 +27,11 @@ function fixture(bindings, legacy = false, settings = {mainMonitor: 1, burnerMon
         window.screen = 1;
     }
     const shortcuts = new Map();
+    const calls = [];
     vm.runInNewContext(source, { workspace, KWin: { MaximizeArea: 0 }, print: () => {},
+        WARP_APP: {service:"fixture",token:"test"}, callDBus: (...args) => calls.push(args),
         WARP_CONFIG: { bindings, settings }, registerShortcut: (_, label, key, callback) => { shortcuts.set(label, { key, callback }); return true; } });
-    return { workspace, window, left, right, shortcuts, trigger: (label) => shortcuts.get("Window Warp: " + label).callback() };
+    return { workspace, window, left, right, shortcuts, calls, trigger: (label) => shortcuts.get("Window Warp: " + label).callback() };
 }
 const push = { label: "Push", shortcut: "Ctrl+Alt+Right", action: "push-right", appMatch: "" };
 const pull = { label: "Pull", shortcut: "Ctrl+Alt+Down", action: "pull", appMatch: "" };
@@ -163,4 +165,12 @@ test("maximize and close dispatch to compositor operations on the active fixture
     f.trigger("Max"); assert.equal(maximized, true);
     f.trigger("Max"); assert.equal(maximized, false);
     f.trigger("Close"); assert.equal(closed, true);
+});
+
+test("application controls use the native bridge even when no desktop window is active", () => {
+    const f = fixture([{label:"Pause",shortcut:"Ctrl+Alt+P",action:"toggle-pause"}]);
+    f.workspace.activeWindow = null;
+    f.workspace.screens = [];
+    f.trigger("Pause");
+    assert.deepEqual(f.calls[0], ["fixture","/Control","com.windowwarp.Control","Action","test","toggle-pause"]);
 });

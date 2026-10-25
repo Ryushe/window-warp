@@ -2,6 +2,7 @@
 import base64
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import socket
@@ -23,7 +24,7 @@ def kwin_loaded(name="window-warp-session"):
     return subprocess.check_output(["qdbus", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.isScriptLoaded", name], text=True).strip() == "true"
 
 
-if kwin_loaded() or kwin_loaded("window-warp-control-session") or subprocess.run(["pgrep", "-x", "window-warp"], stdout=subprocess.DEVNULL).returncode == 0:
+if any(kwin_loaded(name) for name in ["window-warp-session", "window-warp-pause-session", "window-warp-control-session"]) or subprocess.run(["pgrep", "-x", "window-warp"], stdout=subprocess.DEVNULL).returncode == 0:
     raise RuntimeError("Window Warp is already active; refusing to interfere with it")
 
 with socket.socket() as reserved:
@@ -55,6 +56,17 @@ def invoke(command, args=None):
     if "error" in value:
         raise RuntimeError(f"{command}: {value['error']}")
     return value["result"]
+
+
+def invoke_shortcut(action):
+    bindings = invoke("get_config")["bindings"]
+    bindings = [b for b in bindings if (b["action"] == "toggle-pause") == (action == "toggle-pause")]
+    if action == "toggle-pause":
+        bindings = [b for b in bindings if b["enabled"]]
+    index, binding = next((i, b) for i, b in enumerate(bindings) if b["action"] == action and b["enabled"])
+    key = binding["shortcut"].replace("Super", "Meta")
+    identifier = f"window-warp-{action}-{index}-" + re.sub("[^a-z0-9]", "-", key, flags=re.I)
+    subprocess.run(["qdbus", "org.kde.kglobalaccel", "/component/kwin", "org.kde.kglobalaccel.Component.invokeShortcut", identifier], check=True)
 
 
 def wait_for(source, timeout=15):
@@ -91,12 +103,18 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                 time.sleep(0.1)
         created = request("POST", "/session", {"capabilities": {"alwaysMatch": {"webkitgtk:browserOptions": {"binary": binary, "args": []}}}})
         session = created["sessionId"]
-        wait_for("return document.querySelectorAll('.binding').length === 5 && !document.querySelector('#toggle').disabled")
+        wait_for("return document.querySelectorAll('.binding').length === 9 && !document.querySelector('#toggle').disabled")
         # Exercise the actual input listeners, save command, native registration,
         # and pause command. Test-only settings are isolated from user settings.
         evaluate("document.querySelectorAll('[data-field=shortcut]').forEach((input,i) => {input.value='Ctrl+Alt+Shift+F'+(13+i); input.dispatchEvent(new Event('input', {bubbles:true}));}); return true;")
         click("#save")
         wait_for("return document.querySelector('#message').textContent.startsWith('Saved.')")
+        assert kwin_loaded("window-warp-pause-session"), "Pause hook must be installed while paused"
+        invoke_shortcut("toggle-pause")
+        wait_for("return document.querySelector('#status').classList.contains('active')")
+        invoke_shortcut("toggle-pause")
+        wait_for("return document.querySelector('#status').textContent.includes('Paused')")
+        assert kwin_loaded("window-warp-pause-session") and not kwin_loaded()
         click("#toggle")
         wait_for("return document.querySelector('#status').classList.contains('active')")
         assert kwin_loaded(), "App reported active but no KWin script was loaded"
@@ -150,6 +168,17 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                 break
             time.sleep(0.2)
         assert len(captured["items"]) == 2, "Native capture did not find both Qt fixtures"
+        assert any(item["window"]["active"] for item in captured["items"]), "Owned fixture must be active for editor capture"
+        invoke("set_enabled", {"enabled": True})
+        invoke_shortcut("open-editor")
+        wait_for("return document.querySelectorAll('.binding').length === 10 && document.querySelector('#status').textContent.includes('Paused')")
+        expected_app = next(item["window"]["appId"] for item in captured["items"] if item["window"]["active"])
+        assert evaluate("return document.querySelector('.binding:last-child [data-field=appMatch]').value") == expected_app
+        evaluate("const input=document.querySelector('.binding:last-child [data-field=shortcut]'); input.value='Ctrl+Alt+Shift+F22'; input.dispatchEvent(new Event('input',{bubbles:true})); return true;")
+        click("#save")
+        wait_for("return document.querySelector('#message').textContent.startsWith('Saved.')")
+        screenshot = request("GET", f"/session/{session}/screenshot")
+        (output / "window-warp-current-app-kde.png").write_bytes(base64.b64decode(screenshot))
         expected = {}
         for index, item in enumerate(captured["items"]):
             window = item["window"]
@@ -211,6 +240,22 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         screenshot = request("GET", f"/session/{session}/screenshot")
         (output / "window-warp-workspaces-kde.png").write_bytes(base64.b64decode(screenshot))
         report = {"passed": True, "checks": ["native editor renders", "shortcut conflict review, cancel, reassignment and explicit save", "save persists settings", "enable loads KWin script", "pause unloads KWin script", "startup creates and removes isolated autostart entry", "native workspace capture", "workspace persistence", "native workspace reuse and separate placements", "workspace launch creates a new window without consuming existing ones", "per-axis maximization and fullscreen workspace restoration", "workspace browser renders saved profiles"], "screenshot": str(output / "window-warp-workspaces-kde.png")}
+        click("#show-shortcuts")
+        invoke("set_enabled", {"enabled": True})
+        invoke_shortcut("open-workspaces")
+        wait_for("return !document.querySelector('#workspaces-page').hidden")
+        before_update = invoke("get_workspaces")
+        invoke_shortcut("update-workspace")
+        wait_for("return !document.querySelector('#workspace-editor').hidden")
+        assert evaluate("return document.querySelector('#workspace-target').value") == captured["id"]
+        assert invoke("get_workspaces") == before_update, "Update hotkey must open a review draft"
+        screenshot = request("GET", f"/session/{session}/screenshot")
+        (output / "window-warp-update-kde.png").write_bytes(base64.b64decode(screenshot))
+        click("#discard-workspace")
+        invoke_shortcut("toggle-pause")
+        wait_for("return document.querySelector('#status').textContent.includes('Paused')")
+        assert kwin_loaded("window-warp-pause-session") and not kwin_loaded()
+        report["checks"].extend(["pause shortcut resumes and pauses while retaining its registration", "editor shortcut captures the active owned app before taking focus", "workspace control shortcuts open browser and closest-match update draft"])
         if "--firefox" in sys.argv:
             # Run this option only in nested.sh's isolated compositor/session bus.
             assert os.environ.get("WAYLAND_DISPLAY") == "warp-test", "Firefox test requires the isolated compositor"
@@ -420,7 +465,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         if fixture:
             fixture.terminate()
             fixture.wait(timeout=10)
-        for name in ["window-warp-session", "window-warp-control-session"]:
+        for name in ["window-warp-session", "window-warp-pause-session", "window-warp-control-session"]:
             if kwin_loaded(name):
                 subprocess.run(["qdbus", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", name], check=True)
         # Kill only the process group created by this test's driver.

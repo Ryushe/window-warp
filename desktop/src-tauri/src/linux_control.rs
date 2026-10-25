@@ -22,11 +22,18 @@ struct Mailbox {
     replies: HashMap<u64, mpsc::SyncSender<Result<Value, String>>>,
 }
 struct Endpoint {
+    app: AppHandle,
     token: String,
     mailbox: Arc<Mutex<Mailbox>>,
 }
 #[zbus::interface(name = "com.windowwarp.Control")]
 impl Endpoint {
+    fn action(&self, token: &str, action: &str) {
+        if token == self.token && crate::app_actions::is_control(action) {
+            crate::app_actions::dispatch(&self.app, action);
+        }
+    }
+
     fn next(&self, token: &str) -> String {
         if token != self.token {
             return "null".into();
@@ -63,6 +70,7 @@ impl Endpoint {
 }
 
 pub struct Control {
+    token: String,
     connection: zbus::blocking::Connection,
     mailbox: Arc<Mutex<Mailbox>>,
     serial: Mutex<()>,
@@ -82,6 +90,7 @@ impl Control {
             .serve_at(
                 PATH,
                 Endpoint {
+                    app: app.clone(),
                     token: token.clone(),
                     mailbox: mailbox.clone(),
                 },
@@ -98,6 +107,7 @@ impl Control {
         );
         crate::platform::load_script(app, SCRIPT, "kwin-control.js", &source)?;
         Ok(Self {
+            token,
             connection,
             mailbox,
             serial: Mutex::new(()),
@@ -140,7 +150,7 @@ impl Control {
     }
 }
 
-pub fn request(app: &AppHandle, command: Value) -> Result<Value, String> {
+fn control(app: &AppHandle) -> Result<Arc<Control>, String> {
     let state = app.state::<ControlState>();
     let control = {
         let mut current = state.0.lock().map_err(|e| e.to_string())?;
@@ -149,7 +159,14 @@ pub fn request(app: &AppHandle, command: Value) -> Result<Value, String> {
         }
         current.as_ref().unwrap().clone()
     };
-    control.request(command)
+    Ok(control)
+}
+pub fn descriptor(app: &AppHandle) -> Result<Value, String> {
+    let control = control(app)?;
+    Ok(json!({"service":SERVICE, "token":control.token}))
+}
+pub fn request(app: &AppHandle, command: Value) -> Result<Value, String> {
+    control(app)?.request(command)
 }
 
 pub fn shutdown(app: &AppHandle) {

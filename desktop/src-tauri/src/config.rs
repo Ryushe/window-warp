@@ -66,6 +66,10 @@ impl Default for Config {
             ("Pull last window back", "Ctrl+Alt+Down", "pull"),
             ("Tile left", "Ctrl+Alt+J", "tile-left"),
             ("Tile right", "Ctrl+Alt+L", "tile-right"),
+            ("Pause / resume shortcuts", "Ctrl+Alt+P", "toggle-pause"),
+            ("Edit current app shortcut", "Ctrl+Alt+B", "open-editor"),
+            ("Browse workspaces", "Ctrl+Alt+O", "open-workspaces"),
+            ("Update workspace", "Ctrl+Alt+U", "update-workspace"),
         ];
         Self {
             version: 1,
@@ -144,6 +148,10 @@ impl Config {
                 "tile-down",
                 "toggle-maximize",
                 "close-window",
+                "toggle-pause",
+                "open-editor",
+                "open-workspaces",
+                "update-workspace",
             ]
             .contains(&binding.action.as_str())
             {

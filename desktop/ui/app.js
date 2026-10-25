@@ -6,6 +6,7 @@ let busy = false;
 let platform = "";
 let recording = null;
 let reassignment = null;
+let controlPending = false;
 let startupEnabled = false;
 let startupKnown = false;
 const native = window.__TAURI__;
@@ -103,7 +104,37 @@ async function perform(operation) {
     busy = true;
     controls();
     try { await operation(); } catch (error) { message(String(error), true); }
-    finally { busy = false; controls(); }
+    finally { busy = false; controls(); if (controlPending) receiveControl(); }
+}
+function receiveControl() {
+    controlPending = true;
+    if (!config || busy) return;
+    perform(async () => {
+        controlPending = false;
+        const request = await native.core.invoke("take_control_request");
+        if (!request) return;
+        if (request.action !== "open-editor") {
+            window.dispatchEvent(new window.CustomEvent("warp-workspace-request", {detail:request}));
+            return;
+        }
+        $("#show-shortcuts").click();
+        if (!request.window) { message("No active app was available. Add or edit a shortcut below."); return; }
+        const app = request.window.appId || request.window.path?.split(/[\\/]/).pop() || request.window.desktopId;
+        if (!app) { message("This window has no usable app identifier.", true); return; }
+        let index = config.bindings.findIndex(b => ["pull-app", "focus-app"].includes(b.action) && b.appMatch.toLowerCase() === app.toLowerCase());
+        if (index < 0) {
+            if (config.bindings.length >= 100) { message("Remove a shortcut before adding another app (maximum 100).", true); return; }
+            index = config.bindings.length;
+            config.bindings.push({label:app.replace(/\.exe$/i, "").slice(0,120), shortcut:"", action:"pull-app", appMatch:app, enabled:true, mainMonitorAction:"burner", burnerLayout:"float"});
+            changed();
+        }
+        $("#search").value = "";
+        render();
+        const card = $("#bindings").children[index];
+        card.scrollIntoView?.({block:"center"});
+        card.querySelector('[data-field="shortcut"]').focus();
+        message(`Editing ${app}. Shortcuts are paused; save edits before enabling them.`);
+    });
 }
 $("#add").addEventListener("click", () => {
     $("#search").value = "";
@@ -170,10 +201,11 @@ async function init() {
         return;
     }
     try {
+        await native.event.listen("warp-control", receiveControl);
         await native.event.listen("warp-error", (event) => message(event.payload, true));
         await native.event.listen("warp-enabled", (event) => {
             enabled = event.payload; controls();
-            message(enabled ? "Shortcuts are active." : "Shortcuts are paused.");
+            message(enabled ? (dirty ? "Saved shortcuts are active. Your unsaved edits are still in this editor." : "Shortcuts are active.") : "Shortcuts are paused.");
         });
         const status = await native.core.invoke("get_status");
         platform = status.platform;
@@ -186,6 +218,8 @@ async function init() {
         config = await native.core.invoke("get_config");
         render();
         message(enabled ? "Shortcuts are active." : "Start with a few shortcuts. Save any edits, then enable them above.");
+        if (status.shortcutError) message("Pause shortcut needs attention: " + status.shortcutError, true);
+        receiveControl();
         try {
             startupEnabled = await native.core.invoke("get_startup");
             startupKnown = true;

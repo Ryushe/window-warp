@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod app_actions;
 mod config;
 mod firefox;
 mod geometry;
@@ -28,6 +29,9 @@ use tauri::{
 #[derive(Default)]
 struct Runtime {
     enabled: Mutex<bool>,
+    control_busy: std::sync::atomic::AtomicBool,
+    control_request: Mutex<Option<serde_json::Value>>,
+    shortcut_error: Mutex<Option<String>>,
     workspace_io: Mutex<()>,
     restoring: std::sync::atomic::AtomicBool,
     cancel_restore: std::sync::atomic::AtomicBool,
@@ -64,6 +68,7 @@ fn save_config(app: AppHandle, mut config: Config) -> Result<Config, String> {
     if *enabled {
         return Err("Pause shortcuts before editing settings.".into());
     }
+    let previous = get_config(app.clone())?;
     let path = settings_path(&app)?;
     fs::create_dir_all(path.parent().ok_or("Invalid settings directory")?)
         .map_err(|e| e.to_string())?;
@@ -73,7 +78,29 @@ fn save_config(app: AppHandle, mut config: Config) -> Result<Config, String> {
         serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    fs::rename(temporary, path).map_err(|e| e.to_string())?;
+    if let Err(error) = platform::configure_pause(&app, &config) {
+        let rollback = platform::configure_pause(&app, &previous);
+        let _ = fs::remove_file(&temporary);
+        return Err(format!(
+            "Could not apply the pause shortcut: {error}{}",
+            rollback
+                .err()
+                .map(|e| format!(". Restoring the previous key also failed: {e}"))
+                .unwrap_or_default()
+        ));
+    }
+    if let Err(error) = fs::rename(&temporary, &path) {
+        let rollback = platform::configure_pause(&app, &previous);
+        let _ = fs::remove_file(&temporary);
+        return Err(format!(
+            "Could not save settings: {error}{}",
+            rollback
+                .err()
+                .map(|e| format!(". Restoring the previous pause key also failed: {e}"))
+                .unwrap_or_default()
+        ));
+    }
+    *runtime.shortcut_error.lock().map_err(|e| e.to_string())? = None;
     Ok(config)
 }
 #[tauri::command]
@@ -87,11 +114,22 @@ fn preview_shortcut_reassignment(
 fn set_enabled(app: AppHandle, enabled: bool) -> Result<bool, String> {
     let runtime = app.state::<Runtime>();
     let mut current = runtime.enabled.lock().map_err(|e| e.to_string())?;
+    change_enabled(&app, enabled, &mut current)
+}
+fn toggle_enabled(app: &AppHandle) -> Result<bool, String> {
+    let runtime = app.state::<Runtime>();
+    let mut current = runtime.enabled.lock().map_err(|e| e.to_string())?;
+    let enabled = !*current;
+    change_enabled(app, enabled, &mut current)
+}
+fn change_enabled(app: &AppHandle, enabled: bool, current: &mut bool) -> Result<bool, String> {
     if *current == enabled {
         return Ok(*current);
     }
     if enabled {
-        platform::enable(&app, &get_config(app.clone())?)?;
+        let config = get_config(app.clone())?;
+        platform::configure_pause(app, &config)?;
+        platform::enable(app, &config)?;
     } else {
         platform::disable(&app)?;
     }
@@ -104,8 +142,17 @@ fn get_status(app: AppHandle) -> Result<serde_json::Value, String> {
     let runtime = app.state::<Runtime>();
     let enabled = *runtime.enabled.lock().map_err(|e| e.to_string())?;
     Ok(
-        serde_json::json!({ "enabled": enabled, "platform": std::env::consts::OS, "settingsPath": settings_path(&app)?.display().to_string() }),
+        serde_json::json!({ "enabled": enabled, "platform": std::env::consts::OS, "settingsPath": settings_path(&app)?.display().to_string(), "shortcutError": runtime.shortcut_error.lock().map_err(|e| e.to_string())?.clone() }),
     )
+}
+#[tauri::command]
+fn take_control_request(app: AppHandle) -> Result<Option<serde_json::Value>, String> {
+    Ok(app
+        .state::<Runtime>()
+        .control_request
+        .lock()
+        .map_err(|e| e.to_string())?
+        .take())
 }
 #[tauri::command]
 fn get_startup() -> Result<bool, String> {
@@ -249,6 +296,15 @@ fn main() {
                     eprintln!("KWin startup cleanup: {error}");
                 }
             }
+            if let Err(error) = get_config(app.handle().clone())
+                .and_then(|config| platform::configure_pause(app.handle(), &config))
+            {
+                eprintln!("Could not register the pause shortcut: {error}");
+                *app.state::<Runtime>()
+                    .shortcut_error
+                    .lock()
+                    .map_err(|e| e.to_string())? = Some(error);
+            }
             if std::env::args().any(|arg| arg == "--startup") {
                 match set_enabled(app.handle().clone(), true) {
                     Ok(_) => {
@@ -274,6 +330,7 @@ fn main() {
             preview_shortcut_reassignment,
             set_enabled,
             get_status,
+            take_control_request,
             get_startup,
             set_startup,
             get_workspaces,
@@ -288,8 +345,7 @@ fn main() {
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
                 let _ = platform::disable(app);
-                #[cfg(target_os = "linux")]
-                linux_control::shutdown(app);
+                platform::shutdown(app);
             }
         });
 }

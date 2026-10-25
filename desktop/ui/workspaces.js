@@ -168,6 +168,22 @@
         catch (error) { say(String(error), true); }
     });
     select("#show-shortcuts").addEventListener("click", () => { select("#workspaces-page").hidden = true; select("#shortcuts-page").hidden = false; });
+    window.addEventListener("warp-workspace-request", event => {
+        select("#shortcuts-page").hidden = true; select("#workspaces-page").hidden = false;
+        if (working) { say("Finish the current workspace operation before using this shortcut again.", true); return; }
+        perform(async () => {
+            if (!store) { store = await native.core.invoke("get_workspaces"); render(); }
+            if (event.detail.action !== "update-workspace") return;
+            if (draft) { say("Save or cancel the current workspace draft, then capture the update again.", true); return; }
+            const capture = event.detail.capture;
+            const target = store.profiles.find(p => p.id === capture.suggestedId);
+            if (target) capture.profile.name = target.name;
+            openDraft(capture.profile, target?.id || "", true, capture.suggestedId);
+            select("#workspace-editor").scrollIntoView?.({block:"start"});
+            select("#workspace-name").focus();
+            say("Review the captured windows and update target, then save.");
+        });
+    });
     select("#show-workspaces").addEventListener("click", async () => {
         select("#shortcuts-page").hidden = true; select("#workspaces-page").hidden = false;
         if (!native || store || working) return;
