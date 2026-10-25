@@ -32,12 +32,16 @@ fn floating() -> String {
 pub struct Settings {
     pub main_monitor: usize,
     pub burner_monitor: usize,
+    pub hold_delay_ms: u64,
+    pub hold_tile_enabled: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
             main_monitor: 0,
             burner_monitor: 2,
+            hold_delay_ms: 400,
+            hold_tile_enabled: true,
         }
     }
 }
@@ -122,6 +126,9 @@ impl Config {
         }
         if self.bindings.len() > 100 {
             return Err("Use at most 100 shortcuts.".into());
+        }
+        if !(100..=5000).contains(&self.settings.hold_delay_ms) {
+            return Err("Choose a hold delay between 100 and 5000 milliseconds.".into());
         }
         if self.settings.main_monitor > 32
             || self.settings.burner_monitor > 32
@@ -293,6 +300,25 @@ mod tests {
         assert!(config.bindings[0].enabled);
         assert_eq!(config.bindings[0].shortcut, "Super+Semicolon");
         assert_eq!(config.settings.burner_monitor, 2);
+        assert_eq!(config.settings.hold_delay_ms, 400);
+        assert!(config.settings.hold_tile_enabled);
+    }
+    #[test]
+    fn hold_settings_validate_and_round_trip() {
+        let mut config = Config::default();
+        for delay in [100, 400, 5000] {
+            config.settings.hold_delay_ms = delay;
+            config.settings.hold_tile_enabled = false;
+            config.validate().unwrap();
+            let loaded: Config =
+                serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+            assert_eq!(loaded.settings.hold_delay_ms, delay);
+            assert!(!loaded.settings.hold_tile_enabled);
+        }
+        for delay in [0, 99, 5001, u64::MAX] {
+            config.settings.hold_delay_ms = delay;
+            assert!(config.validate().unwrap_err().contains("hold delay"));
+        }
     }
     #[test]
     fn disabled_binding_can_keep_an_assigned_key() {

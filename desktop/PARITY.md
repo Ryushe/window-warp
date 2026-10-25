@@ -9,12 +9,12 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | --- | --- | --- |
 | Monitor push, wrap, relative placement, maximized state, history pull (`window_manager.ahk`) | Partial | Existing tests; maximize/restore and monitor removal live on both OSes |
 | Push and center pointer; pull centers primary; 1-second X/C retiling | Pending | Pointer and timeout tests on both OSes, including Wayland |
-| Four-way tiling; portrait mouse-aware tile choice | Partial | Four-way implemented; 18 live KDE checks cover vertical tiling; mouse choice pending |
+| Four-way tiling; portrait mouse-aware tile choice | Partial | Four-way implemented; 18 live KDE checks cover vertical tiling; Windows mouse hold tiles natively and portrait/midpoint geometry has regression coverage; KDE mouse choice pending |
 | Maximize/restore toggle (original “fullscreen”); graceful close | Partial | Implemented both OSes; live KDE verified; Windows owned-window action verification pending |
 | App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Implemented both OSes; tiled burner round trip live KDE verified; other layouts and Windows live checks pending |
 | App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE focus-last and minimized checks pass; Windows native behavior checks pending |
-| Tap vs hold, configurable 100–5000 ms delay, disable hold | Pending | Actual press/release path, repeats, modifier-first release, pause cancellation |
-| Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Pending | Both native desktop paths and rendered overlay |
+| Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE path pending |
+| Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows mouse tile uses the key-down pointer position; KDE hold tile and both radial overlays remain pending |
 | Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed reassignment tested; native KDE current-app capture passes; Windows native current-app capture, key recording, reassignment and persistence pass |
 | Global pause/resume hotkey stays available while paused; editor/workspace/update hotkeys | Partial | Implemented with separate pause registration; native KDE KGlobalAccel action dispatch passes; Windows OS key delivery, lifecycle and registration-failure recovery pass; KDE key delivery beyond direct action dispatch remains |
 | Settings persistence and startup registration | Partial | Windows Run entry and KDE autostart toggles pass; actual login/startup launches remain pending |
@@ -208,3 +208,42 @@ fixed. The final run passed, its startup entry was absent afterward, and no test
 app remained running. This is not evidence of actual login launch, graceful tray
 quit, Firefox/profile variants, KDE keyboard delivery or physical display removal.
 Those checks and the remaining feature requirements above stay in scope.
+
+## Windows app-pull tap and hold
+
+App-pull shortcuts now wait for release before tapping. With hold tiling enabled,
+holding for the saved delay tiles once on the main monitor, using the pointer
+position at key-down. Portrait work areas choose top/bottom halves; landscape
+and square work areas choose left/right. Settings default to 400 ms with hold
+enabled, accept 100–5000 ms, and migrate existing configurations without changing
+their bindings. Disabling hold retains tap-on-release even after a long press.
+
+The Windows adapter checks the main key and every required modifier while a
+gesture is active. Repeated presses cannot restart its timer. Pause clears the
+pending session; re-enabling before release cannot revive it. Shared timing and
+geometry tests cover delayed timer ticks, single firing, disabled hold, negative
+monitor origins and odd-size midpoint selection.
+
+The native run exposed a pre-existing activation deadlock: a synchronous status
+request could wait for the activation mutex on the UI thread while the shortcut
+worker needed that thread to unregister keys. Status, configuration save,
+activation commands and tray pause/quit now do their blocking work off the UI
+thread. Their command names and results are unchanged.
+
+48 Windows Rust tests, 36 Node tests and JS/Python syntax checks pass.
+`node desktop/tests/windows/native.mjs` passes all 18 checks with no skips in
+`src-tauri/target/windows-validation/WARP-NATIVE-4ed7da75-26b3-488d-9fd3-40483709eb3d/`.
+This adds modifier-first tap, held-key repeat suppression, pointer-origin tiling,
+pause/resume cancellation before key release, and persisted disable-hold to the
+existing native UI/workspace coverage. The hold settings screenshot was inspected.
+The helper is now per-monitor DPI-aware; it releases its injected keys and restores
+its pointer movement during cleanup. The ordinary debug build was restored.
+
+KDE hold controls explicitly remain unavailable in this increment. The KDE native
+hold adapter and both radial pickers are next; all other unfinished rows above
+remain required. Linux build `hoster-warp-build-20261024-hold` passes 39 Rust and
+36 Node tests and builds the executable and Debian package (exit 0). Native KDE
+regression `hoster-warp-gui-20261024-hold-shared` passes all 15 existing checks
+(exit 0); report and inspected update screenshot are under
+`src-tauri/target/kde-validation/hold-shared/`. This validates shared activation
+and UI behavior through KGlobalAccel action dispatch, not KDE hold or OS key input.

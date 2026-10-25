@@ -24,6 +24,10 @@ The test covers:
 - Failed pause reassignment preserving the settings file and previous key.
 - Partial window-action registration rollback while retaining pause.
 - Current-app capture, native key recording, and reviewed conflict reassignment.
+- App-pull tap on release, including release of a modifier before the main key.
+- Hold tiling from the initial pointer position, repeat suppression, and no tap
+  after hold; pausing and resuming before release cancels the pending gesture.
+- Saved delay and disable-hold settings; a disabled hold still taps on release.
 - Workspace capture/review with only owned windows selected and saved.
 - Closest-match workspace update review without automatic persistence.
 - Separate placements for reused windows and forced launch of a new process.
@@ -35,6 +39,10 @@ configuration and build/app logs stay in the run directory. Existing startup
 configuration is preserved and reported as skipped. The fixture closes its own
 process tree and helper; standalone fixture windows also have a bounded lifetime.
 It does not change unrelated windows or terminate unrelated processes.
+The helper uses per-monitor DPI awareness, releases only its own injected held
+keys, and restores its pointer position if the pointer has not moved since the
+last fixture movement. Hold tests require every matching executable window to
+belong to the fixture process. The settings screenshot is `hold-settings.png`.
 
 The test injects OS keyboard events; it does not substitute a direct callback for
 keyboard delivery. It does not prove elevated-window control, actual login

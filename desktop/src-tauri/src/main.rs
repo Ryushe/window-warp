@@ -3,6 +3,8 @@ mod app_actions;
 mod config;
 mod firefox;
 mod geometry;
+#[cfg(any(windows, test))]
+mod gesture;
 #[cfg(target_os = "linux")]
 mod linux_control;
 #[cfg(windows)]
@@ -61,7 +63,12 @@ fn get_config(app: AppHandle) -> Result<Config, String> {
     Ok(config)
 }
 #[tauri::command]
-fn save_config(app: AppHandle, mut config: Config) -> Result<Config, String> {
+async fn save_config(app: AppHandle, config: Config) -> Result<Config, String> {
+    tauri::async_runtime::spawn_blocking(move || save_config_blocking(app, config))
+        .await
+        .map_err(|e| e.to_string())?
+}
+fn save_config_blocking(app: AppHandle, mut config: Config) -> Result<Config, String> {
     config.validate()?;
     let runtime = app.state::<Runtime>();
     let enabled = runtime.enabled.lock().map_err(|e| e.to_string())?;
@@ -111,7 +118,12 @@ fn preview_shortcut_reassignment(
     config.preview_reassignment(index)
 }
 #[tauri::command]
-fn set_enabled(app: AppHandle, enabled: bool) -> Result<bool, String> {
+async fn set_enabled(app: AppHandle, enabled: bool) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || set_enabled_blocking(app, enabled))
+        .await
+        .map_err(|e| e.to_string())?
+}
+fn set_enabled_blocking(app: AppHandle, enabled: bool) -> Result<bool, String> {
     let runtime = app.state::<Runtime>();
     let mut current = runtime.enabled.lock().map_err(|e| e.to_string())?;
     change_enabled(&app, enabled, &mut current)
@@ -138,12 +150,14 @@ fn change_enabled(app: &AppHandle, enabled: bool, current: &mut bool) -> Result<
     Ok(enabled)
 }
 #[tauri::command]
-fn get_status(app: AppHandle) -> Result<serde_json::Value, String> {
-    let runtime = app.state::<Runtime>();
-    let enabled = *runtime.enabled.lock().map_err(|e| e.to_string())?;
-    Ok(
-        serde_json::json!({ "enabled": enabled, "platform": std::env::consts::OS, "settingsPath": settings_path(&app)?.display().to_string(), "shortcutError": runtime.shortcut_error.lock().map_err(|e| e.to_string())?.clone() }),
-    )
+async fn get_status(app: AppHandle) -> Result<serde_json::Value, String> {
+    // Registration marshals work to the UI thread while holding enabled. Never
+    // wait for that mutex on the UI thread, including read-only status requests.
+    tauri::async_runtime::spawn_blocking(move || {
+        let runtime = app.state::<Runtime>();
+        let enabled = *runtime.enabled.lock().map_err(|e| e.to_string())?;
+        Ok(serde_json::json!({ "enabled": enabled, "platform": std::env::consts::OS, "settingsPath": settings_path(&app)?.display().to_string(), "shortcutError": runtime.shortcut_error.lock().map_err(|e| e.to_string())?.clone() }))
+    }).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
 fn take_control_request(app: AppHandle) -> Result<Option<serde_json::Value>, String> {
@@ -272,19 +286,17 @@ fn main() {
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => show(app),
-                    "pause" => {
-                        if let Err(message) = set_enabled(app.clone(), false) {
-                            let _ = app.emit("warp-error", message);
-                            show(app);
-                        }
-                    }
-                    "quit" => {
-                        if let Err(message) = set_enabled(app.clone(), false) {
-                            let _ = app.emit("warp-error", message);
-                            show(app);
-                        } else {
-                            app.exit(0);
-                        }
+                    "pause" | "quit" => {
+                        let quit = event.id.as_ref() == "quit";
+                        let app = app.clone();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            if let Err(message) = set_enabled_blocking(app.clone(), false) {
+                                let _ = app.emit("warp-error", message);
+                                show(&app);
+                            } else if quit {
+                                app.exit(0);
+                            }
+                        });
                     }
                     _ => {}
                 })
@@ -306,7 +318,7 @@ fn main() {
                     .map_err(|e| e.to_string())? = Some(error);
             }
             if std::env::args().any(|arg| arg == "--startup") {
-                match set_enabled(app.handle().clone(), true) {
+                match set_enabled_blocking(app.handle().clone(), true) {
                     Ok(_) => {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.hide();

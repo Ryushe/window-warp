@@ -8,7 +8,7 @@ const html = fs.readFileSync(new URL("../ui/index.html", import.meta.url), "utf8
 const source = fs.readFileSync(new URL("../ui/app.js", import.meta.url), "utf8");
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-async function editor({ failLoad = false, failSave = false, failEnable = false, failReassignment = false } = {}) {
+async function editor({ failLoad = false, failSave = false, failEnable = false, failReassignment = false, platform = "windows" } = {}) {
     const { window, document } = parseHTML(html);
     // linkedom exposes select.value as a getter; browsers also provide a setter.
     Object.defineProperty(window.HTMLSelectElement.prototype, "value", {
@@ -28,7 +28,7 @@ async function editor({ failLoad = false, failSave = false, failEnable = false, 
         event: { listen: async (name, callback) => { listeners.set(name, callback); return () => {}; } },
         core: { invoke: async (command, args) => {
             calls.push({ command, args });
-            if (command === "get_status") return { enabled: false, platform: "windows", settingsPath: "test/settings.json" };
+            if (command === "get_status") return { enabled: false, platform, settingsPath: "test/settings.json" };
             if (command === "get_config") { if (failLoad) throw "Settings are unreadable"; return structuredClone(config); }
             if (command === "take_control_request") return controlRequests.shift() || null;
             if (command === "get_startup") return false;
@@ -55,6 +55,34 @@ async function editor({ failLoad = false, failSave = false, failEnable = false, 
         field.dispatchEvent(new window.Event("input"));
     }, async click(selector) { document.querySelector(selector).click(); await tick(); } };
 }
+
+test("hold settings migrate defaults, save edits and lock while shortcuts are active", async () => {
+    const e = await editor();
+    assert.equal(e.document.querySelector("#hold-enabled").checked, true);
+    assert.equal(e.document.querySelector("#hold-delay").value, "400");
+    e.input("#hold-delay", "725");
+    const field = e.document.querySelector("#hold-enabled");
+    field.checked = false;
+    field.dispatchEvent(new e.window.Event("change"));
+    await e.click("#save");
+    const saved = e.calls.find(c => c.command === "save_config").args.config;
+    assert.equal(saved.settings.holdDelayMs, 725);
+    assert.equal(saved.settings.holdTileEnabled, false);
+    await e.click("#toggle");
+    assert.equal(field.disabled, true);
+    assert.equal(e.document.querySelector("#hold-delay").disabled, true);
+    e.listeners.get("warp-enabled")({payload:false});
+    assert.equal(field.disabled, false);
+    assert.equal(field.checked, false);
+    assert.equal(e.document.querySelector("#hold-delay").value, "725");
+});
+
+test("KDE editor clearly identifies the pending native hold implementation", async () => {
+    const e = await editor({platform:"linux"});
+    assert.equal(e.document.querySelector("#hold-enabled").disabled, true);
+    assert.equal(e.document.querySelector("#hold-delay").disabled, true);
+    assert.match(e.document.querySelector("#hold-hint").textContent, /KDE hold support/);
+});
 
 test("unsaved changes block activation; save and pause preserve editor state", async () => {
     const e = await editor();

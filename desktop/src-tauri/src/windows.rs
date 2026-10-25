@@ -13,6 +13,8 @@ use windows_sys::core::BOOL;
 use windows_sys::Win32::{
     Foundation::*, Graphics::Gdi::*, System::Threading::*, UI::WindowsAndMessaging::*,
 };
+#[path = "windows_gestures.rs"]
+mod gestures;
 
 #[derive(Clone, Copy)]
 struct Placement {
@@ -300,7 +302,11 @@ fn tile_rect(area: Rect, direction: &str) -> Rect {
     }
 }
 
-unsafe fn pull_app(binding: &Binding, settings: &Settings) -> Result<(), String> {
+unsafe fn pull_app(
+    binding: &Binding,
+    settings: &Settings,
+    hold_pointer: Option<POINT>,
+) -> Result<(), String> {
     let mut candidates: Vec<usize> = Vec::new();
     EnumWindows(Some(collect_window), &mut candidates as *mut _ as LPARAM);
     let active = GetForegroundWindow();
@@ -331,6 +337,12 @@ unsafe fn pull_app(binding: &Binding, settings: &Settings) -> Result<(), String>
     let current = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) as usize;
     if IsIconic(hwnd) != 0 {
         ShowWindow(hwnd, SW_RESTORE);
+    }
+    if let Some(point) = hold_pointer {
+        let area = all[main].1;
+        let direction = crate::geometry::mouse_tile_direction(area, point.x, point.y);
+        place(hwnd, tile_rect(area, direction), false)?;
+        return focus(hwnd);
     }
     if current == all[main].0 {
         if was_active && binding.main_monitor_action == "focus-last" {
@@ -385,7 +397,7 @@ unsafe fn execute(binding: &Binding, settings: &Settings) -> Result<(), String> 
     let action = binding.action.as_str();
     let app_match = binding.app_match.as_str();
     if action == "pull-app" {
-        return pull_app(binding, settings);
+        return pull_app(binding, settings, None);
     }
     if action == "focus-app" {
         let mut windows: Vec<usize> = Vec::new();
@@ -580,6 +592,10 @@ pub fn enable(app: &AppHandle, config: &Config) -> Result<(), String> {
                 if event.state == ShortcutState::Pressed {
                     if crate::app_actions::is_control(&binding.action) {
                         crate::app_actions::dispatch(app, &binding.action);
+                    } else if binding.action == "pull-app" {
+                        if let Err(message) = gestures::press(app, &binding, &settings) {
+                            let _ = app.emit("warp-error", message);
+                        }
                     } else if let Err(message) = unsafe { execute(&binding, &settings) } {
                         let _ = app.emit("warp-error", message);
                     }
@@ -598,9 +614,10 @@ pub fn enable(app: &AppHandle, config: &Config) -> Result<(), String> {
         }
         installed.push(shortcut);
     }
-    Ok(())
+    gestures::enable()
 }
 pub fn disable(app: &AppHandle) -> Result<(), String> {
+    gestures::cancel()?;
     let mut installed = ACTION_SHORTCUTS.lock().map_err(|e| e.to_string())?;
     let keys = installed.clone();
     unregister_tracked(app, &mut installed, &keys)?;
@@ -609,6 +626,7 @@ pub fn disable(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 pub fn shutdown(app: &AppHandle) {
+    let _ = gestures::cancel();
     let _ = app.global_shortcut().unregister_all();
 }
 

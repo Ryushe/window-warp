@@ -17,7 +17,7 @@ Port all original features into a standalone Windows/KDE application. The user's
 explicit branch requirement is satisfied by this existing feature branch.
 Original AHK sources remain unchanged. Full parity is not achieved: the checklist
 is the completion gate, including remaining browser verification, terminal variants, INI migration,
-tap/hold, radial selection, pointer movement, and remaining shortcut/editor paths.
+KDE tap/hold, radial selection, pointer movement, and remaining shortcut/editor paths.
 
 The current implementation includes the Tauri editor/tray, native Windows/KWin
 window actions, startup registration, and workspace capture/review/edit/restore.
@@ -256,7 +256,7 @@ inspected and the review fields fit without clipping. Nested logs:
 produced the executable and Debian package (inactive, exit 0). This is now the
 test binary on Portafort.
 
-Next concrete native gap: an isolated Windows application/UI fixture covering
+At this checkpoint the next native gap was a Windows application/UI fixture covering
 pause registration and rollback, current-app capture and workspace controls.
 The existing native window/terminal tests do not instantiate those app flows.
 Then continue hold/radial, pointer/retile and INI migration requirements in PARITY.
@@ -266,7 +266,8 @@ For the Windows fixture, installed `tauri-codegen-2.7.4/src/lib.rs` confirms tha
 `TAURI_CONFIG` merges a build-only JSON override. A unique test identifier and
 WebView data directory can isolate the app's settings/browser state without
 editing the production manifest or borrowing a personal browser profile. No
-Windows fixture has been implemented yet; do not count this as native evidence.
+Windows fixture had been implemented at that checkpoint; the completed fixture
+and its native evidence are recorded below.
 
 ## Native Windows control/editor/workspace verification
 
@@ -303,3 +304,65 @@ Next implementation: press/release and hold state, mouse-driven portrait tiling,
 radial selection, pointer centering and retile timeout, then complete INI migration
 and remaining platform acceptance. Keep every PARITY row in scope. No merge/push
 or user-session activation has been requested.
+
+## Windows tap/hold and activation concurrency
+
+App-pull shortcuts now tap on release or tile once after the configured hold
+delay. The pointer is captured at key-down; portrait work areas select top/bottom
+and other work areas select left/right. Settings persist `holdDelayMs` (100–5000,
+default 400) and `holdTileEnabled` (default true), with defaults for existing
+settings. The editor locks these settings while active. KDE explicitly shows
+them as unavailable until its native gesture adapter is ported.
+
+`gesture.rs` owns timing behavior; `windows_gestures.rs` owns native key/modifier
+observation and active-session cancellation. Polling runs only while an app-pull
+shortcut is held. Pause invalidates sessions before unregistering action keys;
+old workers cannot act on a subsequent session with the same shortcut.
+
+The native regression found a pre-existing UI-thread deadlock during pause and
+concurrent `get_status`: the UI waited for `Runtime.enabled` while registration
+needed the UI thread. Blocking status, save, activation, and tray pause/quit work
+now runs on background workers. Public command names/results are unchanged.
+Internal synchronous activation calls were audited and updated in `main.rs` and
+`app_actions.rs`; setup is the only synchronous UI-thread activation, before the
+event loop starts processing callbacks. `codex/cross-platform-app` is the lowest
+owning branch and the only local branch containing the application control
+checkpoint `b216f0c`; no ancestor or descendant propagation is needed.
+
+48 Windows Rust tests and 36 Node tests pass, with JS/Python syntax checks. The
+initial sandbox Rust run could not access CIM; the complete suite passes with
+ordinary native access. The two pre-existing opt-in terminal tests remain ignored
+in this run and retain their earlier native receipts.
+
+`node desktop/tests/windows/native.mjs` passes all 18 checks with no skips.
+Receipt: `desktop/src-tauri/target/windows-validation/WARP-NATIVE-4ed7da75-26b3-488d-9fd3-40483709eb3d/`.
+New checks cover modifier-first release, key-down pointer preservation, repeat
+suppression, no tap after hold, pause/resume before release, and saved disabled
+hold. The hold-settings screenshot was inspected and fits without clipping.
+The helper refuses app-wide tests when a matching executable has an unowned
+window, uses per-monitor DPI awareness, releases its own held keys, and restores
+its pointer movement if the user has not subsequently moved the pointer. The
+normal debug build is restored after each run.
+
+Pre-fix receipt `WARP-NATIVE-e306ced7-61e6-4ca4-aa3e-ffa29c38ca96` passes tap/hold
+but times out reading status during pause/resume, reproducing the activation
+deadlock. An earlier run (`WARP-NATIVE-1e8a7166-4bc2-42db-9c1f-ad67597e099e`) found
+the helper's 125% DPI coordinate mismatch; that fixture problem is also corrected.
+
+Linux build `hoster-warp-build-20261024-hold` is inactive with exit 0: 39 Rust
+tests and 36 Node tests pass, and the executable and Debian package are built.
+The executable is copied to the existing task-owned Portafort path. Native KDE
+regression `hoster-warp-gui-20261024-hold-shared` is inactive with exit 0 and all
+15 checks passing. Report and screenshots are under
+`desktop/src-tauri/target/kde-validation/hold-shared/`; the update screenshot was
+inspected. Nested logs: `/tmp/window-warp-nested.pG64nW`. This run verifies shared
+activation/UI changes, not KDE hold gestures. It uses KGlobalAccel action dispatch;
+actual KDE OS keyboard delivery remains an explicit gap. No remote build or GUI
+job remains active. The Windows fixture process and temporary Run value are absent.
+
+Resume with the KDE press/release adapter and both radial overlays. The verified
+Plasma 5.27 KGlobalAccel pressed/released signals remain the starting point;
+keep actual keyboard delivery, modifier-first release, pause cancellation and
+overlay rendering as explicit native acceptance criteria. Pointer centering,
+retile timing, INI migration and every remaining `desktop/PARITY.md` row remain
+in scope. No merge, push or user-session activation is authorized by this checkpoint.

@@ -23,7 +23,7 @@ async function until(read, predicate, description, timeout = 20000) {
         if (predicate(value)) return value;
         await sleep(100);
     }
-    throw new Error("Timed out: " + description);
+    throw new Error("Timed out: " + description + "; last observed: " + JSON.stringify(value));
 }
 async function exit(child, timeout = 180000) {
     if (child.exitCode !== null) return child.exitCode;
@@ -184,6 +184,80 @@ try {
     assert.equal(reassigned.bindings[9].shortcut,"Ctrl+Alt+Shift+F14");
     await screenshot("current-app.png");
     checks.push("native conflict review reassigns aliases while preserving the disabled binding");
+
+    // App matching is executable-wide. Refuse this section if any matching
+    // window belongs to another process, rather than risking another Python UI.
+    const matching = (await invoke("get_windows")).filter(w => w.appId.toLowerCase() === path.basename(fixture.executable).toLowerCase());
+    assert.ok(matching.length === 2 && matching.every(w => w.pid === fixture.pid), "Hold fixture requires exclusively owned matching windows");
+    const ownedWindow = matching.find(w => w.id === String(fixture.windows[0]));
+    const area = ownedWindow.workArea;
+    const initial = {x:area.x+100,y:area.y+100,width:500,height:320};
+    const readOwned = async () => (await invoke("get_windows")).find(w=>w.id===ownedWindow.id);
+    const placeOwned = () => native("place",{window:fixture.windows[0],rect:initial});
+    await input("#main-monitor",String(ownedWindow.monitor));
+    await input("#hold-delay","700");
+    await input('.binding:last-child [data-field="mainMonitorAction"]',"focus-last");
+    await click("#save");
+    await wait("!document.querySelector('#add').disabled && document.querySelector('#message').textContent.startsWith('Saved.')", "hold settings saved");
+    assert.equal((await invoke("get_config")).settings.holdDelayMs,700);
+    await evaluate("(() => {document.querySelector('#hold-delay').closest('details').open=true;document.querySelector('#hold-enabled').scrollIntoView({block:'center'});})()");
+    await screenshot("hold-settings.png");
+    await press(18); await paused(false);
+    await placeOwned();
+    const appWindow = await native("app_window");
+    await native("hold_start",{key:0x7d,window:appWindow}); // F14 app pull.
+    await sleep(80);
+    assert.equal((await readOwned()).active,false,"tap must wait for release");
+    await native("key_up",{keys:[0x11]}); // Ctrl released before F14.
+    await until(readOwned,w=>w.active,"modifier-first release pulls the owned app");
+    assert.deepEqual((await readOwned()).rect,initial);
+    await native("key_up");
+    checks.push("app-pull tap waits for release and accepts modifier-first release without tiling");
+
+    await placeOwned();
+    await native("pointer",{x:area.x+20,y:area.y+20});
+    await native("hold_start",{key:0x7d});
+    await sleep(80);
+    await native("pointer",{x:area.x+area.width-20,y:area.y+area.height-20});
+    await native("repeat",{key:0x7d});
+    const tile = area.height > area.width
+        ? {...area,height:Math.floor(area.height/2)} : {...area,width:Math.floor(area.width/2)};
+    await until(readOwned,w=>Object.entries(tile).every(([key,value])=>w.rect[key]===value),"hold tiles using the key-down pointer position");
+    await placeOwned(); // Moving it while held must not trigger another tile.
+    await native("repeat",{key:0x7d});
+    await sleep(800);
+    assert.deepEqual((await readOwned()).rect,initial);
+    await native("key_up"); await sleep(100);
+    assert.deepEqual((await readOwned()).rect,initial);
+    assert.equal((await readOwned()).active,true,"hold release must not also tap focus-last");
+    checks.push("hold tiles once from the initial pointer position; repeats and release do not retrigger");
+
+    await native("hold_start",{key:0x7d});
+    await sleep(80);
+    await native("held_tap",{key:0x81}); await paused(true);
+    await native("held_tap",{key:0x81}); await paused(false);
+    await sleep(850);
+    assert.deepEqual((await readOwned()).rect,initial);
+    await native("key_up"); await sleep(100);
+    assert.deepEqual((await readOwned()).rect,initial);
+    assert.equal((await readOwned()).active,true);
+    checks.push("pause cancels a pending hold even when shortcuts resume before key release");
+
+    await press(18); await paused(true);
+    await evaluate("(() => {const field=document.querySelector('#hold-enabled');field.checked=false;field.dispatchEvent(new Event('change'));})()");
+    await click("#save");
+    await wait("!document.querySelector('#add').disabled && document.querySelector('#message').textContent.startsWith('Saved.')", "disabled hold saved");
+    assert.equal((await invoke("get_config")).settings.holdTileEnabled,false);
+    await press(18); await paused(false);
+    await placeOwned();
+    await native("hold_start",{key:0x7d,window:appWindow});
+    await sleep(850);
+    assert.deepEqual((await readOwned()).rect,initial);
+    assert.equal((await readOwned()).active,false);
+    await native("key_up");
+    await until(readOwned,w=>w.active,"disabled hold still taps on release");
+    checks.push("saved disable-hold setting preserves tap-on-release after a long press");
+    await press(18); await paused(true);
 
     await press(18); await paused(false);
     await press(20);

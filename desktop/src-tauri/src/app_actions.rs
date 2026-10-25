@@ -58,7 +58,7 @@ fn run(app: &AppHandle, action: &str) -> Result<(), String> {
             let active = crate::platform::snapshot(app)?
                 .into_iter()
                 .find(|w| w.active);
-            crate::set_enabled(app.clone(), false)?;
+            crate::set_enabled_blocking(app.clone(), false)?;
             json!({"action":action, "window":active})
         }
         "open-workspaces" => json!({"action":action}),

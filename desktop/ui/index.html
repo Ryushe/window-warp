@@ -36,10 +36,13 @@
       <div><span class="step">02</span><h3>Make it yours</h3><p>Use Ctrl, Alt, Shift, or Super plus a key. Super means the Windows or Meta key.</p></div>
       <div><span class="step">03</span><h3>Keep it close</h3><p>Closing this window keeps Warp in the tray. Use its tray menu to reopen, pause, or quit.</p></div>
     </section>
-    <p class="footnote">Workspaces can restore your apps and window positions. Tap/hold actions and the radial picker are coming next.</p>
+    <p class="footnote">Workspaces can restore your apps and window positions. Configure app-pull hold behavior below.</p>
     <details><summary>Settings & compatibility</summary>
       <label class="enabled-field"><input type="checkbox" id="startup" disabled> Start Window Warp at login and enable shortcuts</label>
       <div class="monitor-settings"><label>Main monitor<input id="main-monitor" type="number" min="0" max="32" value="0"><small>0 = primary/origin display. Other numbers follow left-to-right display order.</small></label><label>Burner monitor<input id="burner-monitor" type="number" min="1" max="32" value="2"><small>Falls back to another connected display when unavailable.</small></label></div>
+      <label class="enabled-field"><input type="checkbox" id="hold-enabled" checked> Hold app-pull shortcuts to tile</label>
+      <label>Hold delay (milliseconds)<input id="hold-delay" type="number" min="100" max="5000" step="1" value="400"></label>
+      <p id="hold-hint"></p>
       <p id="compatibility"></p><p id="settings-path"></p>
     </details>
     </div>

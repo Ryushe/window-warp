@@ -17,6 +17,10 @@ parser.add_argument("--standalone", action="store_true")
 args = parser.parse_args()
 user = c.WinDLL("user32", use_last_error=True)
 kernel = c.WinDLL("kernel32", use_last_error=True)
+# Match Tauri's per-monitor pixel coordinates when placing windows or the pointer.
+user.SetProcessDpiAwarenessContext.argtypes = [c.c_void_p]
+if not user.SetProcessDpiAwarenessContext(c.c_void_p(-4)):
+    raise c.WinError(c.get_last_error())
 LRESULT = c.c_ssize_t
 WNDPROC = c.WINFUNCTYPE(LRESULT, w.HWND, w.UINT, w.WPARAM, w.LPARAM)
 
@@ -54,6 +58,9 @@ ENUMWINDOWS = c.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
 user.EnumWindows.argtypes = [ENUMWINDOWS, w.LPARAM]
 user.IsWindowVisible.argtypes = [w.HWND]
 user.GetWindowRect.argtypes = [w.HWND, c.POINTER(w.RECT)]
+user.SetWindowPos.argtypes = [w.HWND, w.HWND, c.c_int, c.c_int, c.c_int, c.c_int, w.UINT]
+user.GetCursorPos.argtypes = [c.POINTER(w.POINT)]
+user.SetCursorPos.argtypes = [c.c_int, c.c_int]
 user.GetWindowThreadProcessId.argtypes = [w.HWND, c.POINTER(w.DWORD)]
 user.RegisterHotKey.argtypes = [w.HWND, c.c_int, w.UINT, w.UINT]
 user.UnregisterHotKey.argtypes = [w.HWND, c.c_int]
@@ -97,6 +104,22 @@ def read_commands():
 if not args.standalone:
     threading.Thread(target=read_commands, daemon=True).start()
 reserved = set()
+held_keys = []
+original_pointer = None
+last_pointer = None
+
+def send_keys(keys, release=False):
+    events = [INPUT(type=1, ki=KEYBDINPUT(wVk=key, dwFlags=2 if release else 0)) for key in keys]
+    inputs = (INPUT * len(events))(*events)
+    if user.SendInput(len(inputs), inputs, c.sizeof(INPUT)) != len(inputs):
+        raise c.WinError(c.get_last_error())
+
+def owned(hwnd):
+    pid = w.DWORD()
+    user.GetWindowThreadProcessId(hwnd, c.byref(pid))
+    if pid.value not in (os.getpid(), args.app_pid):
+        raise RuntimeError("Refusing to interact with an unowned window")
+
 deadline = time.monotonic() + 180
 try:
     while time.monotonic() < deadline:
@@ -144,31 +167,65 @@ try:
                 if not user.UnregisterHotKey(windows[0], key):
                     raise c.WinError(c.get_last_error())
                 reserved.discard(key)
-            elif command in ("focus", "press"):
+            elif command == "pointer":
+                point = w.POINT()
+                if not user.GetCursorPos(c.byref(point)):
+                    raise c.WinError(c.get_last_error())
+                if original_pointer is None:
+                    original_pointer = (point.x, point.y)
+                if not user.SetCursorPos(request["x"], request["y"]):
+                    raise c.WinError(c.get_last_error())
+                last_pointer = (request["x"], request["y"])
+            elif command == "key_up":
+                keys = request.get("keys", list(reversed(held_keys)))
+                if not all(key in held_keys for key in keys):
+                    raise RuntimeError("Only fixture-held keys may be released")
+                send_keys(keys, release=True)
+                held_keys = [key for key in held_keys if key not in keys]
+            elif command in ("repeat", "held_tap"):
+                owned(user.GetForegroundWindow())
+                key = request["key"]
+                if command == "repeat":
+                    if key not in held_keys:
+                        raise RuntimeError("Repeated key must already be fixture-held")
+                    send_keys([key])
+                else:
+                    if not all(key in held_keys for key in [0x11, 0x12, 0x10]) or key in held_keys:
+                        raise RuntimeError("Tap requires fixture-held modifiers and a fresh key")
+                    send_keys([key])
+                    send_keys([key], release=True)
+            elif command in ("focus", "press", "hold_start", "place"):
                 hwnd = int(request.get("window", windows[0]))
-                pid = w.DWORD()
-                user.GetWindowThreadProcessId(hwnd, c.byref(pid))
-                if pid.value not in (os.getpid(), args.app_pid):
-                    raise RuntimeError("Refusing to interact with an unowned window")
+                owned(hwnd)
                 user.ShowWindow(hwnd, 9)
+                if command == "place":
+                    rect = request["rect"]
+                    if not user.SetWindowPos(hwnd, None, rect["x"], rect["y"], rect["width"], rect["height"], 0x14):
+                        raise c.WinError(c.get_last_error())
                 user.SetForegroundWindow(hwnd)
                 if user.GetForegroundWindow() != hwnd:
                     raise RuntimeError("Owned fixture could not take focus; no keys sent")
-                if command == "press":
+                if command in ("press", "hold_start"):
                     if any(user.GetAsyncKeyState(key) & 0x8000 for key in (0x10, 0x11, 0x12, 0x5B, 0x5C)):
                         raise RuntimeError("A modifier is already held; no keys sent")
                     keys = [0x11, 0x12, 0x10, request["key"]]
-                    events = [INPUT(type=1, ki=KEYBDINPUT(wVk=key)) for key in keys]
-                    events += [INPUT(type=1, ki=KEYBDINPUT(wVk=key, dwFlags=2)) for key in reversed(keys)]
-                    inputs = (INPUT * len(events))(*events)
-                    if user.SendInput(len(inputs), inputs, c.sizeof(INPUT)) != len(inputs):
-                        raise c.WinError(c.get_last_error())
+                    held_keys = keys.copy()
+                    send_keys(keys)
+                    if command == "press":
+                        send_keys(list(reversed(keys)), release=True)
+                        held_keys = []
             else:
                 raise RuntimeError("Unknown fixture command")
             print(json.dumps({"id": request["id"], "result": result}), flush=True)
         except Exception as error:
             print(json.dumps({"id": request["id"], "error": str(error)}), flush=True)
 finally:
+    if held_keys:
+        send_keys(list(reversed(held_keys)), release=True)
+    if original_pointer is not None:
+        point = w.POINT()
+        if user.GetCursorPos(c.byref(point)) and (point.x, point.y) == last_pointer:
+            user.SetCursorPos(*original_pointer)
     for key in reserved:
         user.UnregisterHotKey(windows[0], key)
     for hwnd in windows:
