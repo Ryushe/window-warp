@@ -19,7 +19,7 @@ test("legacy packaged apps retain their source path without guessing an activati
     assert.equal(item.launch.kind,"packaged-app");
     assert.equal(item.launch.program,"");
     assert.equal(item.window.path,"C:\\WindowsApps\\Terminal.exe");
-    assert.match(item.captureNote,/Recapture.*AUMID/);
+    assert.match(item.captureNote,/recapture.*AUMID/);
 });
 
 test("real app/shared/settings INIs retain behavior including pointer-center actions",()=>{

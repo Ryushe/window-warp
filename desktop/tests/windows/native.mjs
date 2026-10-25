@@ -566,6 +566,26 @@ try {
             const reused = await invoke("restore_workspace",{id:capture.profile.id});
             assert.deepEqual(reused.map(r=>({restored:r.restored,launched:r.launched})),[{restored:true,launched:false}]);
             assert.equal((await invoke("get_windows")).filter(w=>w.desktopId===calculatorId).length,1);
+            const legacy = structuredClone(capture.profile);
+            legacy.id = "legacy-package-fixture";
+            const legacyItem = legacy.items[0];
+            // Calculator may use ApplicationFrameHost for its current window;
+            // model the historical INI path independently of that window owner.
+            legacyItem.window.path = "C:\\Program Files\\WindowsApps\\Microsoft.WindowsCalculator_0.0.0.0_x64__8wekyb3d8bbwe\\CalculatorApp.exe";
+            legacyItem.window.desktopId = "";
+            legacyItem.launch.program = "";
+            legacyItem.captureNote = "Legacy packaged fixture";
+            const beforePackageImport = await invoke("get_workspaces");
+            await evaluate(`window.reviewImportedWorkspace(${JSON.stringify(legacy)})`);
+            assert.equal(await evaluate("document.querySelector('[data-launch=program]').value"),calculatorId);
+            assert.deepEqual(await invoke("get_workspaces"),beforePackageImport,"Resolution must only prepare a review draft");
+            await evaluate("document.querySelector('#save-workspace').click()");
+            await until(()=>invoke("get_workspaces"),s=>s.profiles.some(p=>p.id===legacy.id),"explicit package import save");
+            const importedPackage = (await invoke("get_workspaces")).profiles.find(p=>p.id===legacy.id).items[0];
+            assert.equal(importedPackage.launch.program,calculatorId);
+            assert.equal(importedPackage.window.desktopId,calculatorId);
+            assert.equal(importedPackage.window.path,legacyItem.window.path);
+            checks.push("legacy package review resolves a stale versioned path to its registered AUMID without saving until explicit Save");
             assert.equal(await native("calculator_cleanup"),1);
             calculatorPrepared = false;
             checks.push("native packaged Calculator activation captures its real AUMID, restores placement, reuses its window and closes only the new fixture");

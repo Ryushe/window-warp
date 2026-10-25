@@ -227,7 +227,8 @@
         await perform(async () => {
             if (!store) { store = await native.core.invoke("get_workspaces"); render(); }
             if (store.profiles.some(p => p.id === profile.id)) throw new Error("This imported workspace is already saved. Edit it in the workspace list.");
-            openDraft(clone(profile));
+            const prepared = await native.core.invoke("prepare_workspace_import", {profile:clone(profile)});
+            openDraft(prepared);
             select("#shortcuts-page").hidden = true; select("#workspaces-page").hidden = false;
             select("#workspace-editor").scrollIntoView?.({block:"start"});
             say("Review the imported workspace, including its platform, app commands and reference work areas, then Save workspace.");

@@ -208,6 +208,15 @@ fn save_workspaces(
     Ok(store)
 }
 #[tauri::command]
+async fn prepare_workspace_import(
+    profile: workspaces::Workspace,
+) -> Result<workspaces::Workspace, String> {
+    tauri::async_runtime::spawn_blocking(move || workspaces::prepare_import(profile))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn capture_workspace(app: AppHandle, name: String) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let windows = platform::snapshot(&app)?;
@@ -403,6 +412,7 @@ fn main() {
             get_workspaces,
             save_workspaces,
             capture_workspace,
+            prepare_workspace_import,
             get_windows,
             restore_workspace,
             cancel_workspace_restore,

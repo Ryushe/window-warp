@@ -189,7 +189,7 @@
         if (!item.terminal && !item.browser && (get("launchKind") === "packaged-app" || /\\WindowsApps\\/i.test(get("path")))) {
             item.launch.kind = "packaged-app";
             item.launch.program = "";
-            item.captureNote += " The INI did not save this packaged app's activation ID. Recapture the running app or enter its AUMID in app launch settings; its original executable path is preserved above.";
+            item.captureNote += " The INI did not save an activation ID. Windows will try its registered package family during review; unresolved entries need recapture or an AUMID. The original executable path is preserved above.";
         }
         return item;
     }

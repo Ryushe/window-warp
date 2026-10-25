@@ -229,6 +229,35 @@ pub fn capture(windows: Vec<WindowInfo>, name: String) -> Workspace {
     }
 }
 
+/// Resolve import-only launch metadata for the review draft; never saves it.
+pub fn prepare_import(profile: Workspace) -> Result<Workspace, String> {
+    WorkspaceStore {
+        version: 1,
+        profiles: vec![profile.clone()],
+    }
+    .validate()?;
+    #[cfg(windows)]
+    let mut profile = profile;
+    #[cfg(windows)]
+    if profile.platform == "windows" {
+        for item in &mut profile.items {
+            if item.launch.kind == LaunchKind::PackagedApp && item.launch.program.is_empty() {
+                match crate::windows_apps::resolve_legacy_path(&item.window.path) {
+                    Ok(id) => {
+                        item.window.desktop_id = id.clone();
+                        item.launch.program = id;
+                        item.capture_note.push_str(" Registered packaged application resolved; review its activation ID below.");
+                    }
+                    Err(error) => {
+                        item.capture_note.push_str(&format!(" Package resolution: {error} Recapture the app or enter its AUMID below."));
+                    }
+                }
+            }
+        }
+    }
+    Ok(profile)
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RestoreResult {
@@ -563,6 +592,20 @@ mod tests {
             invalid.working_directory = "/tmp".into();
             assert!(launch(&invalid).unwrap_err().contains("Working directory"));
         }
+    }
+    #[test]
+    fn import_preparation_preserves_explicit_launch_targets_and_rejects_invalid_profiles() {
+        let mut profile = capture(vec![window("1", "One")], "Import".into());
+        profile.items[0].launch.kind = LaunchKind::PackagedApp;
+        profile.items[0].launch.program = "ExplicitFamily!SelectedApp".into();
+        let prepared = prepare_import(profile.clone()).unwrap();
+        assert_eq!(
+            prepared.items[0].launch.program,
+            "ExplicitFamily!SelectedApp"
+        );
+        assert_eq!(prepared.items[0].window.path, profile.items[0].window.path);
+        profile.items[0].window.rect.width = 0;
+        assert!(prepare_import(profile).unwrap_err().contains("geometry"));
     }
     #[test]
     fn desktop_identity_prevents_reusing_a_different_app_in_the_same_host() {

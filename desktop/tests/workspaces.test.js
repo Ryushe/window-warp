@@ -110,7 +110,7 @@ test("Firefox profile, tabs, active tab and capture notes survive review and sav
     await e.click("#save-workspace");
     assert.equal(e.stored().profiles[0].items[0].browser,null);
 });
-async function editor({profiles = [], failSave = false, failLoad = false} = {}) {
+async function editor({profiles = [], failSave = false, failLoad = false, prepareImport = p => p} = {}) {
     const {window,document} = parseHTML(html);
     Object.defineProperty(window.HTMLSelectElement.prototype,"value", {configurable:true,
         get(){return this.querySelector("option[selected]")?.value ?? this.querySelector("option")?.value;},
@@ -122,6 +122,7 @@ async function editor({profiles = [], failSave = false, failLoad = false} = {}) 
         calls.push({command,args:structuredClone(args)});
         if (command === "get_workspaces") {if(failLoad) throw "Unreadable workspace file"; return structuredClone(stored);}
         if (command === "capture_workspace") return {profile:{id:"captured",name:args.name,platform:"linux",items:[item("First"),item("Second")]},suggestedId:profiles[0]?.id};
+        if (command === "prepare_workspace_import") return prepareImport(structuredClone(args.profile));
         if (command === "save_workspaces") {if(failSave) throw "Disk is read-only"; stored=structuredClone(args.store); return structuredClone(stored);}
         if (command === "restore_workspace") return [{label:"Fixture",restored:false,launched:false,error:"Missing app"}];
         if (command === "cancel_workspace_restore") return;
@@ -136,6 +137,22 @@ async function editor({profiles = [], failSave = false, failLoad = false} = {}) 
     await result.click("#show-workspaces");
     return result;
 }
+test("native import preparation resolves only a review draft until explicit save",async()=>{
+    const p=profile("package-import","Old package");
+    p.items[0].launch={kind:"packaged-app",program:"",args:[],workingDirectory:"",newWindow:false};
+    const e=await editor({prepareImport:input=>{
+        input.items[0].launch.program="ResolvedFamily!Application";
+        input.items[0].window.desktopId="ResolvedFamily!Application";
+        return input;
+    }});
+    await e.window.reviewImportedWorkspace(p);
+    assert.equal(e.document.querySelector('[data-launch="program"]').value,"ResolvedFamily!Application");
+    assert.equal(e.calls.some(c=>c.command==="save_workspaces"),false);
+    assert.equal(p.items[0].launch.program,"");
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].items[0].launch.program,"ResolvedFamily!Application");
+});
+
 test("capture is a review draft; excluded windows and edited arguments persist on Save",async()=>{
     const e=await editor();
     await e.click("#capture-workspace");

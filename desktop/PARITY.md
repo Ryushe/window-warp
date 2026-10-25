@@ -23,7 +23,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Partial | 15 native KDE checks pass on the caption-fix build, including tabs/selection, same-title profile isolation, floating geometry and editor; codec/profile/launch tests pass; live Windows browser path pending |
 | Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native Ubuntu capture/directory restoration passes; legacy launchers, prompt fallback, and ambiguity have regression coverage; native PowerShell/custom-profile variants still required |
 | Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Partial | Executable launch passes native Windows/KDE fixtures; Calculator AUMID capture/activation/reuse and native KDE desktop-entry URL/document launch, working directory, reuse and missing-target errors pass; hosted UWP/packaged Win32 variants and D-Bus-activated desktop entries remain |
-| Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Partial | Review/import/save verified natively on Windows and KDE; disabled keys, terminal fields, Firefox tabs and geometry retained; packaged entries now have explicit activation-ID review while preserving source path, but automatic legacy package resolution and unsupported AHK matches remain; both center actions now convert |
+| Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Partial | Review/import/save verified natively on Windows and KDE; disabled keys, terminal fields, Firefox tabs and geometry retained; legacy package paths resolve a single registered AUMID during unsaved review; missing/ambiguous families stay editable; unsupported AHK matches remain; both center actions now convert |
 | Single instance, tray, settings failures, session cleanup, installers | Partial | Windows native single instance, registration failures and process-exit key release pass; final tray/graceful-exit and installer checks remain |
 
 ## Platform investigation
@@ -545,3 +545,68 @@ Remaining coverage: hosted UWP and packaged Win32 variants, packaged argument
 receipt in an owned packaged fixture, D-Bus-activated desktop entries, real Plasma
 6/Portafort, legacy package-target resolution, and the rest of this checklist.
 No merge, push, installer activation, or user-session startup change was performed.
+
+
+## Legacy package migration (2026-10-25)
+
+Import review now resolves a saved WindowsApps package full name to its family,
+queries current-user registered versions, and selects one distinct actual AUMID.
+The old executable/version need not exist. Missing/ambiguous registrations and
+API failures remain per-item review notes with the original path intact; explicit
+launch targets are preserved. The native preparation command validates the draft
+and never writes it. Linux preserves Windows imports for platform adaptation.
+
+Evidence: 60 Node tests/syntax checks; Windows Rust 59 pass/4 opt-in ignored;
+Linux Rust 52 pass/1 ignored. The opt-in read-only stale Calculator registration
+query also passed. Windows native suite passed 33 checks, with the existing
+physical second-display skip. Receipt:
+`desktop/src-tauri/target/windows-validation/WARP-NATIVE-0b034f91-827f-4470-87fc-eb737437d386/result.json`.
+The editor resolved a stale Calculator version, did not auto-save, then persisted
+its AUMID and original path on explicit Save. The initial fixture wrongly assumed
+the current owner path was WindowsApps; its observed ApplicationFrameHost path
+confirmed hosted Calculator capture/reuse and prompted an explicit historical
+package-path fixture. No runtime correction was needed.
+
+Linux builder `hoster-warp-build-20261025-legacy-package` finished inactive/exit 0
+with release executable and Debian package. KDE unit
+`hoster-warp-gui-20261025-legacy-package` passed 20 checks, including Windows import
+review through the new preparation command; flags `--desktop-entry --import`.
+Local receipt directory: `desktop/src-tauri/target/kde-validation/legacy-package/`.
+All test processes have exited and the normal Windows debug binary is restored.
+No installation, user-session activation, merge or push occurred.
+
+Independent reviewer `/root/packaged_native` found no runtime defect in native
+registration buffers/lifetimes, RAII cleanup, ambiguity handling or unsaved review.
+It independently passed 21 import/editor tests and identified the same hosted
+Calculator fixture assumption, corrected before the final native run.
+
+### Next: AHK window-match fidelity
+
+Source audit: all six original AHK files omit SetTitleMatchMode, DetectHiddenWindows
+and GroupAdd. `window_manager.ahk` FindConfiguredWindows and the hotkey module pass
+saved matches directly to WinGetList/WinActive. Current INI fixtures use basename
+ahk_exe matches, but the importer also accepts full paths; Windows pull/focus and
+shared radial currently compare only basename, so full-path imports cannot work.
+This is a concrete remaining port defect, not just missing test coverage.
+
+Official v2 documentation confirms default case-sensitive title **contains**
+matching (mode 2), exact case-sensitive class, case-insensitive executable basename
+or full path, and conjunction of specified criteria. Plain `A` means the active
+window; PID/HWND criteria are session-specific. Keyword parsing allows no space
+after a keyword and consumes only one separator space/tab before the next criterion,
+so broad whitespace trimming changes literals. The original repository defines no
+portable groups; ahk_group cannot recover missing group definitions.
+
+Next implementation should retain existing native app IDs for old JSON and add
+an explicit optional Windows selector for title/class/executable/PID/HWND/active.
+Apply one coherent predicate to native pull, focus and radial selection, and keep
+Windows selectors disabled on Linux until adapted. Cover same-name executables in
+different paths, title/class conjunction and case, no-space syntax, PID/HWND
+mismatch, active-only, visible untitled/owned windows, and picker/action consistency.
+Do not add title modes absent from the original configuration.
+
+Primary sources: https://www.autohotkey.com/docs/v2/misc/WinTitle.htm and
+https://www.autohotkey.com/docs/v2/lib/SetTitleMatchMode.htm. Safe-fetch receipts
+under `desktop/src-tauri/target/research/ahk-wintitle-result.json` and
+`ahk-titlematch-result.json`; fetched content treated solely as source evidence.
+The full-parity goal remains active; the original checklist remains the gate.
