@@ -7,7 +7,7 @@
 - Base commit: `7b907778f0022d73fb3527b82c0ab7ecedf8124d`
 - Intended eventual target: `main`; promotion/merge has not been requested
 - Last updated: 2026-10-25
-- Latest immutable recovery checkpoint: `9ab716dd78ff2b719113155f541c57ebf67ca21c`
+- Latest immutable recovery checkpoint: `b359d6532fc4c31172ffc80e8131ef8d2dbed54f`
 - Feature implementation commits: `abfc95e` (desktop/workspace foundation), `ee7bee4` (Firefox profiles/tabs), `c09d79c` (terminal capture/editor/restore), `491a9d8` (KDE Firefox caption correction and complete 15-check native run), `5e6373d` (WSL distribution discovery and native directory restoration), `02d4e02` (reviewed shortcut reassignment and 12-check native KDE run), `b216f0c` (persistent pause and application control hotkeys, 15 native KDE checks), `d49e380` (14 native Windows application checks), `9794b75` (Windows tap/hold, activation deadlock correction, 18 Windows and 15 KDE native checks), `b63cb1d` (KDE native tap/hold, Wayland editor focus, 20 native KDE checks), `41fbc70` (KDE key reservation cleanup, 21 native KDE checks, held-key regression reproduced), `da23019` (held-key cancellation and deferred reassignment, verified script startup, 22 native KDE checks), `61233ff` (shared radial picker, 26 native KDE checks; initial 22 native Windows pass later superseded by rapid Escape regression), `4a92065` (reviewed INI migration and native import receipts), `9ccbaa7` (portable fixture line endings)
 - Canonical references: original root AHK files; `desktop/PARITY.md`
 
@@ -85,7 +85,7 @@ parser; Linux uses `/proc`. Neither path invokes a shell for app launch.
 
 ## Resume and gates
 
-Resume remaining terminal variants, burner/chord cases and unresolved default-
+Resume burner/chord and packaged/D-Bus variants, unresolved terminal/default-
 profile matching, then final package/Plasma6/physical-display/login gates. Preserve
 all checklist rows and any newly recorded native regression.
 Native KDE fixture tests and local Node/Rust tests are ready for reuse.
@@ -1567,3 +1567,8 @@ Keep these in PARITY.md; do not label arbitrary terminal-profile capture complet
 Next: remaining burner/chord and packaged/D-Bus variants, final packaging/runtime
 acceptance, real Plasma6 and physical display/login gates. Full goal stays active.
 No branch merge, push or installer installation occurred.
+
+Verified terminal implementation checkpoint:
+`b359d6532fc4c31172ffc80e8131ef8d2dbed54f` on `codex/cross-platform-app`.
+This follow-up records its immutable SHA. Resume burner/chord and remaining app-
+launch cases; preserve all PARITY.md requirements and terminal coverage limits.
