@@ -12,6 +12,42 @@ const {decode,preview,shortcut} = scope.window.WindowWarpImport;
 const plain = value => JSON.parse(JSON.stringify(value));
 const monitors = [{x:-1920,y:30,width:1920,height:1050},{x:0,y:0,width:1920,height:1080}];
 const workspace = extra => `[Meta]\ncount=1\n[Profile1]\nid=old-id\nname=Work\nitemCount=1\n[Profile1Item1]\nprocessName=WindowsTerminal.exe\npath=C:\\WindowsApps\\Terminal.exe\ntitle=Dev\nx=-1800\ny=120\nw=800\nh=600\nstate=1\nmonitorIndex=1\n${extra}`;
+const appMatch = (match, options) => preview(`[Meta]\ncount=1\n[App1]\nlabel=Matched app\nhotkey=#f\nmatch="${match}"`,options)[0];
+
+test("AHK title, class, executable and numeric criteria translate without losing their conjunction",()=>{
+    const entry=appMatch("Work  ahk_classEditorClass ahk_exeC:\\Apps\\editor.exe ahk_pid0x2A ahk_id0x20000000000001");
+    assert.deepEqual(plain(entry.value.windowsMatch),{titleContains:"Work ",className:"EditorClass",executable:"C:\\Apps\\editor.exe",packagedAppId:"",processId:42,windowId:"9007199254740993",activeOnly:false});
+    assert.equal(entry.value.appMatch,"");
+    assert.match(entry.raw,/ahk_id0x20000000000001/);
+    assert.equal(entry.problems.length,0);
+    const separated=appMatch("Title\t\tahk_class  Editor \tahk_exe\tapp.exe").value.windowsMatch;
+    assert.equal(separated.titleContains,"Title\t");
+    assert.equal(separated.className,"Editor ");
+    assert.equal(separated.executable,"app.exe");
+});
+test("AHK plain titles, active window and simple executable matches keep distinct semantics",()=>{
+    assert.equal(appMatch("12345").value.windowsMatch.titleContains,"12345");
+    assert.equal(appMatch("12345").value.windowsMatch.windowId,null);
+    assert.equal(appMatch("A").value.windowsMatch.activeOnly,true);
+    assert.equal(appMatch("A ahk_class Editor").value.windowsMatch.titleContains,"A");
+    assert.equal(appMatch("a").value.windowsMatch.titleContains,"a");
+    assert.equal(appMatch("ahk_exeC:\\Apps\\Editor.exe").value.appMatch,"C:\\Apps\\Editor.exe");
+    assert.equal(appMatch("ahk_exe editor.exe").value.windowsMatch.executable,"editor.exe");
+    assert.equal(appMatch("ahk_exe editor.exe").value.appMatch,"editor.exe");
+    assert.equal(appMatch("ahk_exe editor.exe ").value.windowsMatch.executable,"editor.exe ");
+    const linux=appMatch("Work ahk_class Editor",{platform:"linux"});
+    assert.equal(linux.value.enabled,false);
+    assert.equal(linux.value.windowsMatch.className,"Editor");
+    assert.match(linux.notes.join(" "),/turn off Windows.*KDE/);
+});
+test("AHK duplicate, unknown, group and invalid identity criteria remain unresolved visibly",()=>{
+    for(const match of ["ahk_group Editors","ahk_unknown value","ahk_class One ahk_class Two","ahk_id 18446744073709551616","ahk_pid 4294967296","ahk_id -1","ahk_pid nope","ahk_class",""]) {
+        const entry=appMatch(match);
+        assert.equal(entry.value,null,match);
+        assert.ok(entry.problems.length,match);
+        assert.ok(entry.raw.includes(match),match);
+    }
+});
 
 test("legacy packaged apps retain their source path without guessing an activation ID",()=>{
     const ini=workspace("launchKind=packaged-app").replace("WindowsTerminal.exe","CalculatorApp.exe");
@@ -64,8 +100,8 @@ test("malformed counts and duplicate INI fields fail visibly without partial con
     assert.throws(()=>preview("[Settings]\nholdMode=tile\nholdMode=radial"),/Repeated key/);
     assert.throws(()=>preview("[Settings]\nholdMode=tile\n[Settings]\nholdMode=radial"),/Repeated section/);
     assert.throws(()=>preview("not an ini"),/line 1/);
-    const match=preview("[Meta]\ncount=1\n[App1]\nhotkey=#f\nmatch=ahk_exe firefox.exe ahk_class Window\nlabel=Firefox")[0];
-    assert.equal(match.value,null); assert.match(match.raw,/ahk_class/);
+    const match=preview("[Meta]\ncount=1\n[App1]\nhotkey=#f\nmatch=ahk_exe firefox.exe ahk_group UndefinedGroup\nlabel=Firefox")[0];
+    assert.equal(match.value,null); assert.match(match.raw,/ahk_group/);
 });
 test("workspace migration preserves coordinates, state, legacy WSL and original diagnostic values",()=>{
     const entry=preview(workspace('terminalCommand=wsl.exe -d "Ubuntu-24.04" --exec old-command\nprofileName=Work\npromptIdentity=user@host:~'),{platform:"linux",monitors,uuid:()=>"new-id"})[0];

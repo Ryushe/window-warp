@@ -118,14 +118,12 @@ unsafe fn center_pointer(area: Rect) -> Result<(), String> {
     Ok(())
 }
 unsafe extern "system" fn collect_window(hwnd: HWND, data: LPARAM) -> BOOL {
-    if IsWindowVisible(hwnd) != 0
-        && GetWindow(hwnd, GW_OWNER).is_null()
-        && GetWindowTextLengthW(hwnd) > 0
-    {
+    if IsWindowVisible(hwnd) != 0 {
         (*(data as *mut Vec<usize>)).push(hwnd as usize);
     }
     1
 }
+#[cfg(test)]
 unsafe fn executable(hwnd: HWND) -> Option<String> {
     Some(executable_path(hwnd)?.rsplit('\\').next()?.to_lowercase())
 }
@@ -163,7 +161,20 @@ unsafe fn monitor_name(handle: usize) -> String {
 pub fn snapshot(_: &AppHandle) -> Result<Vec<crate::workspaces::WindowInfo>, String> {
     unsafe { snapshot_native(true) }
 }
+pub fn snapshot_for_binding(
+    _: &AppHandle,
+    binding: &Binding,
+) -> Result<Vec<crate::workspaces::WindowInfo>, String> {
+    let explicit = binding.windows_match.is_some();
+    unsafe { snapshot_native_matching(!explicit, explicit) }
+}
 unsafe fn snapshot_native(exclude_own: bool) -> Result<Vec<crate::workspaces::WindowInfo>, String> {
+    snapshot_native_matching(exclude_own, false)
+}
+unsafe fn snapshot_native_matching(
+    exclude_own: bool,
+    explicit_match: bool,
+) -> Result<Vec<crate::workspaces::WindowInfo>, String> {
     use crate::workspaces::WindowInfo;
     unsafe {
         let all = monitors()?;
@@ -175,9 +186,12 @@ unsafe fn snapshot_native(exclude_own: bool) -> Result<Vec<crate::workspaces::Wi
             let mut pid = 0;
             GetWindowThreadProcessId(hwnd, &mut pid);
             if (exclude_own && pid == std::process::id())
-                || hwnd == GetShellWindow()
-                || hwnd == GetDesktopWindow()
-                || GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW as isize != 0
+                || (!explicit_match
+                    && (hwnd == GetShellWindow()
+                        || hwnd == GetDesktopWindow()
+                        || !GetWindow(hwnd, GW_OWNER).is_null()
+                        || GetWindowTextLengthW(hwnd) == 0
+                        || GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW as isize != 0))
             {
                 continue;
             }
@@ -188,11 +202,13 @@ unsafe fn snapshot_native(exclude_own: bool) -> Result<Vec<crate::workspaces::Wi
                 &mut cloaked as *mut _ as *mut _,
                 4,
             );
-            if cloaked != 0 {
+            if !explicit_match && cloaked != 0 {
                 continue;
             }
-            let Some(path) = executable_path(hwnd) else {
-                continue;
+            let path = match executable_path(hwnd) {
+                Some(path) => path,
+                None if explicit_match => String::new(),
+                None => continue,
             };
             let Some(app_id) = path.rsplit('\\').next().map(|s| s.to_lowercase()) else {
                 continue;
@@ -201,6 +217,11 @@ unsafe fn snapshot_native(exclude_own: bool) -> Result<Vec<crate::workspaces::Wi
             let length =
                 GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32).max(0) as usize;
             let title = String::from_utf16_lossy(&buffer[..length]);
+            let mut class_buffer = [0u16; 256];
+            let class_length =
+                GetClassNameW(hwnd, class_buffer.as_mut_ptr(), class_buffer.len() as i32).max(0)
+                    as usize;
+            let class_name = String::from_utf16_lossy(&class_buffer[..class_length]);
             let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) as usize;
             let index = all.iter().position(|(id, _)| *id == monitor).unwrap_or(0);
             let Ok(geometry) = window_rect(hwnd) else {
@@ -214,6 +235,7 @@ unsafe fn snapshot_native(exclude_own: bool) -> Result<Vec<crate::workspaces::Wi
                 id: handle.to_string(),
                 pid,
                 title,
+                class_name,
                 app_id,
                 desktop_id: crate::windows_apps::identity(hwnd),
                 path,
@@ -378,8 +400,6 @@ unsafe fn pull_app_target(
     selected: Option<&crate::workspaces::WindowInfo>,
     previous: Option<&crate::workspaces::WindowInfo>,
 ) -> Result<(), String> {
-    let mut candidates: Vec<usize> = Vec::new();
-    EnumWindows(Some(collect_window), &mut candidates as *mut _ as LPARAM);
     let active = previous
         .and_then(|w| {
             let hwnd = w.id.parse::<usize>().ok()? as HWND;
@@ -388,27 +408,29 @@ unsafe fn pull_app_target(
             (IsWindow(hwnd) != 0 && pid == w.pid).then_some(hwnd)
         })
         .unwrap_or_else(|| GetForegroundWindow());
-    let app_match = binding.app_match.to_lowercase();
-    candidates.retain(|h| executable(*h as HWND).as_deref() == Some(app_match.as_str()));
-    let hwnd = if let Some(selected) = selected {
-        let hwnd = selected
-            .id
-            .parse::<usize>()
-            .map_err(|_| "Invalid window ID.")? as HWND;
-        let mut pid = 0;
-        GetWindowThreadProcessId(hwnd, &mut pid);
-        if IsWindow(hwnd) == 0 || pid != selected.pid || !candidates.contains(&(hwnd as usize)) {
-            return Err("The selected window has closed or changed identity.".into());
-        }
-        hwnd
-    } else {
+    let candidates = matching_windows(binding, Some(active))?;
+    let target = if let Some(selected) = selected {
         candidates
             .iter()
-            .copied()
-            .find(|h| *h == active as usize)
-            .or_else(|| candidates.first().copied())
-            .ok_or("No matching app window is open.")? as HWND
+            .find(|w| w.id == selected.id && w.pid == selected.pid)
+            .ok_or("The selected window has closed or changed identity.")?
+    } else {
+        let active_id = (active as usize).to_string();
+        candidates
+            .iter()
+            .find(|w| w.id == active_id)
+            .or_else(|| candidates.first())
+            .ok_or("No matching app window is open.")?
     };
+    let hwnd = target
+        .id
+        .parse::<usize>()
+        .map_err(|_| "Invalid window ID.")? as HWND;
+    let mut pid = 0;
+    GetWindowThreadProcessId(hwnd, &mut pid);
+    if IsWindow(hwnd) == 0 || pid != target.pid {
+        return Err("The selected window has closed or changed identity.".into());
+    }
     let was_active = hwnd == active;
     if !was_active && !active.is_null() {
         let mut pid = 0;
@@ -488,6 +510,39 @@ unsafe fn pull_app_target(
     Ok(())
 }
 
+unsafe fn matching_windows(
+    binding: &Binding,
+    previous_active: Option<HWND>,
+) -> Result<Vec<crate::workspaces::WindowInfo>, String> {
+    // Explicit WinTitle criteria follow the original WinGetList visible-window
+    // scope, including this process and owned/untitled windows. Workspace capture
+    // and legacy native app IDs retain their normal-application window filters.
+    let explicit = binding.windows_match.is_some();
+    let mut windows = snapshot_native_matching(!explicit, explicit)?;
+    retain_matching_windows(
+        &mut windows,
+        binding,
+        previous_active.map(|hwnd| hwnd as usize),
+    );
+    Ok(windows)
+}
+
+fn retain_matching_windows(
+    windows: &mut Vec<crate::workspaces::WindowInfo>,
+    binding: &Binding,
+    previous_active: Option<usize>,
+) {
+    // The radial picker owns foreground focus while it is open. An active-only
+    // selector still refers to the validated window active before the picker.
+    if let Some(active) = previous_active {
+        let active = active.to_string();
+        for window in windows.iter_mut() {
+            window.active = window.id == active;
+        }
+    }
+    windows.retain(|window| crate::window_match::matches(binding, window));
+}
+
 unsafe fn execute(binding: &Binding, settings: &Settings) -> Result<(), String> {
     let action = binding.action.as_str();
     let app_match = binding.app_match.as_str();
@@ -495,26 +550,29 @@ unsafe fn execute(binding: &Binding, settings: &Settings) -> Result<(), String> 
         return pull_app(binding, settings, None);
     }
     if action == "focus-app" {
-        let mut windows: Vec<usize> = Vec::new();
-        EnumWindows(Some(collect_window), &mut windows as *mut _ as LPARAM);
-        let mut matching: Vec<_> = windows
-            .into_iter()
-            .filter(|h| {
-                executable(*h as HWND).as_deref() == Some(app_match.to_lowercase().as_str())
-            })
-            .collect();
-        matching.sort_unstable();
+        let mut matching = matching_windows(binding, None)?;
+        matching.sort_by_key(|w| w.id.parse::<usize>().unwrap_or(0));
         if matching.is_empty() {
             return Err(format!(
                 "No open window for {app_match}. Open the app first."
             ));
         }
-        let active = GetForegroundWindow() as usize;
+        let active = (GetForegroundWindow() as usize).to_string();
         let next = matching
             .iter()
-            .position(|h| *h == active)
+            .position(|w| w.id == active)
             .map_or(0, |i| (i + 1) % matching.len());
-        return focus(matching[next] as HWND);
+        let selected = &matching[next];
+        let hwnd = selected
+            .id
+            .parse::<usize>()
+            .map_err(|_| "Invalid window ID.")? as HWND;
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if IsWindow(hwnd) == 0 || pid != selected.pid {
+            return Err("The selected window has closed or changed identity.".into());
+        }
+        return focus(hwnd);
     }
     if action == "pull" {
         let mut history = HISTORY.lock().map_err(|e| e.to_string())?;
@@ -1007,6 +1065,152 @@ mod tests {
         assert_eq!(top.height + bottom.height, area.height);
         assert_eq!(bottom.x, area.x);
         assert_eq!(bottom.width, area.width);
+    }
+
+    #[test]
+    #[ignore = "owned visible selector fixtures; requires WARP_TEST_WINDOWS_MATCH=1"]
+    fn native_window_selectors_capture_class_and_widen_explicit_scope() {
+        use crate::window_match::WindowsMatch;
+        assert_eq!(std::env::var("WARP_TEST_WINDOWS_MATCH").as_deref(), Ok("1"));
+        struct OwnedWindow(HWND);
+        impl Drop for OwnedWindow {
+            fn drop(&mut self) {
+                unsafe { DestroyWindow(self.0) };
+            }
+        }
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let title: Vec<u16> = "Window Warp Selector CaseSensitive\0"
+                .encode_utf16()
+                .collect();
+            let hwnd = CreateWindowExW(
+                0,
+                class.as_ptr(),
+                title.as_ptr(),
+                WS_OVERLAPPEDWINDOW,
+                120,
+                120,
+                400,
+                300,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                std::ptr::null(),
+            );
+            assert!(!hwnd.is_null(), "{}", error("Create selector fixture"));
+            let _owned = OwnedWindow(hwnd);
+            ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            let id = (hwnd as usize).to_string();
+            let captured = snapshot_native(false)
+                .unwrap()
+                .into_iter()
+                .find(|w| w.id == id)
+                .expect("Named fixture must be captured");
+            assert!(captured.class_name.eq_ignore_ascii_case("STATIC"));
+            let mut binding = Config::default().bindings.remove(0);
+            binding.app_match.clear();
+            binding.windows_match = Some(WindowsMatch {
+                packaged_app_id: String::new(),
+                title_contains: "Selector CaseSensitive".into(),
+                class_name: captured.class_name.clone(),
+                executable: captured.path.clone(),
+                process_id: Some(captured.pid),
+                window_id: Some(id.clone()),
+                active_only: false,
+            });
+            assert!(crate::window_match::matches(&binding, &captured));
+            assert!(
+                matching_windows(&binding, None)
+                    .unwrap()
+                    .iter()
+                    .any(|w| w.id == id),
+                "Explicit WinTitle rules must not exclude their own process's visible target"
+            );
+            binding.windows_match.as_mut().unwrap().title_contains =
+                "selector casesensitive".into();
+            assert!(!crate::window_match::matches(&binding, &captured));
+            binding
+                .windows_match
+                .as_mut()
+                .unwrap()
+                .title_contains
+                .clear();
+            binding.windows_match.as_mut().unwrap().process_id = Some(captured.pid.wrapping_add(1));
+            assert!(!crate::window_match::matches(&binding, &captured));
+            binding.windows_match.as_mut().unwrap().process_id = Some(captured.pid);
+            binding.windows_match.as_mut().unwrap().window_id = Some("1".into());
+            assert!(!crate::window_match::matches(&binding, &captured));
+            binding.windows_match.as_mut().unwrap().window_id = Some(id.clone());
+            binding.windows_match.as_mut().unwrap().active_only = true;
+            let mut picker_snapshot = captured.clone();
+            picker_snapshot.active = false;
+            let mut during_picker = vec![picker_snapshot];
+            retain_matching_windows(&mut during_picker, &binding, Some(hwnd as usize));
+            assert_eq!(
+                during_picker.len(),
+                1,
+                "Active-only selection uses pre-picker identity"
+            );
+            let mut wrong_active = vec![captured.clone()];
+            retain_matching_windows(&mut wrong_active, &binding, Some(1));
+            assert!(wrong_active.is_empty());
+
+            let tool = CreateWindowExW(
+                WS_EX_TOOLWINDOW,
+                class.as_ptr(),
+                std::ptr::null(),
+                WS_OVERLAPPEDWINDOW,
+                180,
+                180,
+                300,
+                220,
+                hwnd,
+                null_mut(),
+                null_mut(),
+                std::ptr::null(),
+            );
+            assert!(
+                !tool.is_null(),
+                "{}",
+                error("Create untitled owned tool fixture")
+            );
+            let _tool = OwnedWindow(tool);
+            ShowWindow(tool, SW_SHOWNOACTIVATE);
+            let tool_id = (tool as usize).to_string();
+            assert!(!snapshot_native(false)
+                .unwrap()
+                .iter()
+                .any(|w| w.id == tool_id));
+            let explicit = snapshot_native_matching(false, true)
+                .unwrap()
+                .into_iter()
+                .find(|w| w.id == tool_id)
+                .expect("Explicit selectors include untitled owned tool windows");
+            assert_eq!(explicit.title, "");
+            assert_eq!(explicit.class_name, captured.class_name);
+            binding.windows_match = Some(WindowsMatch {
+                class_name: explicit.class_name.clone(),
+                process_id: Some(explicit.pid),
+                window_id: Some(tool_id.clone()),
+                ..Default::default()
+            });
+            assert!(crate::window_match::matches(&binding, &explicit));
+            assert!(
+                !snapshot_native_matching(true, true)
+                    .unwrap()
+                    .iter()
+                    .any(|w| w.id == tool_id),
+                "Production selectors continue to exclude the application's own windows"
+            );
+            ShowWindow(tool, SW_HIDE);
+            assert!(
+                !snapshot_native_matching(false, true)
+                    .unwrap()
+                    .iter()
+                    .any(|w| w.id == tool_id),
+                "Explicit selectors still exclude hidden windows"
+            );
+        }
     }
 
     #[test]

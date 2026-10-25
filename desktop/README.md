@@ -13,7 +13,8 @@ A standalone Tauri 2 application for Windows and **KDE Plasma 5.27 and 6**, with
   one use, expiry or pausing clears it. A single monitor wraps in place.
 - Pull a pushed window back using a bounded in-memory history.
 - Left/right half tiling using monitor work areas.
-- Focus/cycle existing app windows by executable name (Windows) or resource class/desktop ID (KDE).
+- Focus/cycle app windows by executable name/path or packaged app ID (Windows), or resource class/desktop ID (KDE).
+- Optional Windows rules combining title text, window class, executable, packaged ID, process/window identity and active-window state; imported AHK rules use the same matcher as tap and radial selection.
 - Per-app pull to the main monitor, send to a burner display, and focus the previous app.
 - App-pull tap on release or hold to tile, with a configurable delay and disable switch.
 - Top/bottom tiling, maximize/restore, and graceful close actions.
@@ -28,6 +29,8 @@ A standalone Tauri 2 application for Windows and **KDE Plasma 5.27 and 6**, with
 Normal launches start **paused**. Save changes, then click **Enable shortcuts**. A registered login launch uses `--startup` to enable saved shortcuts and hide the editor. Editing shortcuts requires pausing first. Default keys use Ctrl+Alt; every key can be changed, including to Super/Win/Meta combinations when the desktop allows them. Stop or pause conflicting AutoHotkey bindings before reusing their keys.
 
 New configurations include **Ctrl+Alt+P** to pause/resume, **Ctrl+Alt+B** to edit the current app's shortcut, **Ctrl+Alt+O** to browse workspaces, and **Ctrl+Alt+U** to capture a workspace update for review. Existing configurations can add these actions from the editor. Opening the current-app editor pauses window shortcuts and preserves existing drafts. Resume uses saved settings; unsaved edits remain in the editor.
+
+For a more specific Windows app shortcut, enable **Use Windows matching criteria**. Every entered criterion must match. Title text uses case-sensitive contains matching, and window classes use case-sensitive equality, matching the original AHK configuration. Executable names, full paths and packaged IDs are case-insensitive. Process IDs and window IDs can change after restart. Imported `ahk_exe`, `ahk_class`, `ahk_pid`, `ahk_id`, title and active-window rules retain these criteria, including visible owned or untitled windows. Undefined AHK groups and ambiguous rules remain visible for manual review. Windows rules stay disabled on Linux until you turn off Windows matching and enter a KDE app identifier.
 
 Open **Workspaces → Capture current**, choose which windows to keep, and save a name. Capture creates a review draft. Each app has editable launch arguments and an option to require a new window. **Open workspace** reuses matching windows or launches missing apps, then restores placement.
 

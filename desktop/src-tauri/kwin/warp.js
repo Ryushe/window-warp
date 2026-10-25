@@ -131,6 +131,9 @@ var Warp = (function () {
         if (!wasActive) centerPointer(main);
     }
     function run(binding, overrides, holdPointer, selected, previous) {
+        if (binding.windowsMatch && (binding.action === "pull-app" || binding.action === "focus-app")) {
+            throw new Error("Windows window-match rules cannot run on KDE. Adapt the binding to a KDE app identifier first.");
+        }
         if (["toggle-pause", "open-editor", "open-workspaces", "update-workspace"].indexOf(binding.action) >= 0) {
             callDBus(WARP_APP.service, "/Control", "com.windowwarp.Control", "Action", WARP_APP.token, binding.action);
             return;

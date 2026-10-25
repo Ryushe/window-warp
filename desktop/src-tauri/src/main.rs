@@ -23,6 +23,7 @@ mod radial;
 mod retile;
 mod startup;
 mod terminal;
+mod window_match;
 #[cfg(windows)]
 mod windows_apps;
 mod workspaces;

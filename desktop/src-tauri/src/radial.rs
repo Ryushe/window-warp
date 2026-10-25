@@ -45,10 +45,7 @@ pub fn cancel_visible() {
 }
 
 fn candidates(mut windows: Vec<WindowInfo>, binding: &Binding) -> Vec<WindowInfo> {
-    windows.retain(|w| {
-        w.app_id.eq_ignore_ascii_case(&binding.app_match)
-            || (!w.desktop_id.is_empty() && w.desktop_id.eq_ignore_ascii_case(&binding.app_match))
-    });
+    windows.retain(|w| crate::window_match::matches(binding, w));
     windows.sort_by(|a, b| {
         label(a, binding)
             .to_lowercase()
@@ -113,7 +110,7 @@ pub struct Picker {
 }
 impl Picker {
     pub fn open(app: &AppHandle, binding: &Binding, point: Point) -> Result<Option<Self>, String> {
-        let windows = crate::platform::snapshot(app)?;
+        let windows = crate::platform::snapshot_for_binding(app, binding)?;
         let previous = windows.iter().find(|w| w.active).cloned();
         let windows = candidates(windows, binding);
         if windows.is_empty() {

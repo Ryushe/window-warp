@@ -9,6 +9,8 @@ pub struct WindowInfo {
     pub id: String,
     pub pid: u32,
     pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub class_name: String,
     pub app_id: String,
     pub desktop_id: String,
     pub path: String,
@@ -127,6 +129,8 @@ impl WorkspaceStore {
                     || w.app_id.len() > 1024
                     || w.id.len() > 100
                     || w.title.len() > 16000
+                    || w.class_name.len() > 1024
+                    || w.class_name.contains('\0')
                     || w.path.len() > 32768
                     || w.desktop_id.len() > 32768
                     || w.desktop_id.contains('\0')
@@ -483,6 +487,7 @@ mod tests {
             id: id.into(),
             pid: 123,
             title: title.into(),
+            class_name: String::new(),
             app_id: "fixture".into(),
             desktop_id: String::new(),
             path: "/test/app".into(),

@@ -12,7 +12,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | Four-way tiling; portrait mouse-aware tile choice | Partial | Four-way implemented; 18 live KDE checks cover vertical tiling; Windows mouse hold tiles natively and portrait/midpoint geometry has regression coverage; KDE native hold verifies key-down pointer choice; physical portrait acceptance remains |
 | Maximize/restore toggle (original “fullscreen”); graceful close | Partial | Implemented both OSes; live KDE verified; Windows owned-window action verification pending |
 | App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Implemented both OSes; tiled burner round trip live KDE verified; other layouts and Windows live checks pending |
-| App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE focus-last and minimized checks pass; Windows native behavior checks pending |
+| App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE focus-last and minimized checks pass; Windows compound title/class/executable/PID matching, full-path focus and tap/radial consistency pass; remaining Windows focus-last/minimized action cases pending |
 | Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE native key delivery verifies tap, hold, repeats, pause cancellation and disabled hold; resume before key release and reassignment while held now pass; overlapping distinct chords and live Plasma 6 remain |
 | Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows and KDE native selection/dead-zone/Escape/pause checks pass; focus loss cancels before release, including Windows Alt+Escape; shared eight-slot layout/order tested; physical portrait/mixed-DPI and Plasma 6 acceptance remain |
 | Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed reassignment tested; native KDE current-app capture and physical-key reassignment pass; Windows native current-app capture, key recording, reassignment and persistence pass |
@@ -23,7 +23,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Partial | 15 native KDE checks pass on the caption-fix build, including tabs/selection, same-title profile isolation, floating geometry and editor; codec/profile/launch tests pass; live Windows browser path pending |
 | Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native Ubuntu capture/directory restoration passes; legacy launchers, prompt fallback, and ambiguity have regression coverage; native PowerShell/custom-profile variants still required |
 | Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Partial | Executable launch passes native Windows/KDE fixtures; Calculator AUMID capture/activation/reuse and native KDE desktop-entry URL/document launch, working directory, reuse and missing-target errors pass; hosted UWP/packaged Win32 variants and D-Bus-activated desktop entries remain |
-| Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Partial | Review/import/save verified natively on Windows and KDE; disabled keys, terminal fields, Firefox tabs and geometry retained; legacy package paths resolve a single registered AUMID during unsaved review; missing/ambiguous families stay editable; unsupported AHK matches remain; both center actions now convert |
+| Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Partial | Review/import/save verified natively on Windows and KDE; disabled keys, terminal fields, Firefox tabs and geometry retained; legacy package paths resolve a single registered AUMID during unsaved review; missing/ambiguous families stay editable; title/class/exe/PID/HWND/active WinTitle rules now migrate to reviewed selectors; undefined groups/duplicate or unknown criteria remain visible for manual review; both center actions convert |
 | Single instance, tray, settings failures, session cleanup, installers | Partial | Windows native single instance, registration failures and process-exit key release pass; final tray/graceful-exit and installer checks remain |
 
 ## Platform investigation
@@ -610,3 +610,67 @@ https://www.autohotkey.com/docs/v2/lib/SetTitleMatchMode.htm. Safe-fetch receipt
 under `desktop/src-tauri/target/research/ahk-wintitle-result.json` and
 `ahk-titlematch-result.json`; fetched content treated solely as source evidence.
 The full-parity goal remains active; the original checklist remains the gate.
+
+
+## Windows window-match parity (2026-10-25)
+
+Added optional typed Windows criteria to bindings: title contains, exact class,
+executable basename/full path, packaged app ID, PID, HWND and active-only. Criteria
+are conjoined. Title/class preserve case and meaningful whitespace; executable
+and package identity compare case-insensitively. HWND uses a decimal string to
+avoid JavaScript integer precision loss. Old JSON appMatch bindings remain valid;
+full executable paths and packaged IDs now work in native focus/pull as well as
+the radial picker. One Rust predicate owns Windows action and picker matching.
+
+AHK imports retain typed criteria, including simple executable rules so original
+WinGetList eligibility survives migration. Original FindConfiguredWindows calls
+WinGetList/WinExist without workspace filtering; explicit selectors therefore
+include visible owned/untitled/tool/own-process/cloaked windows. Ordinary workspace
+capture and existing native-ID bindings retain their normal-window filters.
+Current HWND/PID is rechecked before action; active-only radial release uses the
+pre-picker active identity. Unsupported/duplicate criteria and undefined groups
+retain their original import text for review. Linux saves these imports disabled
+and refuses to enable or dispatch Windows criteria until the user adapts them.
+
+The editor exposes searchable, editable criteria and preserves existing draft
+and pause rules. Switching to a non-app action ignores dormant hidden criteria.
+Edit-current-app reuses an equivalent imported executable-only selector without
+reusing a narrower rule. Enabling advanced matching on an AUMID preserves it as
+a packaged-ID criterion rather than misinterpreting it as an executable.
+
+Verification:
+
+- 71 Node tests and JavaScript syntax checks pass.
+- Final Windows Rust suite: 64 pass, 5 opt-in ignored. Separate
+  `WARP_TEST_WINDOWS_MATCH=1 cargo test --manifest-path desktop/src-tauri/Cargo.toml --offline native_window_selectors_capture_class_and_widen_explicit_scope -- --ignored`
+  passes owned native class/title/path/PID/HWND selection, active identity,
+  visible untitled/owned tool inclusion and hidden-window exclusion. It also
+  asserts that explicit matching can select its own process's visible fixture.
+- Final Windows application suite: 36 checks pass, one physical second-display
+  skip. Imported title/class/path/PID conjunction selects the same owned window
+  by tap and radial; wrong title case refuses focus; a full-path native ID works.
+  Receipt/screenshots:
+  `desktop/src-tauri/target/windows-validation/WARP-NATIVE-a7ac84e6-bbd1-44cb-9c97-29ef4564dfcc/`.
+  The earlier one-candidate run exposed a fixture helper hardcoded to two radial
+  entries; parameterizing that helper fixed the test without changing runtime.
+- Linux builder `hoster-warp-build-20261025-window-matching-review` completed
+  inactive/exit 0: 57 Rust pass/1 ignored, 71 Node pass, release executable and
+  Debian bundle. The final Windows-only eligibility correction does not affect
+  the Linux compilation path.
+- Native KDE: 30 checks pass, including Windows compound-rule review/save,
+  refusal to enable that rule on KDE, unchanged native hold/radial behavior,
+  desktop-entry launch and workspace import. Unit
+  `hoster-warp-gui-20261025-window-matching` inactive/exit 0; flags
+  `--desktop-entry --import --hold --radial`. Local receipts:
+  `desktop/src-tauri/target/kde-validation/window-matching/`.
+- Independent review: `/root/packaged_native` identified current-app reuse,
+  dormant-field validation and packaged-ID prefill issues; all corrected with
+  focused regressions and reviewed again with no remaining actionable findings.
+  `/root/retile_review` reviewed shared matching/Linux guards and final native
+  eligibility correction. Windows screenshot shows readable criteria without
+  clipping. The normal Windows debug binary is restored; test workloads exited.
+
+Next: remaining native Windows maximize/close, focus-last/minimized and burner
+behavior, then Firefox/terminal variants and overlapping physical global chords.
+Retain the full checklist, real Plasma 6/physical display/login/installer gates,
+and independent final release review. No merge, push or installation occurred.

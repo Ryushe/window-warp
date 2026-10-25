@@ -940,7 +940,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                 click("#discard-workspace")
             before_config = invoke("get_config")
             before_store = invoke("get_workspaces")
-            app_ini = "[Meta]\ncount=1\n[App1]\nlabel=Imported Windows app\nhotkey=#x\nmatch=ahk_exe app.exe"
+            app_ini = "[Meta]\ncount=1\n[App1]\nlabel=Imported Windows app\nhotkey=#x\nmatch=Research ahk_class WindowsClass ahk_exe app.exe"
             workspace_ini = "[Meta]\ncount=1\n[Profile1]\nid=legacy-id\nname=Imported workspace\nitemCount=1\n[Profile1Item1]\nprocessName=WindowsTerminal.exe\npath=C:\\WindowsApps\\Terminal.exe\ntitle=Development\nterminalCommand=wsl.exe -d \"Ubuntu\"\nprofileName=Dev\nx=100\ny=100\nw=600\nh=400\nmonitorIndex=1"
             encoded = [base64.b64encode(text.encode("utf-16")).decode() for text in [app_ini, workspace_ini]]
             evaluate("const transfer=new DataTransfer();" + "".join(
@@ -956,7 +956,15 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             click("#save")
             wait_for("return document.querySelector('#message').textContent.startsWith('Saved.')")
             imported = invoke("get_config")["bindings"][-1]
-            assert imported["appMatch"] == "app.exe" and not imported["enabled"]
+            assert imported["windowsMatch"]["titleContains"] == "Research" and imported["windowsMatch"]["className"] == "WindowsClass" and not imported["enabled"]
+            invalid = json.loads(json.dumps(invoke("get_config")))
+            invalid["bindings"][-1]["enabled"] = True
+            try:
+                invoke("save_config", {"config": invalid})
+                raise AssertionError("Windows selector was silently enabled on KDE")
+            except RuntimeError as error:
+                assert "cannot be enabled on KDE" in str(error), error
+            assert not invoke("get_config")["bindings"][-1]["enabled"]
             report["checks"].append("native WebKit UTF-16 import preserves Windows app identity as a disabled Linux review draft until explicit Save")
             click("#import-results article:last-child button")
             wait_for("return !document.querySelector('#workspace-editor').hidden")

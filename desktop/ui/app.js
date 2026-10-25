@@ -44,12 +44,56 @@ function render() {
         const card = $("#binding-template").content.cloneNode(true);
         const match = card.querySelector(".match-field");
         const options = card.querySelector(".app-options");
+        const windowsFields = card.querySelector(".windows-match-field");
+        const windowsDetails = card.querySelector(".windows-match-details");
+        const windowsToggle = card.querySelector(".windows-match-enabled");
+        const executableCriterion = card.querySelector('[data-windows-match="executable"]');
+        const packagedCriterion = card.querySelector('[data-windows-match="packagedAppId"]');
+        let hasCriteria = Boolean(binding.windowsMatch);
+        const seedIdentity = () => {
+            const id = platform === "windows" ? binding.appMatch || "" : "";
+            const packaged = id.includes("!") && !/[\\/]/.test(id);
+            return {executable:packaged ? "" : id, packagedAppId:packaged ? id : ""};
+        };
+        let criteria = {titleContains:"", className:"", ...(binding.windowsMatch ? {executable:"", packagedAppId:""} : seedIdentity()), processId:null, windowId:null, activeOnly:false, ...binding.windowsMatch};
+        if (binding.windowsMatch) binding.windowsMatch = criteria;
         const appFields = () => {
-            match.hidden = !["focus-app", "pull-app"].includes(binding.action);
+            const appAction = ["focus-app", "pull-app"].includes(binding.action);
+            match.hidden = !appAction || Boolean(binding.windowsMatch);
+            windowsFields.hidden = !appAction;
+            windowsDetails.hidden = !binding.windowsMatch;
             options.hidden = binding.action !== "pull-app";
         };
         appFields();
-        card.querySelector(".match-hint").textContent = platform === "windows" ? "Executable name, such as firefox.exe. The app must be open." : "Resource class or desktop file ID, such as firefox or org.kde.konsole.";
+        windowsToggle.checked = Boolean(binding.windowsMatch);
+        windowsDetails.open = Boolean(binding.windowsMatch);
+        card.querySelector(".windows-match-hint").textContent = platform === "windows"
+            ? "All entered criteria must match. Title text and class names are case-sensitive; executable names, full paths and packaged app IDs are not. Process and window IDs may change when an app restarts."
+            : "Windows-only criteria. To use this shortcut on Linux, turn these off and enter a KDE resource class or desktop ID in App identifier before enabling it.";
+        windowsToggle.addEventListener("change", () => {
+            if (windowsToggle.checked && !hasCriteria) {
+                Object.assign(criteria, seedIdentity());
+                executableCriterion.value = criteria.executable;
+                packagedCriterion.value = criteria.packagedAppId;
+                hasCriteria = true;
+            }
+            binding.windowsMatch = windowsToggle.checked ? criteria : null;
+            windowsDetails.open = windowsToggle.checked;
+            appFields(); changed();
+        });
+        card.querySelectorAll("[data-windows-match]").forEach(input => {
+            const field = input.dataset.windowsMatch;
+            if (input.type === "checkbox") input.checked = criteria[field];
+            else input.value = criteria[field] ?? "";
+            input.addEventListener("input", () => {
+                if (input.type === "checkbox") criteria[field] = input.checked;
+                else if (field === "processId") criteria[field] = input.value === "" ? null : Number(input.value);
+                else if (field === "windowId") criteria[field] = input.value === "" ? null : /^(?:0x[0-9a-f]+|[0-9]+)$/i.test(input.value) ? BigInt(input.value).toString() : input.value;
+                else criteria[field] = input.value;
+                changed();
+            });
+        });
+        card.querySelector(".match-hint").textContent = platform === "windows" ? "Executable name, full path or packaged app ID. The app must be open." : "Resource class or desktop file ID, such as firefox or org.kde.konsole.";
         card.querySelector('[data-field="appMatch"]').placeholder = platform === "windows" ? "firefox.exe" : "org.kde.konsole";
         card.querySelector(".remove").setAttribute("aria-label", `Remove ${binding.label || "shortcut"}`);
         card.querySelectorAll("[data-field]").forEach((input) => {
@@ -128,7 +172,17 @@ function receiveControl() {
         if (!request.window) { message("No active app was available. Add or edit a shortcut below."); return; }
         const app = request.window.appId || request.window.path?.split(/[\\/]/).pop() || request.window.desktopId;
         if (!app) { message("This window has no usable app identifier.", true); return; }
-        let index = config.bindings.findIndex(b => ["pull-app", "focus-app"].includes(b.action) && b.appMatch.toLowerCase() === app.toLowerCase());
+        let index = config.bindings.findIndex(b => {
+            if (!["pull-app", "focus-app"].includes(b.action)) return false;
+            const selector = b.windowsMatch;
+            if (!selector) return b.appMatch.toLowerCase() === app.toLowerCase();
+            // Imported ahk_exe-only selectors are equivalent for current-app
+            // editing. A narrower selector must remain a separate shortcut.
+            return platform === "windows" && !selector.titleContains && !selector.className && !selector.packagedAppId
+                && selector.processId == null && selector.windowId == null && !selector.activeOnly
+                && Boolean(selector.executable) && !/[\\/]/.test(selector.executable)
+                && selector.executable.toLowerCase() === app.toLowerCase();
+        });
         if (index < 0) {
             if (config.bindings.length >= 100) { message("Remove a shortcut before adding another app (maximum 100).", true); return; }
             index = config.bindings.length;
@@ -153,7 +207,7 @@ function filterBindings() {
     const query = $("#search").value.trim().toLowerCase();
     $("#bindings").querySelectorAll(".binding").forEach((card, index) => {
         const b = config.bindings[index];
-        card.hidden = ![b.label, b.shortcut, b.action, b.appMatch].join(" ").toLowerCase().includes(query);
+        card.hidden = ![b.label, b.shortcut, b.action, b.appMatch, ...Object.values(b.windowsMatch || {}), b.windowsMatch?.activeOnly ? "active window" : ""].join(" ").toLowerCase().includes(query);
     });
 }
 $("#search").addEventListener("input", () => { if (config) filterBindings(); });

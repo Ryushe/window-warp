@@ -267,7 +267,7 @@ try {
     assert.equal((await invoke("get_config")).settings.holdMode,"radial");
     await press(18); await paused(false);
     const center = {x:area.x+Math.floor(area.width/2),y:area.y+Math.floor(area.height/2)};
-    const radialOpen = () => until(()=>invoke("radial_view"),v=>v?.labels?.length===2,"native radial opens");
+    const radialOpen = (count=2) => until(()=>invoke("radial_view"),v=>v?.labels?.length===count,"native radial opens");
     const radialClosed = () => until(()=>invoke("radial_view"),v=>v===null,"native radial closes");
     const readSecond = async () => (await invoke("get_windows")).find(w=>w.id===String(fixture.windows[1]));
     await placeOwned();
@@ -401,7 +401,7 @@ try {
     await wait("!document.querySelector('#import-files').disabled", "import available while paused");
     const beforeImport = await invoke("get_config");
     const importFiles = [
-        ["apps.ini", "[Meta]\ncount=2\n[App1]\nlabel=Imported disabled app\nhotkey=\ndisabledHotkey=^!+F22\nmatch=ahk_exe fixture.exe\n[App2]\nlabel=Needs manual match\nhotkey=#f\nmatch=ahk_class Unknown"],
+        ["apps.ini", `[Meta]\ncount=3\n[App1]\nlabel=Imported disabled app\nhotkey=\ndisabledHotkey=^!+F22\nmatch=ahk_exe fixture.exe\n[App2]\nlabel=Needs manual match\nhotkey=#f\nmatch=ahk_group UndefinedGroup\n[App3]\nlabel=Owned title and class\nhotkey=^!+F24\nmatch=${marker}-0 ahk_class ${ownedWindow.className} ahk_exe ${fixture.executable} ahk_pid ${fixture.pid}`],
         ["settings.ini", "[Settings]\nholdDelayMs=850\nholdTileEnabled=1\nholdMode=radial"],
         ["workspaces.ini", "[Meta]\ncount=1\n[Profile1]\nid=legacy-id\nname=Imported workspace\nitemCount=2\n[Profile1Item1]\nprocessName=WindowsTerminal.exe\npath=C:\\WindowsApps\\Terminal.exe\ntitle=Development\nterminalCommand=wsl.exe -d \"Ubuntu\"\nprofileName=Dev\nx=100\ny=100\nw=600\nh=400\nmonitorIndex=1\n[Profile1Item2]\nprocessName=firefox.exe\npath=firefox.exe\ntitle=Research\nbrowserProfileName=Work\nbrowserUrlCount=2\nbrowserUrl1=https://example.test/one\nbrowserUrl2=https://example.test/two?a=1;b=2\nbrowserActiveTab=2\nx=150\ny=150\nw=700\nh=500\nmonitorIndex=1"]
     ].map(([name,text])=>{const file=path.join(output,name);fs.writeFileSync(file,Buffer.concat([Buffer.from([255,254]),Buffer.from(text,"utf16le")]));return file;});
@@ -409,19 +409,24 @@ try {
     const dom = await cdp("DOM.getDocument");
     const fileNode = await cdp("DOM.querySelector",{nodeId:dom.root.nodeId,selector:"#import-files"});
     await cdp("DOM.setFileInputFiles",{nodeId:fileNode.nodeId,files:importFiles});
-    await wait("document.querySelectorAll('#import-results article').length === 4", "INI file review");
+    await wait("document.querySelectorAll('#import-results article').length === 5", "INI file review");
     assert.deepEqual(await invoke("get_config"),beforeImport);
     assert.deepEqual(await invoke("get_workspaces"),store);
-    assert.ok((await evaluate("document.querySelector('#import-results').textContent")).includes("manual conversion"));
+    assert.ok((await evaluate("document.querySelector('#import-results').textContent")).includes("ahk_group"));
     await screenshot("import-review.png");
     await click("#apply-import");
     assert.deepEqual(await invoke("get_config"),beforeImport);
     await click("#save");
     await wait("document.querySelector('#message').textContent.startsWith('Saved.')", "imported shortcuts explicitly saved");
     const importedConfig = await invoke("get_config");
-    assert.equal(importedConfig.bindings.length,beforeImport.bindings.length+1);
-    assert.equal(importedConfig.bindings.at(-1).enabled,false);
-    assert.equal(importedConfig.bindings.at(-1).shortcut,"Ctrl+Alt+Shift+F22");
+    assert.equal(importedConfig.bindings.length,beforeImport.bindings.length+2);
+    assert.equal(importedConfig.bindings.at(-2).enabled,false);
+    assert.equal(importedConfig.bindings.at(-2).shortcut,"Ctrl+Alt+Shift+F22");
+    assert.equal(importedConfig.bindings.at(-1).windowsMatch.titleContains,marker+"-0");
+    assert.equal(importedConfig.bindings.at(-1).windowsMatch.className,ownedWindow.className);
+    assert.equal(importedConfig.bindings.at(-1).windowsMatch.executable,fixture.executable);
+    await evaluate("document.querySelector('.binding:last-child .windows-match-details').scrollIntoView({block:'center'})");
+    await screenshot("windows-match.png");
     assert.equal(importedConfig.settings.holdDelayMs,850);
     checks.push("native UTF-16 INI review preserves unsupported entries and disabled keys without saving until explicit Save");
     await click("#import-results article:last-child button");
@@ -513,6 +518,46 @@ try {
     if (monitorAreas.length < 2) skipped.push("Physical Windows multi-monitor push geometry requires a second display; one-monitor wrap and retile are verified");
 
     await invoke("set_enabled",{enabled:false});
+    const matchConfig = await invoke("get_config");
+    const typedConfig = structuredClone(matchConfig);
+    const typed = typedConfig.bindings.at(-1);
+    assert.equal(typed.label,"Owned title and class");
+    typed.mainMonitorAction="focus-last";
+    typedConfig.settings.holdMode="radial";
+    typedConfig.settings.holdDelayMs=400;
+    await invoke("save_config",{config:typedConfig});
+    await invoke("set_enabled",{enabled:true});
+    await native("press",{key:0x87,window:fixture.windows[1]});
+    await until(readOwned,w=>w.active,"typed title/class/path/PID pull chooses the owned first window");
+    await native("pointer",center);
+    await native("hold_start",{key:0x87,window:fixture.windows[1]});
+    const typedView = await radialOpen(1);
+    assert.deepEqual(typedView.labels,[marker+"-0"],"Picker must use the same conjunctive selector as tap");
+    await native("pointer",{x:center.x,y:center.y-90});
+    await until(()=>invoke("radial_view"),v=>v?.selected===0,"typed radial selects its only matching window");
+    await native("key_up");await radialClosed();
+    await until(readOwned,w=>w.active,"typed radial release selects the same owned window");
+    checks.push("imported title, class, executable path and PID match the same owned window for native tap and radial selection");
+    await invoke("set_enabled",{enabled:false});
+    typed.action="focus-app";
+    typed.windowsMatch.titleContains=(marker+"-0").toLowerCase();
+    await invoke("save_config",{config:typedConfig});
+    await invoke("set_enabled",{enabled:true});
+    await native("press",{key:0x87,window:fixture.windows[1]});
+    await wait("document.querySelector('#message').textContent.includes('No open window')","case-sensitive selector refuses a lowercase title");
+    assert.equal((await readSecond()).active,true);
+    checks.push("native Windows title matching preserves case and rejects a mismatched conjunction");
+    await invoke("set_enabled",{enabled:false});
+    typed.windowsMatch=null;
+    typed.appMatch=fixture.executable;
+    assert.ok((await invoke("get_windows")).filter(w=>w.path.toLowerCase()===fixture.executable.toLowerCase()).every(w=>[fixture.pid,launched[0].pid].includes(w.pid)&&w.title.startsWith(marker)),"Full-path test requires exclusively owned matching windows");
+    await invoke("save_config",{config:typedConfig});
+    await invoke("set_enabled",{enabled:true});
+    await native("press",{key:0x87,window:await native("app_window")});
+    await until(()=>invoke("get_windows"),ws=>ws.some(w=>w.title.startsWith(marker)&&w.active),"full executable path focuses an owned matching window");
+    checks.push("native full-path app identifiers work without requiring an advanced selector");
+    await invoke("set_enabled",{enabled:false});
+    await invoke("save_config",{config:matchConfig});
     const previousStore = await invoke("get_workspaces");
     const packaged = structuredClone(store.profiles[0]);
     packaged.id = "packaged-fixture"; packaged.name = "Packaged application fixture";

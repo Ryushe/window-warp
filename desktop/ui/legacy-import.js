@@ -57,6 +57,48 @@
         if (!/^-?\d+$/.test(value) || Number(value) < min || Number(value) > max) throw new Error(`Invalid ${field}: ${value || "missing"}.`);
         return Number(value);
     }
+    function windowsMatch(value) {
+        const criteria = {titleContains:"", className:"", executable:"", packagedAppId:"", processId:null, windowId:null, activeOnly:false};
+        if (value === "A") return {appMatch:"", windowsMatch:{...criteria, activeOnly:true}};
+        if (!value) throw new Error("An empty legacy window match needs manual review; no window criteria were saved.");
+        // AHK consumes exactly one separator before ahk_, leaving any additional
+        // whitespace in the preceding criterion. Whitespace after the keyword
+        // is optional. Do not trim title/class/executable criterion values.
+        const tokens = [...value.matchAll(/(^|[ \t])ahk_/gi)];
+        if (!tokens.length) return {appMatch:"", windowsMatch:{...criteria, titleContains:value}};
+        criteria.titleContains = value.slice(0, tokens[0].index);
+        const seen = new Set();
+        for (let i = 0; i < tokens.length; i++) {
+            const token = tokens[i];
+            const start = token.index + token[0].length;
+            const keyword = /^(class|pid|id|exe|group)/i.exec(value.slice(start));
+            if (!keyword) throw new Error(`Unknown AHK window criterion in “${value}”; review the original match.`);
+            const kind = keyword[1].toLowerCase();
+            if (kind === "group") throw new Error("AHK window groups depend on script-defined rules. Review the original group and enter its window criteria manually.");
+            if (seen.has(kind)) throw new Error(`Repeated ahk_${kind} criterion needs manual review; no criterion was discarded.`);
+            seen.add(kind);
+            const afterKeyword = start + keyword[0].length;
+            const contentStart = afterKeyword + /^[ \t]*/.exec(value.slice(afterKeyword))[0].length;
+            const content = value.slice(contentStart, tokens[i+1]?.index ?? value.length);
+            if (!content) throw new Error(`The ahk_${kind} criterion has no value.`);
+            if (kind === "class") criteria.className = content;
+            else if (kind === "exe") criteria.executable = content;
+            else {
+                if (!/^(?:0x[0-9a-f]+|[0-9]+)$/i.test(content)) throw new Error(`The ahk_${kind} criterion needs an unsigned decimal or hexadecimal integer.`);
+                const number = BigInt(content);
+                if (number > (kind === "pid" ? 4294967295n : 18446744073709551615n)) throw new Error(`The ahk_${kind} criterion is outside its supported integer range.`);
+                if (kind === "pid") criteria.processId = Number(number);
+                else criteria.windowId = number.toString();
+            }
+        }
+        // Keep the readable executable metadata, but retain a typed selector:
+        // imported AHK matches include owned/untitled windows, unlike the
+        // default native app identifier's normal-window scope.
+        if (seen.size === 1 && seen.has("exe") && !criteria.titleContains && criteria.executable === criteria.executable.trim()) {
+            return {appMatch:criteria.executable, windowsMatch:criteria};
+        }
+        return {appMatch:"", windowsMatch:criteria};
+    }
     function preview(text, {name = "INI", platform = "windows", monitors = [], uuid = () => crypto.randomUUID()} = {}) {
         const sections = ini(text);
         const entries = [];
@@ -101,18 +143,17 @@
                         const hotkey = read(s,"hotkey");
                         const key = shortcut(hotkey || read(s,"disabledHotkey"));
                         const match = read(s,"match");
-                        let appMatch = "", action;
+                        let appMatch = "", typedMatch, action;
                         if (prefix === "app") {
-                            const exe = /^ahk_exe\s+(.+)$/i.exec(match);
-                            if (!exe || /\bahk_(?:exe|class|pid|id|group)\b/i.test(exe[1])) throw new Error(`App match “${match}” needs manual conversion to an executable or KDE app identifier.`);
-                            appMatch = exe[1]; action = "pull-app";
-                            if (platform !== "windows") entry.notes.push(`Disabled for Linux review: replace Windows executable “${appMatch}” with the KDE resource class or desktop ID, then enable it.`);
+                            const parsed = windowsMatch(match);
+                            appMatch = parsed.appMatch; typedMatch = parsed.windowsMatch; action = "pull-app";
+                            if (platform !== "windows") entry.notes.push("Disabled for Linux review: turn off Windows matching criteria if present and enter the KDE resource class or desktop ID, then enable the shortcut.");
                         } else {
                             const id = read(s,"id").toLowerCase();
                             action = Object.hasOwn(shared, id) ? shared[id] : null;
                             if (!action) throw new Error(`Shared action “${read(s,"id") || read(s,"action")}” is not supported yet. Its original settings are retained here for manual review.`);
                         }
-                        return {label:entry.label, shortcut:key, action, appMatch,
+                        return {label:entry.label, shortcut:key, action, appMatch, ...(typedMatch ? {windowsMatch:typedMatch} : {}),
                             enabled:Boolean(hotkey) && (prefix !== "app" || platform === "windows"),
                             mainMonitorAction:read(s,"mainMonitorAction") || "burner", burnerLayout:read(s,"burnerLayout") || "float"};
                     });

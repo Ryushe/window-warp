@@ -8,7 +8,7 @@ const html = fs.readFileSync(new URL("../ui/index.html", import.meta.url), "utf8
 const source = fs.readFileSync(new URL("../ui/app.js", import.meta.url), "utf8");
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-async function editor({ failLoad = false, failSave = false, failEnable = false, failReassignment = false, platform = "windows" } = {}) {
+async function editor({ failLoad = false, failSave = false, failEnable = false, failReassignment = false, platform = "windows", bindings } = {}) {
     const { window, document } = parseHTML(html);
     // linkedom exposes select.value as a getter; browsers also provide a setter.
     Object.defineProperty(window.HTMLSelectElement.prototype, "value", {
@@ -20,7 +20,7 @@ async function editor({ failLoad = false, failSave = false, failEnable = false, 
             if (selected) selected.setAttribute("selected", "");
         }
     });
-    const config = { version: 1, bindings: [{ label: "Move right", shortcut: "Ctrl+Alt+Right", action: "push-right", appMatch: "" }] };
+    const config = { version: 1, bindings: bindings || [{ label: "Move right", shortcut: "Ctrl+Alt+Right", action: "push-right", appMatch: "" }] };
     const calls = [];
     const controlRequests = [];
     const listeners = new Map();
@@ -90,6 +90,103 @@ test("KDE editor offers the same hold settings as Windows", async () => {
     e.input("#hold-delay", "550");
     await e.click("#save");
     assert.equal(e.calls.find(c => c.command === "save_config").args.config.settings.holdDelayMs, 550);
+});
+
+const typedBinding = () => ({label:"Work editor",shortcut:"Ctrl+Alt+E",action:"pull-app",appMatch:"editor.exe",enabled:false,windowsMatch:{titleContains:"Work ",className:"EditorClass",executable:"editor.exe",packagedAppId:"",processId:42,windowId:"9007199254740993",activeOnly:false}});
+function check(e, selector, value, event="change") {
+    const input=e.document.querySelector(selector); input.checked=value; input.dispatchEvent(new e.window.Event(event));
+}
+test("Windows matching criteria save losslessly, participate in search and lock with shortcuts",async()=>{
+    const e=await editor({bindings:[typedBinding()]});
+    assert.equal(e.document.querySelector('.windows-match-enabled').checked,true);
+    assert.equal(e.document.querySelector('.match-field').hidden,true);
+    e.input('[data-windows-match="titleContains"]',"Other ");
+    e.input('[data-windows-match="className"]',"ExactClass");
+    e.input('[data-windows-match="executable"]',"C:\\Apps\\Editor.exe");
+    e.input('[data-windows-match="processId"]',"4294967295");
+    e.input('[data-windows-match="windowId"]',"0x20000000000001");
+    check(e,'[data-windows-match="activeOnly"]',true,"input");
+    assert.equal(e.document.querySelector('#toggle').disabled,true);
+    e.input('#search',"ExactClass"); assert.equal(e.document.querySelector('.binding').hidden,false);
+    e.input('#search',"not-present"); assert.equal(e.document.querySelector('.binding').hidden,true);
+    e.input('#search',"");
+    await e.click('#save');
+    const saved=e.calls.find(c=>c.command==="save_config").args.config.bindings[0];
+    assert.deepEqual(JSON.parse(JSON.stringify(saved.windowsMatch)),{titleContains:"Other ",className:"ExactClass",executable:"C:\\Apps\\Editor.exe",packagedAppId:"",processId:4294967295,windowId:"9007199254740993",activeOnly:true});
+    await e.click('#toggle');
+    for(const input of e.document.querySelectorAll('.windows-match-field input')) assert.equal(input.disabled,true);
+    e.listeners.get('warp-enabled')({payload:false});
+    assert.equal(e.document.querySelector('[data-windows-match="titleContains"]').disabled,false);
+    assert.equal(e.document.querySelector('[data-windows-match="titleContains"]').value,"Other ");
+});
+test("Windows criteria can be removed for Linux adaptation without losing the draft",async()=>{
+    const e=await editor({platform:"linux",bindings:[typedBinding()]});
+    assert.match(e.document.querySelector('.windows-match-hint').textContent,/Windows-only.*KDE/);
+    check(e,'.windows-match-enabled',false);
+    assert.equal(e.document.querySelector('.match-field').hidden,false);
+    e.input('[data-field="appMatch"]',"org.example.Editor");
+    await e.click('#save');
+    const saved=e.calls.find(c=>c.command==="save_config").args.config.bindings[0];
+    assert.equal(saved.windowsMatch,null); assert.equal(saved.appMatch,"org.example.Editor");
+    assert.equal(saved.enabled,false);
+});
+test("enabling advanced matching starts from the edited app identifier and preserves toggled criteria",async()=>{
+    const e=await editor({bindings:[{label:"App",shortcut:"Ctrl+Alt+E",action:"pull-app",appMatch:"old.exe"}]});
+    e.input('[data-field="appMatch"]',"new.exe");
+    check(e,'.windows-match-enabled',true);
+    assert.equal(e.document.querySelector('[data-windows-match="executable"]').value,"new.exe");
+    e.input('[data-windows-match="titleContains"]',"Work");
+    check(e,'.windows-match-enabled',false); check(e,'.windows-match-enabled',true);
+    assert.equal(e.document.querySelector('[data-windows-match="titleContains"]').value,"Work");
+    await e.click('#save');
+    assert.equal(e.calls.find(c=>c.command==="save_config").args.config.bindings[0].windowsMatch.executable,"new.exe");
+});
+test("enabling advanced matching preserves a packaged app ID while adding a title filter",async()=>{
+    const id="Contoso.Editor_abc!Editor";
+    const e=await editor({bindings:[{label:"Packaged editor",shortcut:"Ctrl+Alt+E",action:"pull-app",appMatch:id}]});
+    check(e,'.windows-match-enabled',true);
+    assert.equal(e.document.querySelector('[data-windows-match="executable"]').value,"");
+    assert.equal(e.document.querySelector('[data-windows-match="packagedAppId"]').value,id);
+    e.input('[data-windows-match="titleContains"]',"Work");
+    await e.click('#save');
+    const saved=e.calls.find(c=>c.command==="save_config").args.config.bindings[0];
+    assert.equal(saved.windowsMatch.packagedAppId,id);
+    assert.equal(saved.windowsMatch.executable,"");
+    assert.equal(saved.windowsMatch.titleContains,"Work");
+    assert.equal(saved.appMatch,id);
+});
+test("existing typed selectors do not inherit a packaged constraint from dormant appMatch metadata",async()=>{
+    const e=await editor({bindings:[{label:"Title",shortcut:"Ctrl+Alt+E",action:"pull-app",appMatch:"Contoso_abc!Editor",windowsMatch:{titleContains:"Work",className:"",executable:"",processId:null,windowId:null,activeOnly:false}}]});
+    assert.equal(e.document.querySelector('[data-windows-match="packagedAppId"]').value,"");
+    e.input('[data-field="label"]',"Edited title rule");
+    await e.click('#save');
+    assert.equal(e.calls.find(c=>c.command==="save_config").args.config.bindings[0].windowsMatch.packagedAppId,"");
+});
+test("current-app editing does not reuse a narrower typed binding through its dormant app identifier",async()=>{
+    const e=await editor({bindings:[typedBinding()]});
+    await e.control({action:"open-editor",window:{appId:"editor.exe"}});
+    assert.equal(e.document.querySelectorAll('.binding').length,2);
+    assert.equal(e.document.querySelector('.binding:first-child [data-windows-match="titleContains"]').value,"Work ");
+    assert.equal(e.document.querySelector('.binding:last-child .windows-match-enabled').checked,false);
+    await e.control({action:"open-editor",window:{appId:"EDITOR.EXE"}});
+    assert.equal(e.document.querySelectorAll('.binding').length,2);
+});
+test("current-app editing reuses a simple imported executable selector and preserves its settings",async()=>{
+    const binding=typedBinding();
+    binding.windowsMatch={titleContains:"",className:"",executable:"EDITOR.EXE",processId:null,windowId:null,activeOnly:false};
+    binding.appMatch="editor.exe";
+    const e=await editor({bindings:[binding]});
+    e.input('[data-field="label"]',"Unsaved imported edit");
+    await e.control({action:"open-editor",window:{appId:"Editor.exe",path:"C:\\Apps\\Editor.exe"}});
+    assert.equal(e.document.querySelectorAll('.binding').length,1);
+    assert.equal(e.document.querySelector('[data-field="label"]').value,"Unsaved imported edit");
+    assert.equal(e.document.querySelector('.windows-match-enabled').checked,true);
+    assert.equal(e.document.querySelector('[data-field="shortcut"]').value,"Ctrl+Alt+E");
+    assert.equal(e.calls.some(c=>c.command==="save_config"),false);
+    await e.click('#save');
+    const saved=e.calls.find(c=>c.command==="save_config").args.config.bindings[0];
+    assert.equal(saved.enabled,false);
+    assert.equal(saved.windowsMatch.executable,"EDITOR.EXE");
 });
 
 test("unsaved changes block activation; save and pause preserve editor state", async () => {

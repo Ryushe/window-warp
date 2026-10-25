@@ -9,6 +9,8 @@ pub struct Binding {
     pub action: String,
     #[serde(default)]
     pub app_match: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_match: Option<crate::window_match::WindowsMatch>,
     #[serde(default = "yes")]
     pub enabled: bool,
     #[serde(default = "burner")]
@@ -87,6 +89,7 @@ impl Default for Config {
                     shortcut: shortcut.to_string(),
                     action: action.to_string(),
                     app_match: String::new(),
+                    windows_match: None,
                     enabled: true,
                     main_monitor_action: burner(),
                     burner_layout: floating(),
@@ -174,10 +177,21 @@ impl Config {
             {
                 return Err(format!("Unknown action: {}", binding.action));
             }
+            if ["focus-app", "pull-app"].contains(&binding.action.as_str()) {
+                if let Some(selector) = &mut binding.windows_match {
+                    selector.validate()?;
+                    if !cfg!(windows) && binding.enabled {
+                        return Err("Windows window-match rules cannot be enabled on KDE. Turn off Windows matching and enter a KDE app identifier first.".into());
+                    }
+                }
+            }
             if ["focus-app", "pull-app"].contains(&binding.action.as_str())
-                && (binding.app_match.is_empty() || binding.app_match.len() > 256)
+                && binding.windows_match.is_none()
+                && (binding.app_match.is_empty()
+                    || binding.app_match.len() > 32768
+                    || binding.app_match.contains('\0'))
             {
-                return Err("App switching needs an executable name on Windows or a resource class on KDE (maximum 256 characters).".into());
+                return Err("App switching needs an executable name/path or packaged app ID on Windows, or a resource class/desktop ID on KDE.".into());
             }
             if !["burner", "focus-last"].contains(&binding.main_monitor_action.as_str())
                 || !["float", "tile-left", "tile-right", "fullscreen"]
@@ -296,6 +310,46 @@ mod tests {
         assert!(config.validate().is_err());
         config.version = 2;
         assert!(config.validate().is_err());
+    }
+    #[test]
+    fn windows_selectors_survive_disabled_import_and_require_platform_adaptation() {
+        let mut config = Config::default();
+        let b = &mut config.bindings[0];
+        b.action = "pull-app".into();
+        b.enabled = false;
+        b.windows_match = Some(crate::window_match::WindowsMatch {
+            class_name: "ExactClass".into(),
+            window_id: Some("0x12345678".into()),
+            ..Default::default()
+        });
+        config.validate().unwrap();
+        let serialized = serde_json::to_string(&config).unwrap();
+        let mut reread: Config = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(
+            reread.bindings[0]
+                .windows_match
+                .as_ref()
+                .unwrap()
+                .window_id
+                .as_deref(),
+            Some("305419896")
+        );
+        reread.bindings[0].enabled = true;
+        assert_eq!(reread.validate().is_ok(), cfg!(windows));
+        reread.bindings[0].windows_match = None;
+        reread.bindings[0].app_match = "org.kde.konsole".into();
+        assert!(reread.validate().is_ok());
+    }
+    #[test]
+    fn switching_to_a_non_app_action_does_not_validate_hidden_match_fields() {
+        let mut config = Config::default();
+        config.bindings[0].windows_match = Some(Default::default());
+        assert!(config.validate().is_ok());
+        config.bindings[0].action = "pull-app".into();
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .contains("at least one criterion"));
     }
 
     #[test]

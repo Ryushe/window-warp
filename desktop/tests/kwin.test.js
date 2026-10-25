@@ -39,6 +39,14 @@ function fixture(bindings, legacy = false, settings = {mainMonitor: 1, burnerMon
 const push = { label: "Push", shortcut: "Ctrl+Alt+Right", action: "push-right", appMatch: "" };
 const pull = { label: "Pull", shortcut: "Ctrl+Alt+Down", action: "pull", appMatch: "" };
 
+test("Windows selectors cannot fall back to a broader KDE app match",()=>{
+    const f=fixture([]);
+    const binding={label:"Windows import",shortcut:"Ctrl+Alt+J",action:"pull-app",appMatch:"firefox",windowsMatch:{className:"WindowsOnly"}};
+    assert.throws(()=>f.warp.run(binding),/Windows window-match/);
+    binding.action="focus-app";
+    assert.throws(()=>f.warp.run(binding),/Windows window-match/);
+});
+
 for (const legacy of [false,true]) test(`radial selection preserves the pre-picker active window on Plasma ${legacy ? 5 : 6}`, () => {
     const binding = {label:"App",shortcut:"Ctrl+Alt+J",action:"pull-app",appMatch:"firefox",mainMonitorAction:"burner",burnerLayout:"tile-right"};
     const settings = {mainMonitor:1,burnerMonitor:2};
