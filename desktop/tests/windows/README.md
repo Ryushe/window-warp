@@ -31,6 +31,8 @@ The test covers:
 - App-pull tap on release, including release of a modifier before the main key.
 - Hold tiling from the initial pointer position, repeat suppression, and no tap
   after hold; pausing and resuming before release cancels the pending gesture.
+- Distinct overlapping app chords: a second app can be tapped while the first
+  chord remains held, without cancelling its hold or retriggering it on release.
 - Radial window order, pointer selection on release, dead-zone cancellation, Escape, and pause/resume while held (four checks).
 - Saved delay and disable-hold settings; a disabled hold still taps on release.
 - Workspace capture/review with only owned windows selected and saved.
@@ -42,6 +44,9 @@ The test covers:
   expiry, deadline renewal and pause/resume cancellation. A single-monitor run
   verifies wrap-in-place; cross-monitor geometry is explicitly skipped without
   another connected display.
+- With two displays, all four burner layouts and return pulls preserve their
+  expected relative geometry and maximize state; return pulls center the pointer
+  on the main display. Single-display runs verify all four fallback layouts.
 
 `result.json` records checks, skips and errors. Screenshots, the isolated build
 configuration and build/app logs stay in the run directory. Existing startup

@@ -239,6 +239,69 @@ try {
     assert.equal((await readOwned()).active,true,"hold release must not also tap focus-last");
     checks.push("hold tiles once from the initial pointer position; repeats and release do not retrigger");
 
+    {
+        const previous = await invoke("get_config");
+        const overlap = structuredClone(previous);
+        overlap.settings.holdDelayMs = 1200;
+        overlap.settings.mainMonitor = ownedWindow.monitor;
+        const first = overlap.bindings.at(-1);
+        first.windowsMatch = {windowId:ownedWindow.id,processId:fixture.pid};
+        first.mainMonitorAction = "focus-last";
+        overlap.bindings.push({...structuredClone(first),label:"Owned overlapping app B",shortcut:"Ctrl+Alt+Shift+F24",
+            windowsMatch:{windowId:String(fixture.windows[1]),processId:fixture.pid}});
+        const secondInitial = {...initial,x:initial.x+40,y:initial.y+40};
+        const readPair = async () => {
+            const windows = await invoke("get_windows");
+            const pair = fixture.windows.map(id=>windows.find(w=>w.id===String(id)));
+            assert.ok(pair.every(w=>w?.pid===fixture.pid),"Overlapping app chords must target only the two original owned HWND/PID pairs");
+            return pair;
+        };
+        const errors = [];
+        try {
+            await invoke("set_enabled",{enabled:false});
+            await invoke("save_config",{config:overlap});
+            await invoke("set_enabled",{enabled:true});
+            await evaluate("(async()=>{window.__overlapErrors=[]; window.__overlapStop=await window.__TAURI__.event.listen('warp-error',e=>window.__overlapErrors.push(e.payload));})()");
+            await placeOwned();
+            await native("place",{window:fixture.windows[1],rect:secondInitial});
+            await native("pointer",{x:area.x+20,y:area.y+20});
+            await native("hold_start",{key:0x7d,window:fixture.windows[0]});
+            await sleep(80);
+            await native("held_tap",{key:0x87}); // B releases only F24; A and shared modifiers stay held.
+            const tapped = await until(readPair,([a,b])=>b.active&&!a.active,"overlapping B tap focuses its distinct owned target");
+            assert.deepEqual(tapped[0].rect,initial,"B must tap before A's hold fires");
+            assert.deepEqual(tapped[1].rect,secondInitial);
+            await until(readPair,([a,b])=>a.active&&!b.active&&Object.entries(tile).every(([key,value])=>a.rect[key]===value),
+                "releasing B leaves A pending until its own tile threshold");
+            await placeOwned();
+            await native("held_tap",{key:0x87});
+            await until(readPair,([a,b])=>b.active&&!a.active,"B can tap again while the consumed A hold remains down");
+            await native("repeat",{key:0x7d});
+            await sleep(overlap.settings.holdDelayMs+150);
+            const held = await readPair();
+            assert.deepEqual(held[0].rect,initial,"A repeat after B must not create another hold");
+            assert.deepEqual(held[1].rect,secondInitial,"B taps must not become delayed holds");
+            assert.equal(held[1].active,true,"A must not refocus after B's tap");
+            await native("key_up");
+            await sleep(150);
+            const released = await readPair();
+            assert.deepEqual(released[0].rect,initial);
+            assert.deepEqual(released[1].rect,secondInitial);
+            assert.equal(released[1].active,true,"A release must not issue a stale tap over B");
+            assert.deepEqual(await evaluate("window.__overlapErrors"),[]);
+            checks.push("native distinct overlapping app chords keep A's hold independent of B taps, ignore A repeats and prevent a stale release tap");
+        } catch (error) { errors.push(error); }
+        finally {
+            for (const cleanup of [()=>native("key_up"),()=>invoke("set_enabled",{enabled:false}),
+                ()=>invoke("save_config",{config:previous}),()=>invoke("set_enabled",{enabled:true}),
+                ()=>evaluate("if(window.__overlapStop){window.__overlapStop();delete window.__overlapStop;}")]) {
+                try { await cleanup(); } catch (error) { errors.push(error); }
+            }
+        }
+        if (errors.length) throw new AggregateError(errors,"Overlapping native app chord acceptance or cleanup failed:\n"+errors.map(error=>String(error.stack || error)).join("\n"));
+        await placeOwned();
+    }
+
     await native("hold_start",{key:0x7d});
     await sleep(80);
     await native("held_tap",{key:0x81}); await paused(true);
@@ -520,7 +583,7 @@ try {
         await invoke("set_enabled",{enabled:false});
         await invoke("save_config",{config:pointerConfig});
     }
-    if (monitorAreas.length < 2) skipped.push("Physical Windows multi-monitor push geometry requires a second display; one-monitor wrap and retile are verified");
+    if (monitorAreas.length < 2) skipped.push("Physical Windows multi-monitor push and burner geometry require a second display; one-monitor wrap and retile are verified");
 
     await invoke("set_enabled",{enabled:false});
     const matchConfig = await invoke("get_config");
@@ -655,6 +718,71 @@ try {
         }
         assert.deepEqual(await evaluate("window.__warpActionErrors"),[]);
         checks.push("all burner layouts retain the active window on a single-monitor desktop");
+    } else {
+        actionBinding.mainMonitorAction = "burner";
+        actionConfig.settings.mainMonitor = ownedWindow.monitor;
+        const burnerIndex = monitorAreas.findIndex((_,index)=>index+1!==ownedWindow.monitor);
+        actionConfig.settings.burnerMonitor = burnerIndex+1;
+        const burnerArea = monitorAreas[burnerIndex];
+        const sameRect = (left,right) => Object.keys(right).every(key=>left[key]===right[key]);
+        const round = value => value<0 ? -Math.round(-value) : Math.round(value);
+        // A pull from the burner scales its current placement back to main;
+        // it does not recover the rectangle from before a burner tile.
+        const relativeRect = (rect,source,target) => {
+            const width = Math.max(1,Math.min(target.width,round(rect.width/source.width*target.width)));
+            const height = Math.max(1,Math.min(target.height,round(rect.height/source.height*target.height)));
+            return {x:Math.max(target.x,Math.min(target.x+target.width-width,target.x+round((rect.x-source.x)/source.width*target.width))),
+                y:Math.max(target.y,Math.min(target.y+target.height-height,target.y+round((rect.y-source.y)/source.height*target.height))),width,height};
+        };
+        const coversArea = (rect,target) => rect.x<=target.x && rect.y<=target.y
+            && rect.x+rect.width>=target.x+target.width && rect.y+rect.height>=target.y+target.height;
+        const readBurnerTarget = async () => {
+            const window = await readOwned();
+            assert.ok(window && window.id===ownedWindow.id && window.pid===fixture.pid,"Burner target must retain the fixture HWND/PID");
+            return window;
+        };
+        await evaluate("window.__warpActionErrors=[]; window.__TAURI__.event.listen('warp-error',e=>window.__warpActionErrors.push(e.payload))");
+        for (const [layout,startMaximized] of [["float",false],["float",true],["tile-left",true],["tile-right",true],["fullscreen",false]]) {
+            await placeOwned();
+            await until(readBurnerTarget,w=>w.monitor===ownedWindow.monitor && !isMaximized(w) && sameRect(w.rect,initial),"burner starts from the owned main-monitor rectangle");
+            if (startMaximized) {
+                await selectAction("toggle-maximize");
+                await actionPress(fixture.windows[0]);
+                await until(readBurnerTarget,isMaximized,"maximize the owned burner source");
+            }
+            actionBinding.burnerLayout = layout;
+            await selectAction("pull-app");
+            await actionPress(fixture.windows[1]);
+            const source = await until(readBurnerTarget,w=>w.active && w.monitor===ownedWindow.monitor,"first burner tap focuses the owned target on main");
+            assert.equal(isMaximized(source),startMaximized,"The first tap must preserve the source maximize state");
+            assert.deepEqual(source.workArea,monitorAreas[ownedWindow.monitor-1]);
+            const half = Math.floor(burnerArea.width/2);
+            const expected = layout==="tile-left" ? {...burnerArea,width:half}
+                : layout==="tile-right" ? {...burnerArea,x:burnerArea.x+half,width:burnerArea.width-half}
+                : relativeRect(source.rect,source.workArea,burnerArea);
+            const expectMaximized = layout==="fullscreen" || (layout==="float" && startMaximized);
+            await actionPress(fixture.windows[0]);
+            const sent = await until(readBurnerTarget,w=>w.active && w.monitor===burnerIndex+1
+                && isMaximized(w)===expectMaximized && (expectMaximized ? coversArea(w.rect,burnerArea) : sameRect(w.rect,expected)),
+                `${layout} burner placement${startMaximized ? " from maximized" : ""}`);
+            assert.deepEqual(sent.workArea,burnerArea);
+            assert.equal(sent.minimized,false);
+            if (!expectMaximized) assert.deepEqual(sent.rect,expected);
+            // Maximized Win32 frames include non-client borders outside the
+            // work area; maximize state plus coverage avoids assuming a DPI.
+            const returnedRect = relativeRect(sent.rect,burnerArea,source.workArea);
+            await native("pointer",{x:burnerArea.x+25,y:burnerArea.y+25});
+            await actionPress(fixture.windows[0]);
+            const returned = await until(readBurnerTarget,w=>w.active && w.monitor===ownedWindow.monitor
+                && isMaximized(w)===expectMaximized && (expectMaximized ? coversArea(w.rect,source.workArea) : sameRect(w.rect,returnedRect)),
+                `${layout} burner return pull preserves current relative geometry and maximize state`);
+            assert.deepEqual(returned.workArea,source.workArea);
+            await until(()=>native("pointer_position"),p=>p.x===round(source.workArea.x+source.workArea.width/2)
+                && p.y===round(source.workArea.y+source.workArea.height/2),"burner return pull centers the pointer on main");
+            checks.push(`native two-monitor ${layout} burner${startMaximized ? " from maximized" : ""} and return pull preserve expected geometry and maximize state`);
+        }
+        assert.deepEqual(await evaluate("window.__warpActionErrors"),[]);
+        await placeOwned();
     }
     const closeWindow = await native("close_fixture");
     await selectAction("close-window");

@@ -77,7 +77,7 @@ For app identifiers, use the exact resource class or desktop file ID. KWin's win
 
 ## Scope and verification
 
-The full feature port is in progress; [PARITY.md](PARITY.md) tracks the source-derived requirements and verification gaps. Reviewed INI import, pointer centering and timed X/C retiling are implemented. The radial picker passes native Windows/KDE selection, Escape and focus-loss cancellation checks. Tap/hold tiling is implemented on Windows and KDE; see the checklist for native coverage and remaining gesture cases. Terminal capture and new-window restoration have passed native cmd, WSL, and Konsole fixtures; additional profile variants remain to be verified. Workspace capture/reuse/launch, per-axis maximization/fullscreen, and Firefox tab restoration have passed native KDE tests. Startup registration passes native Windows and KDE toggle tests; actual login launches still need validation. Live Windows Firefox, mixed-DPI displays, desktop-imposed minimum sizes, and elevated Windows applications also need coverage. Existing Windows preview installers predate these ongoing changes.
+The full feature port is in progress; [PARITY.md](PARITY.md) tracks the source-derived requirements and verification gaps. Reviewed INI import, pointer centering and timed X/C retiling are implemented. The radial picker passes native Windows/KDE selection, Escape and focus-loss cancellation checks. Tap/hold tiling is implemented on Windows and KDE; see the checklist for native coverage and remaining gesture cases. Terminal capture and new-window restoration have passed native cmd, WSL, PowerShell, portable custom-profile Windows Terminal, and Konsole fixtures; shared-process/multi-tab identity remains limited. Workspace capture/reuse/launch, per-axis maximization/fullscreen, and Firefox tab restoration have passed native KDE tests. Startup registration passes native Windows and KDE toggle tests; actual login launches still need validation. Explicit-profile Windows and KDE Firefox capture/restore pass. Mixed-DPI displays, desktop-imposed minimum sizes, and elevated Windows applications still need coverage.
 
 ```sh
 npm test
@@ -86,6 +86,8 @@ cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
 Node tests execute the actual KWin script against simulated Plasma 5/6 workspaces to check placement, monitor removal, closed windows, app cycling, and tiling. Editor tests run the UI against a simulated native bridge and cover save failures, registration errors, and preserving edits. Rust tests cover configuration validation, placement math, and native Windows positioning on a hidden test window. The opt-in [native Windows fixture](tests/windows/README.md) exercises the actual app with OS keyboard input, conflict recovery, the editor, workspace capture/launch, startup registration and single-instance behavior using isolated app/browser data.
+
+On tested Plasma 5.27 Wayland, pressing another app shortcut ends the first shortcut’s hold tracking early. Independent overlapping app chords pass on Windows but remain a KDE parity gap; the opt-in native regression and signal evidence are recorded in [PARITY.md](PARITY.md).
 
 Live Wayland tests verify the integration on Plasma 5.27, including a separate two-output KWin session for monitor push/pull and maximized/fullscreen tiling. The compiled Linux app also passed native UI checks for rendering, saving settings, enabling, and pausing. Windows x64 and Ubuntu 24.04 amd64 builds produced an NSIS installer and Debian package. See [live KDE validation](tests/kde/README.md) for reproducible commands and coverage limits. Live Plasma 6 testing is still pending.
 
@@ -149,3 +151,16 @@ Unsupported shared actions (including move-and-center), compound AHK match
 expressions and unrecognized key syntax remain visible with the original
 settings and an explanation. They are not silently converted. Full migration
 parity still depends on the remaining action and packaged-launch features.
+
+
+## Current preview artifacts (2026-10-25)
+
+The current feature-branch builds are available locally after validation:
+
+- Windows x64 NSIS: `src-tauri/target/release/bundle/nsis/Window Warp_0.1.0_x64-setup.exe`
+- Ubuntu24.04-compatible amd64 Debian package: `src-tauri/target/release/bundle/deb/Window Warp_0.1.0_amd64.deb`
+
+Their embedded executables and package metadata were inspected without installing
+them. The preview includes the recent terminal, Firefox, tiling and gesture
+changes. Full parity, actual installer behavior and graceful tray shutdown remain
+under validation; see PARITY.md, especially the KDE overlapping-shortcut limit.

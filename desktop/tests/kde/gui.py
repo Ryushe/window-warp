@@ -24,6 +24,8 @@ if "--pointer" in sys.argv and "--pointer-denied" in sys.argv:
     raise ValueError("Pointer authorization and refusal require separate compositor sessions")
 if "--firefox-tiles" in sys.argv and "--firefox" not in sys.argv:
     raise ValueError("Firefox tile acceptance requires --firefox")
+if "--overlap" in sys.argv and "--firefox-tiles" not in sys.argv:
+    raise ValueError("Overlapping shortcut acceptance requires --firefox-tiles")
 
 
 def kwin_loaded(name="window-warp-session"):
@@ -934,8 +936,9 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                     invoke("save_config", {"config":tile_config})
                     invoke("set_enabled", {"enabled":True})
 
-                def prepare_browser(fullscreen):
-                    desired.update(maximizedHorizontal=not fullscreen,maximizedVertical=not fullscreen,fullscreen=fullscreen,minimized=False)
+                def prepare_browser(fullscreen, maximized=True):
+                    maximized = maximized and not fullscreen
+                    desired.update(maximizedHorizontal=maximized,maximizedVertical=maximized,fullscreen=fullscreen,minimized=False)
                     invoke("save_workspaces", {"store":{"version":1,"profiles":[tile_profile]}})
                     result = invoke("restore_workspace", {"id":tile_profile["id"]})
                     assert result[0]["restored"] and not result[0]["launched"], result
@@ -946,7 +949,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                     for _ in range(len(matches)+1):
                         if browser_window()["active"]: break
                         invoke_shortcut("focus-app")
-                    return wait_browser(lambda w:w["active"] and w["fullscreen"] == fullscreen and (fullscreen or (w["maximizedHorizontal"] and w["maximizedVertical"])),"prepare owned Firefox state")
+                    return wait_browser(lambda w:w["active"] and w["fullscreen"] == fullscreen and (fullscreen or (w["maximizedHorizontal"] == maximized and w["maximizedVertical"] == maximized)),"prepare owned Firefox state")
 
                 def tile_rect(area, direction):
                     result = area.copy()
@@ -975,6 +978,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                     settled = browser_window()
                     assert settled["rect"] == expected and not any(settled[k] for k in ["fullscreen","maximizedHorizontal","maximizedVertical"]), "late client configure replaced the tile or state"
 
+                overlap_monitor = None
                 try:
                     configure_tiles()
                     for fullscreen in [False,True]:
@@ -1013,6 +1017,21 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                         delayed_action(tap)
                         wait_browser(lambda w:w["monitor"] != original["monitor"] and not w["fullscreen"] and w["maximizedHorizontal"] and w["maximizedVertical"],"delayed fullscreen exit before maximized burner")
                         report["checks"].append("native Firefox maximized burner waits for fullscreen exit on its destination output")
+                        app_binding["burnerLayout"] = "float"
+                        configure_tiles()
+                        for maximized in [False,True]:
+                            original = prepare_browser(False,maximized)
+                            delayed_action(tap)
+                            moved = wait_browser(lambda w:w["monitor"] != original["monitor"] and w["active"] and not w["fullscreen"] and w["maximizedHorizontal"] == maximized and w["maximizedVertical"] == maximized,"floating burner preserves window state")
+                            # This compositor uses equal-sized outputs: relative
+                            # placement must preserve size and work-area offsets.
+                            source,destination = original["workArea"],moved["workArea"]
+                            assert (source["width"],source["height"]) == (destination["width"],destination["height"])
+                            expected = dict(original["rect"],x=original["rect"]["x"]+destination["x"]-source["x"],y=original["rect"]["y"]+destination["y"]-source["y"])
+                            wait_browser(lambda w:w["rect"] == expected,"floating burner preserves relative geometry")
+                            delayed_action(tap)
+                            wait_browser(lambda w:w["monitor"] == original["monitor"] and w["active"] and w["rect"] == original["rect"] and not w["fullscreen"] and w["maximizedHorizontal"] == maximized and w["maximizedVertical"] == maximized,"app pull returns floating burner geometry and state")
+                            report["checks"].append(f"native Firefox floating burner round trip preserves geometry and maximized={maximized} on two outputs")
                         original = prepare_browser(False)
                         invoke_shortcut("push-right")
                         moved = wait_browser(lambda w:w["monitor"] != original["monitor"],"push Firefox before retile")
@@ -1026,7 +1045,104 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                         delayed_action(retile)
                         assert_tile(tile_rect(moved["workArea"],"tile-left"),"delayed Firefox one-shot retile")
                         report["checks"].append("native Firefox one-shot X retile survives delayed unmaximize after push")
+                        if "--overlap" in sys.argv:
+                            # Fresh keys have no focus-last history from earlier
+                            # checks. Both bindings target the same owned browser:
+                            # an actual short tap leaves its geometry unchanged.
+                            tile_config["bindings"].remove(app_binding)
+                            tile_config["bindings"].extend(dict(app_binding, label=f"Overlap {key}",
+                                shortcut=f"Ctrl+Alt+Shift+{key}", mainMonitorAction="focus-last") for key in ["K","L"])
+                            tile_config["settings"].update(holdDelayMs=600,holdTileEnabled=True,holdMode="tile")
+                            configure_tiles()
+                            with (output / "overlap-shortcut-signals.log").open("w") as signal_log:
+                                overlap_monitor = subprocess.Popen(["dbus-monitor","--session",
+                                    "type='signal',interface='org.kde.kglobalaccel.Component'"], stdout=signal_log,stderr=signal_log)
+                            # First prove each key can independently survive the
+                            # same stopped-client delay. Signal timestamps then
+                            # distinguish key registration/activation failures
+                            # from the provider releasing A when B is pressed.
+                            for key in [37,38]:
+                                original = prepare_browser(False)
+                                area = original["workArea"]
+                                keys.pointer(area["x"]+20,area["y"]+area["height"]//2)
+                                assert browser_fixture.poll() is None and os.getpgid(browser_fixture.pid) == browser_fixture.pid
+                                os.killpg(browser_fixture.pid,signal.SIGSTOP)
+                                try:
+                                    for code in [29,56,42,key]: keys.key(code,True)
+                                    time.sleep(1.4)
+                                finally:
+                                    os.killpg(browser_fixture.pid,signal.SIGCONT)
+                                try:
+                                    assert_tile(tile_rect(area,"tile-left"),f"solo delayed app hold evdev={key}")
+                                finally:
+                                    keys.release()
+                                report["checks"].append(f"overlap preflight: solo evdev {key} hold tiles after delayed Firefox acknowledgment")
+                            overlap_cases = []
+                            # The gesture slots are a HashMap. Reverse which key
+                            # blocks without reconfiguring so each slot order is
+                            # exercised in this same running controller.
+                            for first_key,second_key in [(37,38),(38,37)]:
+                                original = prepare_browser(False)
+                                area = original["workArea"]
+                                assert area["width"] >= area["height"], "Overlap fixture requires a landscape output"
+                                expected = tile_rect(area,"tile-left")
+                                forbidden = tile_rect(area,"tile-right")
+                                case = dict(firstKey=first_key,secondKey=second_key,expected=expected,forbidden=forbidden,timing={},observed=[])
+                                assert browser_fixture.poll() is None and os.getpgid(browser_fixture.pid) == browser_fixture.pid
+                                keys.pointer(area["x"]+20,area["y"]+area["height"]//2)
+                                os.killpg(browser_fixture.pid,signal.SIGSTOP)
+                                try:
+                                    for code in [29,56,42]: keys.key(code,True)
+                                    started = time.monotonic()
+                                    keys.key(first_key,True)
+                                    case["timing"]["firstDown"] = time.monotonic()-started
+                                    time.sleep(max(0,started+0.45-time.monotonic()))
+                                    keys.pointer(area["x"]+area["width"]-20,area["y"]+area["height"]//2)
+                                    keys.key(second_key,True)
+                                    case["timing"]["secondDown"] = time.monotonic()-started
+                                    time.sleep(max(0,started+0.75-time.monotonic()))
+                                    # Keep the first key and every modifier down.
+                                    # This release must arrive while the first
+                                    # action waits for Firefox's unmaximize ack.
+                                    keys.key(second_key,False)
+                                    case["timing"]["secondUp"] = time.monotonic()-started
+                                    time.sleep(max(0,started+1.4-time.monotonic()))
+                                finally:
+                                    os.killpg(browser_fixture.pid,signal.SIGCONT)
+                                try:
+                                    case["timing"]["resumed"] = time.monotonic()-started
+                                    assert 0 < case["timing"]["secondUp"]-case["timing"]["secondDown"] < 0.6, case
+                                    assert case["timing"]["secondUp"] > case["timing"]["firstDown"]+0.6, case
+                                    # Observe through the queued operation and
+                                    # final key release; a transient second tile
+                                    # is a failure even if later geometry changes.
+                                    released = False
+                                    deadline = time.monotonic()+2.5
+                                    while time.monotonic()<deadline:
+                                        current = browser_window()
+                                        observation = {key:current[key] for key in ["rect","fullscreen","maximizedHorizontal","maximizedVertical"]}
+                                        if not case["observed"] or case["observed"][-1] != observation:
+                                            case["observed"].append(observation)
+                                        if not released and time.monotonic() >= started+2.0:
+                                            keys.release()
+                                            released = True
+                                            case["timing"]["allReleased"] = time.monotonic()-started
+                                        time.sleep(0.05)
+                                finally:
+                                    keys.release()
+                                overlap_cases.append(case)
+                                (output / "firefox-overlap.json").write_text(json.dumps(overlap_cases,indent=2))
+                            for case in overlap_cases:
+                                assert not any(w["rect"] == case["forbidden"] for w in case["observed"]), f"Short overlapping tap became a hold tile: {case}"
+                                final = case["observed"][-1]
+                                assert final["rect"] == case["expected"] and not any(final[key] for key in ["fullscreen","maximizedHorizontal","maximizedVertical"]), f"First overlapping hold did not settle left: {case}"
+                            report["checks"].append("overlapping distinct app chords keep short taps untiled while another hold waits for Firefox acknowledgment, in both slot orders")
                 finally:
+                    if overlap_monitor is not None:
+                        if overlap_monitor.poll() is None: overlap_monitor.terminate()
+                        try: overlap_monitor.wait(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            overlap_monitor.kill(); overlap_monitor.wait(timeout=3)
                     if browser_fixture.poll() is None: os.killpg(browser_fixture.pid,signal.SIGCONT)
                     invoke("set_enabled", {"enabled":False})
                     invoke("save_config", {"config":saved_config})

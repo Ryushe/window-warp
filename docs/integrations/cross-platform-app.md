@@ -1572,3 +1572,91 @@ Verified terminal implementation checkpoint:
 `b359d6532fc4c31172ffc80e8131ef8d2dbed54f` on `codex/cross-platform-app`.
 This follow-up records its immutable SHA. Resume burner/chord and remaining app-
 launch cases; preserve all PARITY.md requirements and terminal coverage limits.
+
+
+## Burner/chord acceptance and refreshed preview artifacts (2026-10-25)
+
+Branch/base/target ownership unchanged: codex/cross-platform-app owns the desktop
+implementation; main has none. No descendant propagation, integration, merge or
+push. Runtime source is unchanged from the terminal checkpoint b359d653; this
+increment adds native acceptance, documents a confirmed platform gap, and builds
+fresh preview artifacts. No identifiers/schema/API contracts changed.
+
+Parent owns KDE floating burner checks, native execution, artifact build/inspection
+and canonical documentation. Reopened child /root/packaged_native authored
+Windows two-monitor burner and overlapping-chord checks in native.mjs;
+/root/retile_review authored the KDE --overlap regression and diagnostics. Both
+are native reopenable children in this chat. Hoster cleanup child inspected2
+unregistered live scopes, retained2/stopped0; no manual intervention.
+
+Evidence and exact scope:
+- Windows burner run WARP-NATIVE-2aa8b783-001d-48fd-aeed-74ccbcc573ba:49 pass,
+  no skips. Final overlap run WARP-NATIVE-d780f559-8eea-4acd-a0d9-d42d456683a6:
+  50 pass, no skips. Two physical displays, all four layouts, normal/maximized
+  sources, return pulls and pointer centering. A/B chords use exact fixture
+  HWND/PID selectors and shared injected modifiers. B taps leave A's hold intact;
+  A repeats and release do not issue another action. Normal debug builds restored.
+  Logs target/burner-windows-native.log and target/overlap-windows-native.log.
+  These general runs omit optional Firefox acceptance (prior receipt remains).
+- KDE unit portafort-warp-gui-20261025-burner: inactive/exit0,27 native checks
+  in private two-output Plasma5.27 compositor, delayed Firefox floating burner
+  round trips preserving normal/maximized geometry. Binary is preceding Firefox
+  runtime; later terminal production changes are Windows-only. Receipts under
+  desktop/src-tauri/target/kde-validation/burner/.
+- KDE --firefox --firefox-tiles --overlap remains RED. Units
+  portafort-warp-gui-20261025-overlap-before and
+  portafort-warp-gui-20261025-overlap-signals failed/exit1. Final signal run
+  passes solo delayed K/L holds, then fails independent overlap in both orders.
+  Private bus receipt: K pressed1792949084.481687; K released84.932978 immediately
+  before L pressed84.933054, while fixture keeps K down until roughly86.52.
+  Reverse order behaves identically. No later physical-release signal arrives
+  for displaced action. Receipts in target/kde-validation/overlap-{before,signals}/.
+  This proves early hold termination, not the initially suspected stale-timer
+  misclassification. No speculative observed_at scheduler change was applied.
+  Keep the opt-in regression failing; do not count its preconditions as full pass.
+- Solo controls, temporary signal monitor and Firefox group remain private to
+  the fixture; cleanup resumes stopped browser processes and releases all owned
+  keys. No normal user session activated.
+- Node dependency drift screen resolved installed versions against manifest:
+  @tauri-apps/cli2.12.4 and linkedom0.18.14; no dependency changes. JS/Python syntax
+  and diff whitespace checks pass. No runtime-source change requires rerunning
+  unchanged Rust/Node suites; prior terminal checkpoint has68 WindowsRust,
+  62 LinuxRust and129Node passes.
+
+Preview delivery evidence (build source HEAD0c5e22a2bdba773bc0482b846b146d6f0f19c6ed):
+- Windows npm run build -- --bundles nsis --ci -- --offline succeeded in2m26s
+  with CARGO_INCREMENTAL=0/CARGO_BUILD_JOBS=1. Log target/burner-release-windows.log.
+  NSIS target/release/bundle/nsis/Window Warp_0.1.0_x64-setup.exe,2346330bytes,
+  SHA256113a23bd2f33adafd921a11fa5929f8cc3267efcf78bdd2444a3a45a4407bd06.
+  Static7-Zip extraction to target/package-validation/burner-20261025/ proves
+  x64 PE/version0.1.0 and payload equivalence after normalizing only3 bytes
+  UNK→NSS at8206658. Windows-inspection.json preserves both hashes and metadata.
+- Debian package from hoster-warp-build-20261025-terminal-variants copied to
+  local target/release/bundle/deb/Window Warp_0.1.0_amd64.deb,5020860bytes,
+  SHA2564c25924ba514883dd031bb5f099a5ec79305791c5151f2d6248aa48433957dab.
+  Embedded17822864-byte ELF differs from release only3 bytes UNK→DEB at2153101.
+  Executable0755, icon, absolute /usr/bin/window-warp desktop Exec and
+  X-KDE-Wayland-Interfaces=org_kde_kwin_fake_input verified. Receipts alongside
+  package: inspection.log and binary-inspection.json. Dependencies currently
+  list WebKitGTK/GTK/appindicator; qdbus remains documented external prerequisite.
+- Tauri bundle-tag behavior verified from local tauri-utils2.10.2 platform.rs
+  lines352–368; these payload differences are intentional, not corruption.
+  Nothing was installed or normally activated. Static extraction is not evidence
+  for installer execution, uninstall, WebView2 bootstrap, shortcut placement or login.
+
+Next: native Plasma6 overlap/API acceptance, true tray/graceful exit and installed
+package behavior, package qdbus dependency handling; then remaining packaged/D-Bus
+launch and terminal/default-browser identity cases in PARITY.md. Child packaging
+review found current forced-cleanup tests do not prove graceful quit: Windows
+finally taskkills the app, KDE finally manually unloads scripts. Test real tray
+route before those fallback cleanups; do not introduce a quit IPC just to pass.
+Keep the full goal active and all existing physical-display/login gates. Remote
+Git refresh is still required before any integration; no integration attempted.
+
+Peer review closed without actionable findings: /root/retile_review independently
+reviewed Windows tests and evidence wording; /root/packaged_native reviewed KDE
+ownership, cleanup and failing assertions. Both packets terminal. KDE floating
+coverage uses equal-sized outputs; overlap uses two chords targeting one owned
+browser and geometry sampling at50ms plus IPC latency. These do not establish
+mixed-DPI behavior or absence of unobserved sub-sample transitions. Final JS/
+Python syntax and git diff --check passed. Parent retains all integration ownership.

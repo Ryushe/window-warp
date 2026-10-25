@@ -52,13 +52,21 @@ titles checks profile isolation. Only the fixture browser process groups are
 terminated afterward; existing browser profiles are not changed.
 
 Add `--firefox-tiles` to exercise four-way tiling from maximized/fullscreen
-windows, held mouse tiling, tiled and maximized burner layouts, and one-shot
+windows, held mouse tiling, all burner layouts, and one-shot
 post-push retiling. This option requires `--firefox` and the isolated compositor.
 It delays Firefox's window acknowledgments by stopping only its newly created
 private-profile process group for 300 ms, always resuming it in `finally`.
 Each tile must retain its requested geometry and floating state after settling.
 Workspace fullscreen restoration and fullscreen-to-maximized transitions are
 also checked against their requested state.
+Floating burner round trips preserve geometry and maximization on both outputs.
+
+Add `--overlap` with `--firefox --firefox-tiles` to hold one app chord while
+tapping a distinct chord with the same modifiers. The owned Firefox process
+group pauses for 1.4 seconds so the first hold must wait for its window update.
+The second chord releases before its hold deadline and must not become a tile.
+Both key orders run in the same controller; `firefox-overlap.json` records the
+injected timing and observed geometry. Firefox resumes and keys release on exit.
 
 The Firefox option records `firefox-restore-observations.json` with the last ten
 distinct capture states for its owned browser window. It waits for URL and active

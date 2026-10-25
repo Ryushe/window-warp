@@ -3,7 +3,7 @@
 The goal is parity with the behavior in the original source, on Windows and KDE.
 This checklist is a completion gate, not a reduction of scope. A feature is only
 verified when its behavior, persistence, editor, and applicable platform paths
-have been exercised. Existing preview installers do not contain ongoing work.
+have been exercised. Bundles are rebuilt at the checkpoints below; installer execution and full parity remain pending.
 
 | Requirement / authoritative source | State | Evidence needed |
 | --- | --- | --- |
@@ -11,9 +11,9 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | Push and center pointer; pull centers primary; 1-second X/C retiling | Partial | Native Windows and KDE retile chords, one-use consumption, expiry, renewal and pause cancellation pass; Windows one-display wrap/centering and KDE two-output centering pass; KDE permission refusal and X11 movement pass; Windows two-display push/centering/retile now passes; mixed-DPI and live Plasma6 acceptance remain |
 | Four-way tiling; portrait mouse-aware tile choice | Partial | Four-way implemented; 18 live KDE checks cover vertical tiling; Windows mouse hold tiles natively and portrait/midpoint geometry has regression coverage; KDE native hold verifies key-down pointer choice; physical portrait acceptance remains |
 | Maximize/restore toggle (original “fullscreen”); graceful close | Partial | Saved floating geometry survives maximized moves and history pull on Windows and KDE; KDE rapid double-toggle and same-script maximize/burner ordering pass, including real Portafort 5.27.11; Windows close honors an application's veto; KDE registration reload retains caches and shortcut/workspace actions share the persistent geometry queue; delayed Firefox tiling/fullscreen transitions pass; real Plasma 6 acceptance remains |
-| App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Tiled burner round trip live KDE verified; Windows native pull and all four one-monitor burner fallbacks pass; KDE left/right tiled and maximized burner layouts pass with delayed Firefox; floating burner and physical Windows two-monitor checks remain |
+| App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Tiled burner round trip live KDE verified; Windows native pull and all four one-monitor burner fallbacks pass; KDE all burner layouts pass with delayed Firefox, including floating/maximized round trips; Windows all layouts and return pulls pass on two physical monitors; live Plasma 6 and mixed-DPI layouts remain |
 | App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE and Windows focus-last/minimized checks pass, including previous-focus retention across pause/configuration reload; Windows pull/focus restore minimized floating geometry; compound title/class/executable/PID matching, full-path focus and tap/radial consistency pass; real Plasma 6 acceptance remains |
-| Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE native key delivery verifies tap, hold, repeats, pause cancellation and disabled hold; resume before key release and reassignment while held now pass; overlapping distinct chords and live Plasma 6 remain |
+| Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE native key delivery verifies tap, hold, repeats, pause cancellation and disabled hold; resume before key release and reassignment while held now pass; Windows distinct overlapping chords pass; tested Plasma 5.27 ends the first shortcut when another activates, so independent overlapping holds fail; live Plasma 6 remains |
 | Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows and KDE native selection/dead-zone/Escape/pause checks pass; focus loss cancels before release, including Windows Alt+Escape; shared eight-slot layout/order tested; physical portrait/mixed-DPI and Plasma 6 acceptance remain |
 | Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed reassignment tested; native KDE current-app capture and physical-key reassignment pass; Windows native current-app capture, key recording, reassignment and persistence pass |
 | Global pause/resume hotkey stays available while paused; editor/workspace/update hotkeys | Partial | Implemented with separate pause registration; native KDE KGlobalAccel action dispatch passes; Windows OS key delivery, lifecycle and registration-failure recovery pass; KDE native pause/app-pull key delivery passes; editor/workspace key delivery remains direct-dispatch coverage |
@@ -24,7 +24,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native Ubuntu capture/directory restoration passes; legacy launchers, prompt fallback, and ambiguity have regression coverage; Windows PowerShell and PowerShell7 custom portable-profile GUID, explicit executable, directory and new-window restoration pass; packaged cmd regression and refreshed18-check Konsole editor fixture pass; shared-process/multi-tab profile identity and concurrent terminal launch matching remain limited |
 | Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Partial | Executable launch passes native Windows/KDE fixtures; Calculator AUMID capture/activation/reuse and native KDE desktop-entry URL/document launch, working directory, reuse and missing-target errors pass; hosted UWP/packaged Win32 variants and D-Bus-activated desktop entries remain |
 | Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Partial | Review/import/save verified natively on Windows and KDE; disabled keys, terminal fields, Firefox tabs and geometry retained; legacy package paths resolve a single registered AUMID during unsaved review; missing/ambiguous families stay editable; title/class/exe/PID/HWND/active WinTitle rules now migrate to reviewed selectors; undefined groups/duplicate or unknown criteria remain visible for manual review; both center actions convert |
-| Single instance, tray, settings failures, session cleanup, installers | Partial | Windows native single instance, registration failures and process-exit key release pass; final tray/graceful-exit and installer checks remain |
+| Single instance, tray, settings failures, session cleanup, installers | Partial | Windows native single instance, registration failures and process-exit key release pass; fresh NSIS and Debian payloads inspected; real tray/graceful-exit and installer execution checks remain |
 
 ## Platform investigation
 
@@ -819,3 +819,47 @@ to an earlier tab. Post-launch window polling also lacks fresh terminal identity
 filtering for concurrent unrelated launches. These remain visible here for the
 remaining capture/restore audit; this increment does not claim to resolve them.
 No user Terminal settings changed and no installer was installed.
+
+
+## Burner layouts and overlapping chords (2026-10-25)
+
+Windows native run `WARP-NATIVE-d780f559-8eea-4acd-a0d9-d42d456683a6`
+passes50 checks with no skips on two physical displays. All four burner layouts,
+floating/maximized sources, return geometry/state and pointer centering pass.
+Distinct app chords remain independent: B taps while A stays held; A tiles once,
+ignores repeats and cannot issue a stale tap on release. Earlier burner-only
+run `WARP-NATIVE-2aa8b783-001d-48fd-aeed-74ccbcc573ba` passes49. Both restored the
+ordinary debug binary and cleaned their owned windows. Neither run includes the
+optional Firefox capture suite; its prior50-check receipt remains separate.
+
+Portafort unit `portafort-warp-gui-20261025-burner` passes27 native checks in its
+private two-output Plasma5.27 compositor, including delayed Firefox floating
+burner round trips from normal and maximized states. Local evidence:
+`src-tauri/target/kde-validation/burner/`. Windows and KDE runtime source is
+unchanged in this acceptance increment.
+
+**KDE overlap remains a known gap.** The opt-in
+`--firefox --firefox-tiles --overlap` regression fails in both key orders on
+Plasma5.27 Wayland. Solo K/L holds pass, but KGlobalAccel emits the first action's
+`globalShortcutReleased` immediately before the second action's press, although
+the fixture keeps the first key physically held. There is no later physical
+release signal for that displaced action. The first hold therefore ends early.
+Ignoring that release would leave no reliable way to determine its real end.
+
+Signal/geometry evidence is in `src-tauri/target/kde-validation/overlap-signals/`;
+unit `portafort-warp-gui-20261025-overlap-signals` failed/exit1. The preceding
+`overlap-before` run failed too and is preserved. These are not passing checks.
+No speculative timer change was applied. Next: run the same diagnostic on actual
+Plasma6 and establish a supported source of independent key lifetimes. The
+fixture retains this failing gate instead of weakening its expected behavior.
+
+Fresh application artifacts are available at
+`src-tauri/target/release/bundle/nsis/Window Warp_0.1.0_x64-setup.exe` and
+`src-tauri/target/release/bundle/deb/Window Warp_0.1.0_amd64.deb`. Windows release
+build succeeded; Linux package comes from the successful terminal-variants
+builder. Static extraction/inspection confirms the built payloads differ only
+by Tauri's documented UNK→NSS/DEB bundle tags. Debian executable permissions,
+desktop entry, icon and pointer capability are present. Nothing was installed.
+Actual tray/graceful quit, install/uninstall, startup login and Plasma6 checks
+remain open; Debian currently relies on the documented external KDE/qdbus
+prerequisite rather than declaring qdbus in package dependencies.
