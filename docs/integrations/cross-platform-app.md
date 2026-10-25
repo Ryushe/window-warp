@@ -1739,3 +1739,10 @@ resolve actual failures; preserve the confirmed Plasma5.27 overlap limitation.
 Then package install/login, qdbus dependency handling, remaining app-launch and
 terminal/default-browser cases in PARITY.md. Fresh NSIS/Deb artifacts from the
 prior checkpoint still contain this unchanged runtime. Full goal stays active.
+
+Verified lifecycle checkpoint:
+`fb15ab7e7499c422d8a204f75ecd0fd0598889f5` on `codex/cross-platform-app`.
+Final recheck confirms `hoster-warp-image-20261025-plasma6` remains active at
+package320/firefox-esr download. Resume by observing this exact unit; do not
+restart it merely because the large download has not emitted another log line.
+After it succeeds, sync the committed tests and run the native Plasma6 gates.
