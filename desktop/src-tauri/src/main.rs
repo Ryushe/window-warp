@@ -157,10 +157,27 @@ fn change_enabled(app: &AppHandle, enabled: bool, current: &mut bool) -> Result<
             return Err(error);
         }
     } else {
+        // Cancel compositor continuations before joining workers that may be
+        // waiting for those very replies. Persistent history stays in KWin.
+        #[cfg(target_os = "linux")]
+        let cancellation = linux_control::configure_session(app, false);
         let retile = retile::stop();
         let native = platform::disable(&app);
-        retile?;
-        native?;
+        #[cfg(target_os = "linux")]
+        {
+            let failures: Vec<_> = [cancellation, retile, native]
+                .into_iter()
+                .filter_map(Result::err)
+                .collect();
+            if !failures.is_empty() {
+                return Err(failures.join("; "));
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            retile?;
+            native?;
+        }
     }
     *current = enabled;
     let _ = app.emit("warp-enabled", enabled);

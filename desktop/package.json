@@ -7,7 +7,7 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "test": "node --test tests/*.test.js",
-    "check": "node --check ui/legacy-import.js && node --check ui/import-ui.js && node --check ui/radial.js && node --check ui/app.js && node --check ui/workspaces.js && node --check src-tauri/kwin/warp.js && node --check src-tauri/kwin/control.js"
+    "check": "node --check ui/legacy-import.js && node --check ui/import-ui.js && node --check ui/radial.js && node --check ui/app.js && node --check ui/workspaces.js && node --check src-tauri/kwin/warp.js && node --check src-tauri/kwin/control.js && node --check src-tauri/kwin/shortcuts.js"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",

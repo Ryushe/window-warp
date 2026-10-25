@@ -152,10 +152,11 @@ pub fn pull_selected(
     if binding.windows_match.is_some() {
         return Err("Windows window-match rules cannot run on KDE. Adapt the binding to a KDE app identifier first.".into());
     }
-    crate::linux_control::request(
+    crate::linux_control::input_request(
         app,
         serde_json::json!({"kind":"pull-selected", "window":selected,
         "previous":previous, "binding":binding, "settings":settings}),
+        None,
     )?;
     Ok(())
 }
@@ -208,7 +209,7 @@ pub(crate) fn shortcut_source(app: &AppHandle, config: &Config) -> Result<String
         "var WARP_APP = {};\nvar WARP_CONFIG = {};\n{}",
         crate::linux_control::descriptor(app)?,
         serde_json::to_string(config).map_err(|e| e.to_string())?,
-        include_str!("../kwin/warp.js")
+        include_str!("../kwin/shortcuts.js")
     ))
 }
 pub fn enable(app: &AppHandle, config: &Config) -> Result<(), String> {
@@ -240,9 +241,9 @@ pub fn retile_window(
     target: &crate::retile::Target,
     left: bool,
 ) -> Result<(), String> {
-    crate::linux_control::request(app, serde_json::json!({
+    crate::linux_control::input_request(app, serde_json::json!({
         "kind":"retile", "window":target, "direction":if left { "tile-left" } else { "tile-right" }
-    })).map(|_| ())
+    }), None).map(|_| ())
 }
 
 pub(crate) fn enable_window_actions(app: &AppHandle, config: &Config) -> Result<(), String> {
@@ -344,8 +345,17 @@ pub fn load_script(
     Ok(())
 }
 pub fn disable(_: &AppHandle) -> Result<(), String> {
-    unload_script("window-warp-retile-session")?;
-    if crate::linux_gestures::pause()? {
+    let retile = unload_script("window-warp-retile-session");
+    let gestures = crate::linux_gestures::pause();
+    let failures: Vec<_> = retile
+        .err()
+        .into_iter()
+        .chain(gestures.as_ref().err().cloned())
+        .collect();
+    if !failures.is_empty() {
+        return Err(failures.join("; "));
+    }
+    if gestures.unwrap_or(false) {
         return Ok(());
     }
     disable_window_actions()?;

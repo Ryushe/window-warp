@@ -427,7 +427,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                     invoke("set_enabled", {"enabled":False})
                     saved_config = invoke("get_config")
                     retile_config = json.loads(json.dumps(saved_config))
-                    for index, action in enumerate(["push-right","push-left"]):
+                    for index, action in enumerate(["push-right","push-left","pull","toggle-maximize"]):
                         retile_config["bindings"].append({"label":action,"action":action,"shortcut":f"Ctrl+Alt+Shift+F{8+index}","enabled":True,"appMatch":""})
                     retile_config["bindings"].append({"label":"Existing Super C","action":"tile-up","shortcut":"Super+C","enabled":True,"appMatch":""})
                     invoke("save_config", {"config":retile_config})
@@ -453,6 +453,36 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                     def press_retile(key, meta=False):
                         if meta: keys.key(125,True)
                         keys.key(key,True); keys.release()
+
+                    def pause_reload_resume():
+                        chord(25); keys.release()
+                        wait_for("return document.querySelector('#status').textContent.includes('Paused')")
+                        invoke("save_config", {"config":retile_config})
+                        chord(25); keys.release()
+                        wait_for("return document.querySelector('#status').classList.contains('active')")
+
+                    reset_window()
+                    chord(87); keys.release()  # F11: maximize through the shortcut script.
+                    wait_window(lambda w:w["maximizedHorizontal"] and w["maximizedVertical"],"maximize before history retention check")
+                    push_ready()
+                    pause_reload_resume()
+                    wait_retile(False)
+                    reset_window()  # Workspace restore goes through the persistent control script.
+                    chord(68); keys.release()  # F10: history must still contain the maximized source.
+                    wait_window(lambda w:w["maximizedHorizontal"] and w["maximizedVertical"] and w["monitor"] == target["monitor"],"history survives pause and configuration reload")
+                    chord(87); keys.release()
+                    wait_window(lambda w:not w["maximizedHorizontal"] and not w["maximizedVertical"] and w["rect"] == initial,"saved floating geometry survives pause and mixed action sources")
+                    report["checks"].append("native KDE pause/configuration reload preserve push history and maximize geometry across shortcut and workspace-control actions")
+
+                    invoke_shortcut("open-workspaces")
+                    wait_window(lambda w:not w["active"],"editor is previous focus before retention check")
+                    chord(36); time.sleep(0.08); keys.release()
+                    wait_window(lambda w:w["active"],"gesture app pull remembers previous editor focus")
+                    pause_reload_resume()
+                    chord(36); time.sleep(0.08); keys.release()
+                    wait_window(lambda w:not w["active"],"gesture focus-last survives pause and configuration reload")
+                    wait_for("return document.hasFocus()")
+                    report["checks"].append("native KDE gesture focus-last retains its previous target across pause and configuration reload")
 
                     reset_window()
                     moved = push_ready()

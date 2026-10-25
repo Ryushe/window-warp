@@ -109,9 +109,36 @@ pub struct Picker {
     bounds: Rect,
 }
 impl Picker {
+    #[cfg(target_os = "windows")]
     pub fn open(app: &AppHandle, binding: &Binding, point: Point) -> Result<Option<Self>, String> {
+        Self::open_captured(app, binding, point, None)
+    }
+    #[cfg(target_os = "linux")]
+    pub fn open_for_window(
+        app: &AppHandle,
+        binding: &Binding,
+        point: Point,
+        previous: Option<&crate::retile::Target>,
+    ) -> Result<Option<Self>, String> {
+        Self::open_captured(app, binding, point, Some(previous))
+    }
+    fn open_captured(
+        app: &AppHandle,
+        binding: &Binding,
+        point: Point,
+        captured: Option<Option<&crate::retile::Target>>,
+    ) -> Result<Option<Self>, String> {
         let windows = crate::platform::snapshot_for_binding(app, binding)?;
-        let previous = windows.iter().find(|w| w.active).cloned();
+        let previous = match captured {
+            Some(identity) => identity
+                .and_then(|target| {
+                    windows
+                        .iter()
+                        .find(|w| w.id == target.id && w.pid == target.pid)
+                })
+                .cloned(),
+            None => windows.iter().find(|w| w.active).cloned(),
+        };
         let windows = candidates(windows, binding);
         if windows.is_empty() {
             return Ok(None);

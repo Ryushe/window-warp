@@ -104,7 +104,13 @@ receiver = Receiver()
 if not bus.registerService(service) or not bus.registerObject("/Smoke", receiver, QDBusConnection.ExportAllSlots):
     raise RuntimeError("Cannot register test result receiver on the session bus")
 
-source = Path(sys.argv[1]).read_text()
+source_path = Path(sys.argv[1])
+source = source_path.read_text()
+shortcuts = source_path.with_name("shortcuts.js").read_text()
+# This standalone backend fixture uses one owner and forwards registration-only
+# callbacks locally. gui.py exercises the real separate-script D-Bus transport.
+source += "\nWarp.configureSession('fixture-generation');\n"
+source += "(function(callDBus) {\n" + shortcuts + "\n})(function() { var args = Array.prototype.slice.call(arguments); if (args[3] === 'Shortcut') { var command = JSON.parse(args[6]); command.generation = args[5]; if (command.window && [WARP_FIXTURE_PIDS.main,WARP_FIXTURE_PIDS.other].indexOf(command.window.pid) < 0) throw new Error('Refusing an unowned captured window'); Warp.run(command.binding, command.settings, null, null, null, function(error) { if (error) print('Fixture dispatch: ' + error); }, command); } else callDBus.apply(null, args); });\n"
 harness = Path(__file__).with_name("live.js").read_text()
 configuration = {"settings": {"mainMonitor": 1, "burnerMonitor": 2}, "bindings": [
     {"label": "Left", "shortcut": "Ctrl+Alt+Shift+F20", "action": "tile-left"},
@@ -121,7 +127,7 @@ configuration = {"settings": {"mainMonitor": 1, "burnerMonitor": 2}, "bindings":
 ]}
 script = "var WARP_CONFIG = " + json.dumps(configuration) + ";\nvar testCallbacks = {};\nvar nativeRegisterShortcut = registerShortcut;\nvar registeredTestIds = [];\n"
 script += "(function(registerShortcut) {\n" + source + "\n})(function(id, label, key, callback) { function ownedCallback() { var active = 'activeWindow' in workspace ? workspace.activeWindow : workspace.activeClient; if (!active || [WARP_FIXTURE_PIDS.main,WARP_FIXTURE_PIDS.other].indexOf(Number(active.pid)) < 0) throw new Error('Fixture lost focus; refusing to dispatch against an unowned window'); callback(); } testCallbacks[label] = ownedCallback; var testId = 'window-warp-smoke-' + id; registeredTestIds.push(testId); return nativeRegisterShortcut(testId, label, key, ownedCallback); });\n"
-script = "var WARP_APP = " + json.dumps({"service":service,"token":"fixture"}) + ";\n" + script
+script = "var WARP_APP = " + json.dumps({"service":service,"token":"fixture","generation":"fixture-generation"}) + ";\n" + script
 script = "var WARP_FIXTURE_PIDS = " + json.dumps({"main":os.getpid(),"other":other_process.pid}) + ";\n" + script
 script += harness
 temporary = tempfile.TemporaryDirectory(prefix="window-warp-live-")

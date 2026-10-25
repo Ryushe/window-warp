@@ -574,6 +574,11 @@ try {
     };
     const actionPress = window => native("press",{key:0x87,window});
     const isMaximized = w => w.maximizedHorizontal && w.maximizedVertical;
+    const pauseReloadResume = async () => {
+        await press(18); await paused(true);
+        await invoke("save_config",{config:actionConfig});
+        await press(18); await paused(false);
+    };
     await selectAction("toggle-maximize");
     await placeOwned();
     await actionPress(fixture.windows[0]);
@@ -594,6 +599,7 @@ try {
     // Changing the state before pull makes restoration observable even when
     // this machine has a single monitor and a push wraps to that monitor.
     await placeOwned();
+    await pauseReloadResume();
     await press(15);
     await until(readOwned,w=>isMaximized(w)&&w.active,"history pull restores maximized state");
     checks.push("native push and history pull preserve a maximized window");
@@ -601,6 +607,7 @@ try {
     await until(readOwned,w=>!isMaximized(w)&&Object.keys(initial).every(k=>w.rect[k]===initial[k]),"restore after maximized push and history pull");
     assert.deepEqual((await readOwned()).rect,initial,"Restore must use the original toggle's floating rectangle after intervening moves");
     checks.push("native maximize toggle retains floating geometry through maximized push and history pull");
+    checks.push("native pause and configuration reload preserve push history and saved maximize geometry");
     await placeOwned();
     await selectAction("pull-app");
     await actionPress(fixture.windows[1]);
@@ -610,6 +617,10 @@ try {
     await actionPress(fixture.windows[1]);
     await until(readOwned,w=>w.active,"focus-last returns to selected app again");
     checks.push("native app pull focus-last toggles between the selected and previous windows");
+    await pauseReloadResume();
+    await actionPress(fixture.windows[0]);
+    await until(readSecond,w=>w.active,"focus-last survives pause and configuration reload");
+    checks.push("native pause and configuration reload preserve the previous focus target");
 
     for (const action of ["pull-app","focus-app"]) {
         await selectAction(action);

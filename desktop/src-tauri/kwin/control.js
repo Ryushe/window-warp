@@ -1,13 +1,21 @@
 /* Private command transport for the desktop app. The dispatch action has no key. */
 (function () {
     "use strict";
+    var sessionConfigured = false;
+    // The normal owner lives for the application session. If KWin reloads this
+    // script, recover the active generation without accepting stale callbacks.
+    callDBus(WARP_CONTROL.service, "/Control", "com.windowwarp.Control", "InputGeneration", WARP_CONTROL.token, function(payload) {
+        if (!sessionConfigured) { Warp.configureSession(JSON.parse(payload)); sessionConfigured = true; }
+    });
     function rect(value) {
         return {x: Math.round(value.x), y: Math.round(value.y), width: Math.round(value.width), height: Math.round(value.height)};
     }
     function identity(window) { return {id: String(window.internalId), pid: Number(window.pid || 0)}; }
-    function reply(job, result, error) {
+    function reply(job, result, error, cancelled) {
+        var payload = error ? {error:String(error)} : {result:result};
+        if (cancelled) payload.cancelled = true;
         callDBus(WARP_CONTROL.service, "/Control", "com.windowwarp.Control", "Reply", WARP_CONTROL.token,
-            String(job.id), JSON.stringify(error ? {error: String(error)} : {result: result}));
+            String(job.id), JSON.stringify(payload));
     }
     function snapshot(job) {
         var outputs = Warp.screens();
@@ -52,6 +60,7 @@
     function execute(job) {
         if (Date.now() > job.expires) { reply(job, null, "Window command expired before it could run."); return; }
         var command = job.command;
+        command.deadline = Math.min(job.expires, command.at ? command.at + 1800 : Date.now() + 1800);
         if (command.kind === "snapshot") { snapshot(job); return; }
         if (command.kind === "focus-editor") {
             var editor = Warp.windows().filter(function(w) {
@@ -61,7 +70,12 @@
             reply(job, !!editor);
             return;
         }
-        if (command.kind === "reset-app-pulls") { Warp.resetAppPulls(); reply(job, true); return; }
+        if (command.kind === "input-session") { sessionConfigured = true; Warp.configureSession(command.generation); reply(job, true); return; }
+        function completed(error, result, cancelled) { reply(job, error ? null : (result === undefined ? true : result), error, cancelled); }
+        if (command.kind === "shortcut") {
+            Warp.run(command.binding, command.settings, null, null, null, completed, command);
+            return;
+        }
         if (command.kind === "pointer") {
             reply(job, {x:Math.round(workspace.cursorPos.x), y:Math.round(workspace.cursorPos.y)});
             return;
@@ -89,8 +103,7 @@
             return;
         }
         if (command.kind === "app-pull") {
-            Warp.run(command.binding, command.settings, command.pointer, undefined, undefined,
-                function(error) { reply(job, error ? null : true, error); });
+            Warp.run(command.binding, command.settings, command.pointer, undefined, undefined, completed, command);
             return;
         }
         var window = target(command);
@@ -98,31 +111,18 @@
             var previous = command.previous && Warp.windows().filter(function(w) {
                 return !w.deleted && String(w.internalId) === command.previous.id && Number(w.pid || 0) === command.previous.pid;
             })[0];
-            Warp.run(command.binding, command.settings, null, window, previous,
-                function(error) { reply(job, error ? null : true, error); });
+            Warp.run(command.binding, command.settings, null, window, previous, completed, command);
             return;
         }
         if (command.kind === "restore") {
-            var placement = command.placement;
-            var outputs = Warp.screens();
-            var output = outputs.filter(function(o) { return o.name === placement.monitorName; })[0] || outputs[Math.min(Math.max(0, placement.monitor - 1), outputs.length - 1)];
-            if (!output) throw new Error("No connected output is available.");
-            window.minimized = false;
-            window.fullScreen = false;
-            window.setMaximize(false, false);
-            Warp.send(window, output);
-            var requested = Warp.relative(placement.rect, placement.workArea, Warp.area(output));
-            window.frameGeometry = requested;
-            window.setMaximize(placement.maximizedVertical, placement.maximizedHorizontal);
-            window.fullScreen = placement.fullscreen;
-            window.minimized = placement.minimized;
-            reply(job, rect(requested));
+            Warp.restore(window, command.placement, completed, command.deadline);
             return;
         } else if (command.kind === "retile") {
-            var output = Warp.outputFor(window, Warp.screens());
-            if (!output) throw new Error("The window's monitor disconnected.");
-            Warp.focus(window);
-            Warp.tile(window, output, command.direction);
+            Warp.run({action:command.direction}, null, null, null, null, function(error,result,cancelled) {
+                if (!error) Warp.focus(window);
+                completed(error,result,cancelled);
+            }, command);
+            return;
         } else if (command.kind === "focus") Warp.focus(window);
         else throw new Error("Unknown window command.");
         reply(job, true);

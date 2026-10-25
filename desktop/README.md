@@ -99,12 +99,14 @@ Manual acceptance on each OS: enable the app; push a floating window across two 
 - `src-tauri/src/config.rs`: versioned configuration, canonical shortcut syntax, validation.
 - `src-tauri/src/windows.rs`: Win32 window enumeration, positioning, focus, and global shortcut registration.
 - `src-tauri/src/linux.rs`: KWin session integration via qdbus, with arguments passed directly without a shell.
-- `src-tauri/src/linux_control.rs`: session-bus command bridge for workspace capture and restore.
+- `src-tauri/src/linux_control.rs`: authenticated session-bus command queue with correlated replies and input cancellation.
 - `src-tauri/src/workspaces.rs`: workspace storage, matching, launch, restore, and cancellation.
 - `src-tauri/src/firefox.rs`: profile discovery and Mozilla LZ4 session capture, tab selection, and profile launch commands.
 - `src-tauri/src/terminal.rs` and `wsl.rs`: terminal identity, profile/directory restoration, bounded WSL discovery.
 - `src-tauri/src/process_info.rs`: argument boundaries from `/proc` or Windows CIM and `CommandLineToArgvW`.
-- `src-tauri/kwin/warp.js`: compositor-side window management and shortcuts.
+- `src-tauri/kwin/warp.js`: persistent compositor-side window management, movement history and restore geometry.
+- `src-tauri/kwin/shortcuts.js`: shortcut registration and captured input forwarding to the persistent owner.
+- `src-tauri/kwin/control.js`: command dispatch between the application and the persistent window manager.
 
 Settings live in Tauri's per-user configuration directory under `com.windowwarp.desktop/settings.json`; workspaces use `workspaces.json` beside it. The editor displays the settings path. Use **Import AutoHotkey settings** to select existing INI files. The originals are never modified.
 

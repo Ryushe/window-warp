@@ -7,12 +7,12 @@ have been exercised. Existing preview installers do not contain ongoing work.
 
 | Requirement / authoritative source | State | Evidence needed |
 | --- | --- | --- |
-| Monitor push, wrap, relative placement, maximized state, history pull (`window_manager.ahk`) | Partial | Windows maximized push/history pull passes; KDE two-output and real one-output tests verify direct maximized pull and restoring maximization after tiling; history retention across pause, physical Windows multi-monitor and monitor removal remain |
+| Monitor push, wrap, relative placement, maximized state, history pull (`window_manager.ahk`) | Partial | Windows maximized push/history pull passes; KDE two-output and real one-output tests verify direct maximized pull and restoring maximization after tiling; Windows and KDE pause/configuration reload retain history; physical Windows multi-monitor and monitor removal remain |
 | Push and center pointer; pull centers primary; 1-second X/C retiling | Partial | Native Windows and KDE retile chords, one-use consumption, expiry, renewal and pause cancellation pass; Windows one-display wrap/centering and KDE two-output centering pass; KDE permission refusal and X11 movement pass; physical Windows multi-monitor and live Plasma 6 acceptance remain |
 | Four-way tiling; portrait mouse-aware tile choice | Partial | Four-way implemented; 18 live KDE checks cover vertical tiling; Windows mouse hold tiles natively and portrait/midpoint geometry has regression coverage; KDE native hold verifies key-down pointer choice; physical portrait acceptance remains |
-| Maximize/restore toggle (original “fullscreen”); graceful close | Partial | Saved floating geometry survives maximized moves and history pull on Windows and KDE; KDE rapid double-toggle and same-script maximize/burner ordering pass, including real Portafort 5.27.11; Windows close honors an application's veto; KDE cache retention across script reload, cross-script ordering and real Plasma 6 remain |
+| Maximize/restore toggle (original “fullscreen”); graceful close | Partial | Saved floating geometry survives maximized moves and history pull on Windows and KDE; KDE rapid double-toggle and same-script maximize/burner ordering pass, including real Portafort 5.27.11; Windows close honors an application's veto; KDE registration reload retains caches and shortcut/workspace actions share the persistent geometry queue; real Plasma 6 and delayed-browser tile acceptance remain |
 | App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Tiled burner round trip live KDE verified; Windows native pull and all four one-monitor burner fallbacks pass; other KDE layouts and physical Windows two-monitor burner checks remain |
-| App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE and Windows focus-last/minimized checks pass; Windows pull/focus restore minimized floating geometry; compound title/class/executable/PID matching, full-path focus and tap/radial consistency pass; real Plasma 6 acceptance remains |
+| App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE and Windows focus-last/minimized checks pass, including previous-focus retention across pause/configuration reload; Windows pull/focus restore minimized floating geometry; compound title/class/executable/PID matching, full-path focus and tap/radial consistency pass; real Plasma 6 acceptance remains |
 | Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE native key delivery verifies tap, hold, repeats, pause cancellation and disabled hold; resume before key release and reassignment while held now pass; overlapping distinct chords and live Plasma 6 remain |
 | Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows and KDE native selection/dead-zone/Escape/pause checks pass; focus loss cancels before release, including Windows Alt+Escape; shared eight-slot layout/order tested; physical portrait/mixed-DPI and Plasma 6 acceptance remain |
 | Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed reassignment tested; native KDE current-app capture and physical-key reassignment pass; Windows native current-app capture, key recording, reassignment and persistence pass |
@@ -674,3 +674,31 @@ Next: remaining native Windows maximize/close, focus-last/minimized and burner
 behavior, then Firefox/terminal variants and overlapping physical global chords.
 Retain the full checklist, real Plasma 6/physical display/login/installer gates,
 and independent final release review. No merge, push or installation occurred.
+
+
+## Pause persistence and shared KDE owner - verified (2026-10-25)
+
+Pausing or saving settings retains movement history, previous-focus targets and
+saved maximize rectangles on both platforms. Windows no longer clears those
+caches when unregistering shortcuts. KDE registers shortcuts separately and
+forwards captured input to one persistent control-script state owner; gesture,
+retile and workspace geometry use that same queue. Input generations cancel
+stale work before worker joins, while expected cancellations stay quiet and
+transport failures still permit hook cleanup. These caches last for the running
+application session; this does not claim persistence across application or KWin
+restarts.
+
+Native regression receipts reproduce lost maximized history on both old builds.
+The corrected Windows application passes 45 checks; the final KDE application
+passes 37 with hold, radial, retile, resume-before-release and held-key reassignment.
+The standalone geometry fixture passes 35 checks on two virtual outputs and 35
+on Portafort's real Plasma 5.27.11 Wayland desktop. The standalone fixture forwards
+locally; the application fixture tests the separate scripts and real D-Bus queue.
+
+115 Node tests, 64 Windows Rust tests (five opt-in ignored), and 60 Linux Rust
+tests (one opt-in ignored) pass. Local receipts are under
+`src-tauri/target/kde-validation/persistence/`, Windows receipt
+`src-tauri/target/windows-validation/WARP-NATIVE-ee3aa729-f76f-4a37-b4e1-db663d4e33dd/`.
+Linux executable and Debian bundle were rebuilt; no installer was installed.
+Remaining gates in the table still apply, including delayed-browser tile/retile,
+physical display cases, real Plasma 6 and final installer/login acceptance.

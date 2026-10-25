@@ -5,6 +5,7 @@ import fs from "node:fs";
 
 const source = fs.readFileSync(new URL("../src-tauri/kwin/warp.js", import.meta.url), "utf8");
 const controlSource = fs.readFileSync(new URL("../src-tauri/kwin/control.js", import.meta.url), "utf8");
+const shortcutsSource = fs.readFileSync(new URL("../src-tauri/kwin/shortcuts.js", import.meta.url), "utf8");
 const clone = (value) => JSON.parse(JSON.stringify(value));
 function fixture(bindings, legacy = false, settings = {mainMonitor: 1, burnerMonitor: 2}, holdIds, nativeIds) {
     const states = new Map();
@@ -53,8 +54,12 @@ function fixture(bindings, legacy = false, settings = {mainMonitor: 1, burnerMon
     const calls = [];
     const errors = [], stateReplies = [], stateRpc = {defer:false};
     const context = { workspace, QTimer, Date:{now:()=>clock.now}, KWin: { MaximizeArea: 0 }, print: error => errors.push(error),
-        WARP_APP: {service:"fixture",token:"test"}, callDBus: (...args) => {
+        WARP_APP: {service:"fixture",token:"test",generation:"generation-1"}, callDBus: (...args) => {
             calls.push(args);
+            if (args[3] === "Shortcut") {
+                const invocation=JSON.parse(args[6]); invocation.generation=args[5];
+                context.Warp.run(invocation.binding,invocation.settings,null,null,null,undefined,invocation);
+            }
             if (args[3] === "getWindowInfo") {
                 const target = workspace.stackingOrder.find(w=>String(w.internalId)===args[4] && !w.deleted);
                 const info = target ? {uuid:String(target.internalId),maximizeHorizontal:false,maximizeVertical:false,...states.get(target)} : null;
@@ -65,13 +70,122 @@ function fixture(bindings, legacy = false, settings = {mainMonitor: 1, burnerMon
         WARP_HOLD_IDS: holdIds, WARP_HOLD_NATIVE_IDS: nativeIds,
         WARP_CONFIG: { bindings, settings }, registerShortcut: (id, label, key, callback) => { shortcuts.set(label, { id, key, callback }); return true; } };
     vm.runInNewContext(source, context);
+    context.Warp.configureSession("generation-1");
+    const register=(generation="generation-1",rows=bindings)=>{
+        const registration={...context,WARP_APP:{...context.WARP_APP,generation},WARP_CONFIG:{bindings:rows,settings}};
+        delete registration.Warp;
+        vm.runInNewContext(shortcutsSource,registration);
+    };
+    register();
     return { workspace, window, left, right, shortcuts, calls, states, errors, stateRpc, stateReplies, timers,
         tick(ms=25){clock.now+=ms;timers.filter(timer=>timer.running).forEach(timer=>timer.callback());},
         flush(){let count=0;while(stateReplies.length){assert.ok(++count<30,"state replies must settle");stateReplies.shift()();}},
-        warp:context.Warp, trigger: (label) => shortcuts.get("Window Warp: " + label).callback() };
+        register, clock, context, warp:context.Warp, trigger: (label) => shortcuts.get("Window Warp: " + label).callback() };
 }
 const push = { label: "Push", shortcut: "Ctrl+Alt+Right", action: "push-right", appMatch: "" };
 const pull = { label: "Pull", shortcut: "Ctrl+Alt+Down", action: "pull", appMatch: "" };
+
+test("a late generation bootstrap cannot undo a newer session update",()=>{
+    let bootstrap,dispatch;
+    const generations=[],replies=[];
+    vm.runInNewContext(controlSource,{
+        WARP_CONTROL:{service:"fixture",token:"owned",action:"dispatch"},
+        Warp:{configureSession:g=>generations.push(g)},print:()=>{},
+        registerShortcut:(_id,_label,_key,callback)=>{dispatch=callback;return true;},
+        callDBus:(_service,_path,_interface,method,...args)=>{
+            if(method==="InputGeneration") bootstrap=args.at(-1);
+            else if(method==="Next") args.at(-1)(JSON.stringify({id:1,expires:Date.now()+5000,command:{kind:"input-session",generation:"new"}}));
+            else replies.push(JSON.parse(args.at(-1)));
+        }
+    });
+    dispatch(); bootstrap(JSON.stringify("old"));
+    assert.deepEqual(generations,["new"]);
+    assert.deepEqual(replies,[{result:true}]);
+});
+
+for(const legacy of [false,true]) {
+    test(`registration reload and pause retain owner history and saved maximize on Plasma ${legacy?5:6}`,()=>{
+        const max={label:"Max",action:"toggle-maximize",shortcut:"Ctrl+M"};
+        const f=fixture([max,push,pull],legacy);
+        const original=clone(f.window.frameGeometry);
+        f.trigger("Max"); f.trigger("Push");
+        f.warp.configureSession(null);
+        f.warp.configureSession("generation-2"); f.register("generation-2");
+        f.trigger("Pull");
+        assert.deepEqual(f.states.get(f.window),{maximizeHorizontal:true,maximizeVertical:true});
+        f.trigger("Max");
+        assert.deepEqual(clone(f.window.frameGeometry),original);
+        assert.equal(legacy?f.window.screen:f.window.output,legacy?1:f.left);
+        assert.deepEqual(f.errors,[]);
+    });
+    test(`pause cancels pending and queued input and ignores old replies on Plasma ${legacy?5:6}`,()=>{
+        const f=fixture([],legacy),results=[];
+        const invocation={generation:"generation-1",at:f.clock.now,window:{id:"a",pid:0},previous:{id:"a",pid:0}};
+        f.stateRpc.defer=true;
+        f.warp.run({action:"toggle-maximize"},null,null,null,null,(error,_result,cancelled)=>results.push({error,cancelled}),invocation);
+        f.warp.run({action:"tile-right"},null,null,null,null,(error,_result,cancelled)=>results.push({error,cancelled}),invocation);
+        const old=f.stateReplies.shift();
+        f.warp.configureSession(null);
+        assert.equal(results.length,2);
+        assert.ok(results.every(result=>result.cancelled));
+        f.warp.configureSession("generation-2"); f.stateRpc.defer=false;
+        f.warp.run({action:"tile-left"},null,null,null,null,undefined,{...invocation,generation:"generation-2"});
+        const current=clone(f.window.frameGeometry);
+        old();
+        f.warp.run({action:"tile-right"},null,null,null,null,undefined,invocation);
+        assert.deepEqual(clone(f.window.frameGeometry),current);
+        assert.deepEqual(f.errors,[]);
+        assert.ok(f.timers.every(timer=>!timer.running));
+    });
+    test(`retile fallback targets the window captured before its asynchronous reply on Plasma ${legacy?5:6}`,()=>{
+        const f=fixture([{label:"Existing",shortcut:"Super+C",action:"tile-left"}],legacy);
+        f.trigger("Existing");
+        const fallback=f.calls.at(-1).at(-1);
+        const other={...f.window,internalId:"other",pid:99,frameGeometry:{x:1,y:2,width:300,height:200}};
+        f.workspace.stackingOrder.push(other);
+        if(legacy)f.workspace.activeClient=other;else f.workspace.activeWindow=other;
+        fallback(false);
+        assert.equal(f.window.frameGeometry.x,-1920);
+        assert.deepEqual(other.frameGeometry,{x:1,y:2,width:300,height:200});
+    });
+    test(`focus-last identity survives pause and rejects reused UUID with another PID on Plasma ${legacy?5:6}`,()=>{
+        const binding={label:"App",shortcut:"Ctrl+J",action:"pull-app",appMatch:"firefox",mainMonitorAction:"focus-last"};
+        const f=fixture([binding],legacy);
+        const other={...f.window,internalId:"other",pid:7,resourceClass:"terminal",desktopFileName:"terminal"};
+        f.workspace.stackingOrder.push(other);
+        if(legacy)f.workspace.activeClient=other;else f.workspace.activeWindow=other;
+        f.trigger("App");
+        f.warp.configureSession(null); f.warp.configureSession("generation-2"); f.register("generation-2");
+        f.trigger("App");
+        assert.equal(legacy?f.workspace.activeClient:f.workspace.activeWindow,other);
+        f.trigger("App");
+        f.workspace.stackingOrder=[f.window,{...other,pid:8}];
+        f.trigger("App");
+        assert.equal(legacy?f.workspace.activeClient:f.workspace.activeWindow,f.window);
+    });
+    test(`workspace restores share the input queue and respect their caller deadline on Plasma ${legacy?5:6}`,()=>{
+        const f=fixture([],legacy),results=[];
+        const saved={rect:{x:-1500,y:100,width:500,height:400},workArea:clone(f.left.geometry),monitorName:legacy?"1":"left",monitor:1,maximizedHorizontal:false,maximizedVertical:false,fullscreen:false,minimized:false};
+        f.stateRpc.defer=true;
+        f.warp.run({action:"toggle-maximize"});
+        f.warp.restore(f.window,saved,(error,result)=>results.push({error,result}),f.clock.now+10);
+        f.tick(20); f.stateRpc.defer=false; f.flush();
+        assert.match(results[0].error,/expired/);
+        assert.deepEqual(f.states.get(f.window),{maximizeHorizontal:true,maximizeVertical:true});
+        f.warp.restore(f.window,saved,(error,result)=>results.push({error,result}),f.clock.now+1800);
+        assert.equal(results[1].error,null);
+        assert.deepEqual(clone(results[1].result),saved.rect);
+        assert.deepEqual(clone(f.window.frameGeometry),saved.rect);
+    });
+}
+
+test("forwarded focus-app completes for both matching and missing windows",()=>{
+    const f=fixture([]),results=[];
+    const invocation={generation:"generation-1",at:f.clock.now,window:{id:"a",pid:0}};
+    for(const appMatch of ["firefox","absent"]) f.warp.run({action:"focus-app",appMatch},null,null,null,null,error=>results.push(error),invocation);
+    assert.equal(results[0],null);
+    assert.match(results[1],/No matching/);
+});
 
 test("Windows selectors cannot fall back to a broader KDE app match",()=>{
     const f=fixture([]);
@@ -104,6 +218,7 @@ test("native editor focus selects only this process's normal window and reports 
         Warp:{windows:()=>windows,focus:window=>focused.push(window)},
         print:()=>{}, registerShortcut:(_id,_label,_key,callback)=>{dispatch=callback;return true;},
         callDBus:(_service,_path,_interface,method,...args)=>{
+            if (method === "InputGeneration") return;
             if (method === "Next") args.at(-1)(JSON.stringify({id:1,expires:Date.now()+5000,command:{kind:"focus-editor"}}));
             else replies.push(JSON.parse(args.at(-1)));
         }
@@ -125,6 +240,7 @@ for(const kind of ["app-pull","pull-selected"]) test(`control ${kind} replies on
         Warp:{windows:()=>[owned],run:(...args)=>{completion=args[5];}},
         print:()=>{},registerShortcut:(_id,_label,_key,callback)=>{dispatch=callback;return true;},
         callDBus:(_service,_path,_interface,method,...args)=>{
+            if(method==="InputGeneration") return;
             if(method==="Next") args.at(-1)(JSON.stringify({id:1,expires:Date.now()+5000,command:{kind,window:{id:"a",pid:42},binding:{action:"pull-app"}}}));
             else replies.push(JSON.parse(args.at(-1)));
         }
@@ -146,7 +262,7 @@ test("native hold binding captures its pointer and defers action to press/releas
     assert.equal(f.shortcuts.get("Window Warp: App").id,"window-warp-hold-0-Ctrl+Alt+J");
     assert.deepEqual(f.calls[0].slice(0,6),["fixture","/Control","com.windowwarp.Control","GesturePointer","test","owned-generation-0"]);
     f.workspace.cursorPos.x = 500;
-    assert.deepEqual(JSON.parse(f.calls[0][6]),{x:-1800,y:200});
+    assert.deepEqual(JSON.parse(f.calls[0][6]),{x:-1800,y:200,previous:{id:"a",pid:0},generation:"generation-1"});
     const resumed = fixture([binding],false,undefined,["next-generation-0"]);
     assert.equal(resumed.shortcuts.get("Window Warp: App").id,f.shortcuts.get("Window Warp: App").id);
     resumed.workspace.cursorPos = {x:1,y:2};
@@ -619,7 +735,7 @@ for (const legacy of [false,true]) test(`push arms retile for the moved identity
     f.window.pid = 73;
     f.trigger("Push");
     const arm = f.calls.find(c=>c[3]==="ArmRetile");
-    assert.deepEqual(JSON.parse(arm[5]),{id:"a",pid:73});
+    assert.deepEqual(JSON.parse(arm[5]),{id:"a",pid:73,generation:"generation-1"});
     assert.ok(Math.abs(Number(arm[6])-Date.now()) < 1000);
     const before = clone(f.window.frameGeometry);
     f.trigger("Existing");

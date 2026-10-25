@@ -22,6 +22,13 @@ struct Point {
     x: i32,
     y: i32,
 }
+#[derive(Clone, Deserialize)]
+struct Capture {
+    x: i32,
+    y: i32,
+    previous: Option<crate::retile::Target>,
+    generation: String,
+}
 enum Event {
     Key {
         id: String,
@@ -30,7 +37,7 @@ enum Event {
     },
     Pointer {
         id: String,
-        point: Point,
+        capture: Capture,
     },
     Configure(Option<Config>, mpsc::SyncSender<Result<(), String>>),
     Failed(String),
@@ -47,14 +54,14 @@ static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 
 /// Called only by the authenticated local KWin endpoint, not the editor.
 pub fn pointer(id: &str, payload: &str) {
-    let Ok(point) = serde_json::from_str::<Point>(payload) else {
+    let Ok(capture) = serde_json::from_str::<Capture>(payload) else {
         return;
     };
     if let Ok(running) = RUNNING.lock() {
         if let Some(running) = running.as_ref() {
             let _ = running.sender.send(Event::Pointer {
                 id: id.into(),
-                point,
+                capture,
             });
         }
     }
@@ -236,6 +243,7 @@ fn new_running(app: &AppHandle) -> Result<Running, String> {
 struct Desired {
     binding: Binding,
     settings: Settings,
+    generation: String,
 }
 struct Slot {
     spec: Desired,
@@ -248,6 +256,8 @@ struct Pending {
     native_pressed: bool,
     released: bool,
     point: Option<Point>,
+    previous: Option<crate::retile::Target>,
+    generation: Option<String>,
     held: bool,
     cancelled: bool,
     picker: Option<crate::radial::Picker>,
@@ -260,6 +270,8 @@ impl Pending {
             native_pressed: false,
             released: false,
             point: None,
+            previous: None,
+            generation: None,
             held: false,
             cancelled,
             picker: None,
@@ -302,32 +314,48 @@ impl Controller {
                 pending.picker = None;
             }
         }
+        let session = crate::linux_control::configure_session(app, config.is_some());
         self.desired = config;
-        let result = (|| {
-            self.reconcile(app)?;
-            if let Some(config) = &self.desired {
-                crate::linux_control::request(app, serde_json::json!({"kind":"reset-app-pulls"}))?;
-                crate::platform::enable_window_actions(app, config)
+        if self.desired.is_none() {
+            // A transport failure must not prevent native hook cleanup.
+            let reconcile = self.reconcile(app);
+            let disable = crate::platform::disable_window_actions();
+            let failures: Vec<_> = [session, reconcile, disable]
+                .into_iter()
+                .filter_map(Result::err)
+                .collect();
+            return if failures.is_empty() {
+                Ok(())
             } else {
-                crate::platform::disable_window_actions()
-            }
-        })();
+                Err(failures.join("; "))
+            };
+        }
+        let result = session.and_then(|_| {
+            self.reconcile(app)?;
+            crate::platform::enable_window_actions(app, self.desired.as_ref().unwrap())
+        });
         if let Err(error) = result {
             self.desired = None;
-            let cleanup = self
-                .reconcile(app)
-                .and_then(|_| crate::platform::disable_window_actions());
-            return Err(format!(
-                "{error}{}",
-                cleanup
-                    .err()
-                    .map(|e| format!("; cleanup: {e}"))
-                    .unwrap_or_default()
-            ));
+            let cancel = crate::linux_control::configure_session(app, false);
+            let reconcile = self.reconcile(app);
+            let disable = crate::platform::disable_window_actions();
+            let failures: Vec<_> = [Err(error), cancel, reconcile, disable]
+                .into_iter()
+                .filter_map(Result::err)
+                .collect();
+            return Err(failures.join("; "));
         }
         Ok(())
     }
     fn reconcile(&mut self, app: &AppHandle) -> Result<(), String> {
+        let generation = if self.desired.is_some() {
+            crate::linux_control::descriptor(app)?["generation"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        } else {
+            String::new()
+        };
         let desired: HashMap<_, _> = self
             .desired
             .as_ref()
@@ -342,6 +370,7 @@ impl Controller {
                             Desired {
                                 binding: b.clone(),
                                 settings: config.settings.clone(),
+                                generation: generation.clone(),
                             },
                         )
                     })
@@ -388,6 +417,9 @@ impl Controller {
     }
     fn finish(&mut self, app: &AppHandle) {
         self.desired = None;
+        if let Err(error) = crate::linux_control::configure_session(app, false) {
+            let _ = app.emit("warp-error", error);
+        }
         for (id, _) in self.slots.drain() {
             if let Err(error) = crate::platform::unload_script(&id) {
                 let _ = app.emit("warp-error", error);
@@ -427,23 +459,25 @@ impl Controller {
                 let result = (|| -> Result<(), String> {
                     if p.held && slot.spec.settings.hold_mode == "radial" {
                         let point = p.point.unwrap();
-                        p.picker = crate::radial::Picker::open(
+                        p.picker = crate::radial::Picker::open_for_window(
                             app,
                             &slot.spec.binding,
                             crate::radial::Point {
                                 x: point.x,
                                 y: point.y,
                             },
+                            p.previous.as_ref(),
                         )?;
                         if p.picker.is_some() {
                             return Ok(());
                         }
                     }
-                    crate::linux_control::request(
+                    crate::linux_control::input_request(
                         app,
                         serde_json::json!({
-                            "kind":"app-pull", "binding":slot.spec.binding, "settings":slot.spec.settings, "pointer":pointer
+                            "kind":"app-pull", "binding":slot.spec.binding, "settings":slot.spec.settings, "pointer":pointer, "previous":p.previous, "window":p.previous
                         }),
+                        p.generation.as_deref(),
                     )?;
                     Ok(())
                 })();
@@ -571,18 +605,27 @@ fn run(app: &AppHandle, receiver: mpsc::Receiver<Event>) {
                         }
                     }
                 }
-                Event::Pointer { id, point } => {
-                    if let Some(slot) = state.slots.values_mut().find(|s| s.callback == id) {
-                        slot.pending
-                            .get_or_insert_with(|| {
-                                Pending::new(
-                                    &slot.spec.settings,
-                                    Instant::now(),
-                                    state.desired.is_none(),
-                                )
-                            })
-                            .point
-                            .get_or_insert(point);
+                Event::Pointer { id, capture } => {
+                    if let Some(slot) = state
+                        .slots
+                        .values_mut()
+                        .find(|s| s.callback == id && s.spec.generation == capture.generation)
+                    {
+                        let pending = slot.pending.get_or_insert_with(|| {
+                            Pending::new(
+                                &slot.spec.settings,
+                                Instant::now(),
+                                state.desired.is_none(),
+                            )
+                        });
+                        if pending.point.is_none() {
+                            pending.point = Some(Point {
+                                x: capture.x,
+                                y: capture.y,
+                            });
+                            pending.previous = capture.previous;
+                            pending.generation = Some(capture.generation);
+                        }
                     }
                 }
             }

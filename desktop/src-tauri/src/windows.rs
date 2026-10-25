@@ -856,8 +856,8 @@ pub fn disable(app: &AppHandle) -> Result<(), String> {
     let mut installed = ACTION_SHORTCUTS.lock().map_err(|e| e.to_string())?;
     let keys = installed.clone();
     unregister_tracked(app, &mut installed, &keys)?;
-    HISTORY.lock().map_err(|e| e.to_string())?.clear();
-    PREVIOUS.lock().map_err(|e| e.to_string())?.clear();
+    // Pausing cancels transient input, not the user's movement/focus history.
+    // These process-local caches also survive configuration re-registration.
     Ok(())
 }
 pub fn shutdown(app: &AppHandle) {

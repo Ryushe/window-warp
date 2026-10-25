@@ -1238,3 +1238,95 @@ across pause/configuration reload, then reconcile geometry dispatch through the
 persistent KDE control instance so cross-script actions share one state owner.
 The user-requested full port remains active; this is a verified feature checkpoint,
 not full parity, a merge, publication or installation.
+
+
+## Pause persistence and shared KDE state — verified (2026-10-25)
+
+Owning branch remains `codex/cross-platform-app`, based on the verified
+`db8a32f85086136750f6cfd38e737c76cafc03fc` implementation and `18796dc`
+handoff. Main has no native desktop application; these defects belong to this
+feature branch. No merge, push, installation or normal-session activation.
+
+Contract: pausing and re-registering settings cancel held input and temporary
+retile reservations but preserve process-local movement history, previous-focus
+targets and maximize restore rectangles, matching the original AHK behavior.
+KDE will keep one persistent Warp state owner in the control script. Registration
+scripts forward the captured window identity, previous focus and input generation;
+a FIFO Rust dispatcher correlates replies without blocking the endpoint on its
+own callbacks. Geometry work shares the persistent queue. Session changes cancel
+stale queued/continuing input while preserving caches; workspace restoration uses
+the same geometry owner. Five-second command lifetimes and the existing 1.8-second
+geometry deadline remain bounded, with no idle polling.
+
+Parent owns Windows implementation, application fixtures, native validation and
+integration. `/root/retile_review` owns KDE sources, focused tests and the minimal
+radial captured-focus API; `/root/packaged_native` independently reviews that
+contract. Reopen these named native children for their existing packets.
+
+Windows red receipt: `desktop/src-tauri/target/windows-validation/
+WARP-NATIVE-be4792a3-c13b-47f8-952e-b54c829e3dcf/` timed out restoring maximized
+history after pause/configuration reload. Removing cache clearing from disable
+passes all 45 native application checks, including retained previous focus and
+saved maximize geometry, in `WARP-NATIVE-ee3aa729-f76f-4a37-b4e1-db663d4e33dd/`.
+One physical second-display check remains skipped. Normal Windows binary restored.
+
+KDE red receipt: `hoster-warp-gui-20261025-persistence-red` failed at the
+new history-retention assertion: after pause/configuration reload, history pull
+left the owned window floating at 550x360 instead of restoring maximization.
+The exact failure journal and artifacts are retained under
+`desktop/src-tauri/target/kde-validation/persistence/red-journal.log` and `red/`.
+
+Final verification for this increment:
+
+- 115 Node tests pass, including 70 KWin tests for persistent state, captured
+  identity, shared ordering, cancellation, late bootstrap/replies and deadlines;
+  JavaScript syntax, Python AST, Rust formatting and diff checks pass.
+  Local Node receipt: `desktop/src-tauri/target/persistence-node.log`.
+- 64 Windows Rust tests pass / five opt-in ignored on final shared source:
+  `desktop/src-tauri/target/persistence-windows-rust.log`. The Windows native
+  45-check receipt above remains applicable; subsequent changes are Linux-only
+  cleanup and a conditional radial wrapper preserving Windows behavior.
+- `hoster-warp-build-20261025-persistence-final`: inactive/exit 0, 60 Linux
+  Rust tests pass / one opt-in ignored, 115 Node pass, executable and Debian
+  package rebuilt. `build-final-journal.log`; only the pre-existing Linux
+  unused `geometry::relative` warning remains.
+- `hoster-warp-gui-20261025-persistence-final`: inactive/exit 0, all 37 native
+  app checks pass with `--hold --radial --retile --resume-held --reassign-native`.
+  This tests real separate registration/control scripts, retained history and
+  previous focus, mixed shortcut/workspace geometry, and held-key generations.
+  `gui-final-result.json`, `gui-final-journal.log`, and `gui-final/` artifacts.
+  Earlier initial build passed 35 app checks before the final cleanup correction.
+- `hoster-warp-native-20261025-persistence`: inactive/exit 0, 35 native geometry
+  checks pass on two virtual outputs; `native-result.json`, `native-journal.log`.
+- `portafort-warp-native-20261025-persistence`: inactive/exit 0, 35 native checks
+  pass on the real one-output Plasma 5.27.11 Wayland desktop; scriptUnloaded true.
+  `portafort-result.json` and `portafort-journal.log`. Standalone fixture uses
+  local forwarding into the single Warp owner; full transport is covered by GUI.
+
+The paths above without prefixes are under
+`desktop/src-tauri/target/kde-validation/persistence/`. All task build/native
+units are terminal and temporary scripts/owned windows cleaned up. The normal
+Windows debug executable was restored by its fixture. No installer was installed,
+no user app session activated, and no branch merged or pushed.
+
+Independent `/root/packaged_native` review found and verified fixes for missing
+focus completion, cancellation queued behind blocking worker requests, and
+cleanup skipped after cancellation transport failure. Final review has no
+remaining actionable findings; independent focused Node run passed 70/70.
+`/root/retile_review` implemented KDE source/test changes and returned terminal.
+Parent implemented Windows and native application regressions, verified red/green,
+updated documentation and reconciled acceptance. Both native child names remain
+reopenable via follow-up. Hoster cleanup sidecar inspected two unregistered live
+scopes, retained both and stopped none; no unrelated workloads were terminated.
+
+Reference audit: registration consumers now include `shortcuts.js`; package check,
+Linux generation, Node fixtures, standalone live fixture and README agree. The
+live.py CLI intentionally still accepts the warp.js path and loads sibling
+shortcuts.js. `reset-app-pulls` has no remaining runtime/test references.
+
+Remaining full-parity work includes delayed-browser direct tile/retile acceptance,
+overlapping distinct chords, Windows Firefox and PowerShell/custom-terminal paths,
+packaged-app/desktop-entry variants, physical mixed-DPI/portrait/disconnect cases,
+real Plasma 6, login/tray/installer validation and final independent release audit.
+Next: test direct unmaximize-and-tile with a delayed Wayland client, then continue
+the remaining PARITY.md gates. The full feature-port goal remains active.

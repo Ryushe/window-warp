@@ -9,6 +9,8 @@ var Warp = (function () {
     var savedMaximize = [];
     var geometryQueue = [];
     var geometryBusy = false;
+    var activeJob = null;
+    var inputGeneration = null;
     var stateWait = null;
     var stateTimer = new QTimer();
     stateTimer.interval = 25;
@@ -106,7 +108,7 @@ var Warp = (function () {
         if (selected && candidates.indexOf(selected) < 0) throw new Error("The selected window no longer matches this app.");
         if (!window) { print("Window Warp: no open window for " + binding.appMatch); return; }
         var wasActive = window === current;
-        if (!wasActive && current) previousWindows[binding.shortcut] = String(current.internalId);
+        if (!wasActive && current) previousWindows[binding.shortcut] = identity(current);
         var mainIndex = configuration.mainMonitor ? Math.min(configuration.mainMonitor - 1, all.length - 1) : 0;
         // The origin output is the default; an explicit setting is stable across focus changes.
         if (!configuration.mainMonitor) {
@@ -130,7 +132,7 @@ var Warp = (function () {
             return placement(state, window, main, rect);
         }
         if (wasActive && binding.mainMonitorAction === "focus-last") {
-            var previous = windows().filter(function (w) { return !w.deleted && String(w.internalId) === previousWindows[binding.shortcut]; })[0];
+            var previous = previousWindows[binding.shortcut] && live(previousWindows[binding.shortcut]);
             if (previous) focus(previous);
             return;
         }
@@ -240,6 +242,27 @@ var Warp = (function () {
         var all = screens();
         savedMaximize = savedMaximize.filter(function(entry) { return !!live(entry.target); });
         if (!all.length) { done(); return; }
+        if (job.action === "restore-workspace") {
+            var existing = live(job.target);
+            if (!existing) { done("The selected window closed or changed identity."); return; }
+            var saved = job.placement;
+            var output = all.filter(function(o) { return o.name === saved.monitorName; })[0] || all[Math.min(Math.max(0, saved.monitor - 1), all.length - 1)];
+            var requested = relative(saved.rect, saved.workArea, area(output));
+            var state = {horizontal:saved.maximizedHorizontal, vertical:saved.maximizedVertical};
+            job.result = requested;
+            existing.minimized = false;
+            function placed() {
+                existing.setMaximize(state.vertical, state.horizontal);
+                existing.fullScreen = saved.fullscreen;
+                awaitPlacement(job.target, placement(state, existing, output, requested), done, function() { existing.minimized = saved.minimized; });
+            }
+            if (state.horizontal && state.vertical && !saved.fullscreen) {
+                existing.fullScreen = false; send(existing, output); placed();
+            } else restoreFloating(job.target, existing, function(window) {
+                send(window, output); window.frameGeometry = copy(requested); placed();
+            }, done, requested);
+            return;
+        }
         if (job.action === "pull") {
             while (history.length) {
                 var previous = history.pop();
@@ -348,7 +371,7 @@ var Warp = (function () {
             var expectedRect = !state.horizontal && !state.vertical ? relative(original, source, area(all[next])) : null;
             awaitPlacement(job.target, placement(state, window, all[next], expectedRect), done, function() {
                 callDBus(WARP_APP.service, "/Control", "com.windowwarp.Control", "ArmRetile", WARP_APP.token,
-                    JSON.stringify(job.target), String(Date.now()));
+                    JSON.stringify({id:job.target.id, pid:job.target.pid, generation:job.generation}), String(Date.now()));
                 if (job.action === "push-left-center" || job.action === "push-right-center") centerPointer(all[next]);
             });
         }, done);
@@ -357,19 +380,22 @@ var Warp = (function () {
         if (geometryBusy || !geometryQueue.length) return;
         geometryBusy = true;
         var job = geometryQueue.shift();
+        activeJob = job;
         var finished = false;
-        var done = function(error) {
+        var done = function(error, cancelled) {
             if (finished) return;
             finished = true;
             if (stateWait && stateWait.done === done) { stateTimer.stop(); stateWait = null; }
             try {
-                if (error && done.diagnostic) print("Window Warp: " + String(error) + "; geometry " + JSON.stringify({action:job.action,
+                if (error && !cancelled && done.diagnostic) print("Window Warp: " + String(error) + "; geometry " + JSON.stringify({action:job.action,
                     expected:done.diagnostic.expected, observed:done.diagnostic.observed, pendingReply:done.diagnostic.pendingReply}));
-                if (job.completion) job.completion(error || null);
-                else if (error && !done.diagnostic) print("Window Warp: " + String(error));
-            } finally { geometryBusy = false; nextGeometry(); }
+                if (job.completion) job.completion(error || null, job.result, !!cancelled);
+                else if (error && !cancelled && !done.diagnostic) print("Window Warp: " + String(error));
+            } finally { activeJob = null; geometryBusy = false; nextGeometry(); }
         };
+        job.cancel = function() { done("Shortcut action cancelled after pause or configuration change.", true); };
         done.deadline = job.deadline;
+        if (job.generation !== undefined && job.generation !== inputGeneration) { job.cancel(); return; }
         if (Date.now() >= done.deadline) { done("Window action expired while waiting for an earlier operation."); return; }
         try { applyGeometry(job, done); }
         catch (error) { done(String(error)); }
@@ -382,7 +408,7 @@ var Warp = (function () {
         geometryQueue.push(job);
         nextGeometry();
     }
-    function run(binding, overrides, holdPointer, selected, previous, completion) {
+    function run(binding, overrides, holdPointer, selected, previous, completion, invocation) {
         if (binding.windowsMatch && (binding.action === "pull-app" || binding.action === "focus-app")) {
             throw new Error("Windows window-match rules cannot run on KDE. Adapt the binding to a KDE app identifier first.");
         }
@@ -390,15 +416,27 @@ var Warp = (function () {
             callDBus(WARP_APP.service, "/Control", "com.windowwarp.Control", "Action", WARP_APP.token, binding.action);
             return;
         }
-        if (overrides) settings = overrides;
         var all = screens();
         if (!all.length) { if (completion) completion("No connected output is available."); return; }
-        var window = active();
+        var window = invocation ? (invocation.window ? live(invocation.window) : null) : active();
+        var extra = {completion:completion};
+        if (invocation) {
+            extra.generation = invocation.generation;
+            extra.deadline = invocation.deadline || invocation.at + 1800;
+            previous = invocation.previous ? live(invocation.previous) || null : null;
+            if (invocation.generation !== inputGeneration || Date.now() >= extra.deadline) {
+                if (completion) completion("Shortcut action expired or was cancelled.", null, true);
+                return;
+            }
+        }
+        if (overrides) settings = overrides;
         if (binding.action === "pull-app") {
             if (selected && !matches(selected, binding.appMatch.toLowerCase())) throw new Error("The selected window no longer matches this app.");
-            queueGeometry(binding.action, null, {binding:binding, settings:settings, pointer:holdPointer,
-                selected:selected ? identity(selected) : null, previous:(previous || window) ? identity(previous || window) : null,
-                completion:completion});
+            extra.binding=binding; extra.settings=settings; extra.pointer=holdPointer;
+            extra.selected=selected ? identity(selected) : null;
+            var prior=invocation ? previous : (previous || window);
+            extra.previous=prior ? identity(prior) : null;
+            queueGeometry(binding.action, null, extra);
             return;
         }
         if (binding.action === "focus-app") {
@@ -409,39 +447,24 @@ var Warp = (function () {
             // Stable order lets repeated presses cycle through every instance.
             candidates.sort(function (a, b) { return String(a.internalId).localeCompare(String(b.internalId)); });
             if (candidates.length) focus(candidates[(candidates.indexOf(window) + 1) % candidates.length]);
-            else print("Window Warp: no open window for " + binding.appMatch);
+            if (completion) completion(candidates.length ? null : "No matching app window is open.");
+            else if (!candidates.length) print("Window Warp: no open window for " + binding.appMatch);
             return;
         }
-        if (binding.action === "pull") { queueGeometry(binding.action, null, {completion:completion}); return; }
-        if (!window || window.deleted || window.dock || window.desktopWindow) return;
-        queueGeometry(binding.action, window, {completion:completion});
+        if (binding.action === "pull") { queueGeometry(binding.action, null, extra); return; }
+        if (!window || window.deleted || window.dock || window.desktopWindow) { if(completion) completion("The captured window is no longer available."); return; }
+        queueGeometry(binding.action, window, extra);
     }
-    WARP_CONFIG.bindings.forEach(function (binding, index) {
-        if (binding.enabled === false) return;
-        var shortcut = binding.shortcut.replace("Super", "Meta");
-        var qtKeys = {Semicolon: ";", Quote: "'", Backquote: "`", Comma: ",", Period: ".", Slash: "/", Backslash: "\\", Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]", PageUp: "PgUp", PageDown: "PgDown", Enter: "Return"};
-        var parts = shortcut.split("+");
-        parts[parts.length - 1] = qtKeys[parts[parts.length - 1]] || parts[parts.length - 1];
-        shortcut = parts.join("+");
-        // Include the key in the ID: KGlobalAccel otherwise keeps an old key
-        // for a reused action name when the user edits a binding.
-        var id = "window-warp-" + binding.action + "-" + index + "-" + shortcut.replace(/[^a-z0-9]/gi, "-");
-        var holdId = typeof WARP_HOLD_IDS !== "undefined" && WARP_HOLD_IDS[index];
-        if (holdId) id = typeof WARP_HOLD_NATIVE_IDS !== "undefined" ? WARP_HOLD_NATIVE_IDS[index] : "window-warp-hold-" + index + "-" + binding.shortcut;
-        if (!registerShortcut(id, "Window Warp: " + binding.label, shortcut, function () {
-            try {
-                if (holdId) {
-                    var pointer = workspace.cursorPos;
-                    callDBus(WARP_APP.service, "/Control", "com.windowwarp.Control", "GesturePointer", WARP_APP.token, holdId,
-                        JSON.stringify({x: Math.round(pointer.x), y: Math.round(pointer.y)}));
-                } else if ((binding.shortcut === "Super+X" || binding.shortcut === "Super+C") && binding.action !== "toggle-pause") {
-                    callDBus(WARP_APP.service, "/Control", "com.windowwarp.Control", "Retile", WARP_APP.token, binding.shortcut,
-                        function(consumed) { if (!consumed) run(binding); });
-                } else run(binding);
-            } catch (error) { print("Window Warp: " + String(error)); }
-        })) throw new Error("Could not register " + shortcut);
-    });
+    function configureSession(generation) {
+        inputGeneration = generation;
+        var cancelled = geometryQueue.filter(function(job) { return job.generation !== undefined; });
+        geometryQueue = geometryQueue.filter(function(job) { return job.generation === undefined; });
+        cancelled.forEach(function(job) { if (job.completion) job.completion("Shortcut action cancelled after pause or configuration change.", null, true); });
+        if (activeJob && activeJob.generation !== undefined) activeJob.cancel();
+    }
     return {windows: windows, screens: screens, area: area, outputFor: outputFor, focus: focus,
         send: send, relative: relative, copy: copy, tile: tile, run: run, active: active,
-        resetAppPulls: function () { previousWindows = {}; }};
+        configureSession: configureSession,
+        restore: function(window, saved, completion, deadline) { queueGeometry("restore-workspace", window,
+            {placement:saved, completion:completion, deadline:deadline || Date.now() + 1800}); }};
 })();
