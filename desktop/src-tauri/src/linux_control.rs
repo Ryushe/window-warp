@@ -191,14 +191,7 @@ impl Endpoint {
         };
         let app = self.app.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            let result = crate::linux_pointer::move_to(point).and_then(|_| {
-                let actual = crate::platform::pointer(&app)?;
-                if actual.x == point.x && actual.y == point.y {
-                    Ok(())
-                } else {
-                    Err("KDE did not move the pointer to the requested monitor center.".to_string())
-                }
-            });
+            let result = crate::linux_pointer::move_to(point, || crate::platform::pointer(&app));
             if let Err(error) = result {
                 let _ = app.emit("warp-error", error);
             }

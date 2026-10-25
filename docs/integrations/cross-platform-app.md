@@ -1970,3 +1970,77 @@ terminal identity fix, native regressions, private Plasma6 fixture authorization
 and final receipts above. Staged diff/check passed; worktree was clean after
 that commit. This dossier-only follow-up records the immutable SHA. No remote
 publication, integration or installed runtime activation occurred.
+
+
+## Active continuation: Plasma 6 pointer edge resistance
+
+Previous goal turn: progress (reviewed terminal fix committed as54f1901,
+immutable recovery dossier adf44a3,39 live Portafort checks verified).
+Current branch remains codex/cross-platform-app; no integration requested.
+
+Contract: a centered push/pull reaches the exact target monitor center under
+KWin's default output-edge resistance, including when multiple acknowledged
+absolute requests are needed. Preserve permission checks and failure reporting;
+do not change the user's compositor settings. Keep full PARITY scope active.
+
+Evidence: hoster-warp-gui-20261025-plasma6-pointer-diagnostic failed/exit1.
+Requested(1920,360), actual(1820,360), five samples0.2s apart unchanged, app
+message reports pointer mismatch. Target window had reached Virtual-1 at
+rect1360,80,550,360, workarea1280,0,1280,720. Local receipt
+src-tauri/target/kde-validation/plasma6-pointer-diagnostic.log.
+Exact KDE6.3.6 source src/pointer_input.cpp applies applyEdgeBarrier to absolute
+fake-input AND Warp events; MotionType only affects the subsequent event flag.
+Sanitized source: target/research/kwin636-pointer-result.json,
+SHA256faf7d4c19714e9291a8ba5d8274bfef046a3d44c2f577b505884e3ff419fa836.
+
+Implementation under validation: linux_pointer owns verified centering, reuses
+one authorized Wayland connection, repeats the same absolute target only after
+an observed mismatch, stops at success or16requests/existing2s correction
+deadline. Unchanged intermediate samples are allowed because edge resistance
+accumulates internally. Permission/transport/read errors stop immediately.
+Existing position reads can consume their own5s timeout, so2s is a deadline for
+starting corrections, not a new strict whole-operation wall-clock guarantee.
+Persistent confinement or unsupported extremes still return failure. X11 stays
+one native movement plus verification. Windows runtime code unchanged.
+
+Four focused Linux regressions cover barrier accumulation/settling, persistent
+confinement, immediate error propagation, and expired deadline. Independent
+source review pending; retile_review confirmed exact KWin source rationale.
+Hoster entry cleanup inspected2, retained2 unregistered live scopes, stopped0;
+needs-attention, no manual cleanup. Current builder
+hoster-warp-build-20261025-pointer-barrier is active; Rust72pass/1ignored,
+application build still running at last observation. No source provenance or
+native acceptance claim until final artifacts and runtime evidence are checked.
+
+
+Final pointer continuation receipts (supersede running status above):
+- Builder inactive/exit0;129Node/72Rust pass,1ignored; actual release compiled
+ 37.23s, final executable/Deb rebuilt. Build log pointer-barrier-build.log.
+- Runtime executable SHA256a4010c1f5bc286d67527ab13b0c572fb94f60c698cd9feb78ce4de82427e1ef2
+ agrees between Hoster and Portafort. Fresh local Deb size5024116,
+ SHA256746b6024fa85d9bf60586a2044638021b5c3d456432256c62e25df66d1fcada8.
+- hoster-warp-gui-20261025-plasma6-pointer-fixed and -strong both inactive/exit0,
+ 39checks each; normal edge resistance default100 and max1000 respectively.
+- hoster-warp-gui-20261025-plasma6-pointer-denied inactive/exit0,27checks:
+ denied app pointer access stays denied, cursor unchanged, visible error.
+- portafort-warp-gui-20261025-pointer-fixed inactive/exit0,39checks on live KDE
+ via required WSL -> Hoster -> Portafort route.
+- hoster-warp-native-20261025-pointer-barrier-x11 inactive/exit0, fresh native
+ Xvfb round-trip passes. Docker --init retained from previously proven fixture.
+- Receipts retrieved into target/kde-validation/{plasma6-pointer-fixed,
+ plasma6-pointer-strong,plasma6-pointer-denied,portafort-pointer-fixed}/.
+ All units in this continuation are now terminal; no workload restart needed.
+
+Independent terminal_release_review found no runtime findings; identified that
+window-placement completion cannot guarantee pointer-worker completion. Fixed
+fixture with bounded exact-position wait and failure samples, then independent
+re-review closed it. New strong-barrier flag writes only private kwinrc and
+requires --pointer. retile_review verified primary6.3.6 schema0..1000/default100,
+CornerBarrier defaulttrue/fixed2000. Existing side-by-side center target exercises
+a normal edge; do not claim actual corner-path acceptance. No changes followed
+native acceptance except docs. Windows modules/build inputs unchanged.
+
+Next concrete action: run native6Firefox/delayed-window/overlap checks using the
+current executable, preserving explicit failures. Then complete the remaining
+input/identity/physical-display/login/installer gates in PARITY. Full goal stays
+active. This closes the diagnosed6pointer issue, not the full port.

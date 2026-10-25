@@ -968,13 +968,27 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                 if "--pointer" in sys.argv or "--pointer-denied" in sys.argv:
                     def read_pointer():
                         return json.loads(subprocess.check_output([sys.executable, str(Path(__file__).with_name("pointer_probe.py"))], text=True))
+                    def wait_pointer(expected, label):
+                        # Window placement and the app's pointer worker finish independently.
+                        deadline = time.monotonic() + 5
+                        samples = []
+                        while time.monotonic() < deadline:
+                            actual = read_pointer()
+                            samples.append(actual)
+                            if actual == expected:
+                                return
+                            time.sleep(0.1)
+                        diagnostic = {"stage":label, "expected":expected, "samples":samples,
+                            "message":evaluate("return document.querySelector('#message').textContent")}
+                        (output / "pointer-failure.json").write_text(json.dumps(diagnostic, indent=2))
+                        raise AssertionError(f"{label}: {diagnostic}")
                 if "--pointer-denied" in sys.argv:
                     wait_for("return document.querySelector('#message').textContent.includes('pointer access')")
                     assert read_pointer() == {"x":100,"y":100}
                     report["checks"].append("KDE rejects undeclared pointer access, leaves cursor unchanged and shows the failure")
                 if "--pointer" in sys.argv:
                     center = {"x":round(area["x"]+area["width"]/2),"y":round(area["y"]+area["height"]/2)}
-                    assert read_pointer() == center, "App pull must center on main"
+                    wait_pointer(center, "App pull must center on main")
                     report["checks"].append("native Wayland app pull centers pointer with KDE desktop capability checks enabled")
                     invoke("set_enabled", {"enabled":False})
                     pointer_config = invoke("get_config")
@@ -988,16 +1002,16 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                     chord(66); keys.release()  # F8: real centered-push shortcut
                     moved = wait_window(lambda w:w["monitor"] != target["monitor"],"center push changes monitor")
                     expected = {"x":round(moved["workArea"]["x"]+moved["workArea"]["width"]/2),"y":round(moved["workArea"]["y"]+moved["workArea"]["height"]/2)}
-                    assert read_pointer() == expected
+                    wait_pointer(expected, "right-center push")
                     chord(68); keys.release()  # F10: history pull
                     wait_window(lambda w:w["rect"] == initial,"pull restores source placement")
-                    assert read_pointer() == center
+                    wait_pointer(center, "history pull centers on main")
                     chord(67); keys.release()  # F9
                     wait_window(lambda w:w["monitor"] != target["monitor"],"left center push wraps")
-                    assert read_pointer() == expected
+                    wait_pointer(expected, "left-center push")
                     chord(68); keys.release()  # F10: history pull
                     wait_window(lambda w:w["rect"] == initial,"second pull restores source placement")
-                    assert read_pointer() == center
+                    wait_pointer(center, "history pull centers on main")
                     report["checks"].append("native KDE left/right centered push and history pull move pointer to the correct monitor")
                     invoke("set_enabled", {"enabled":False})
                     invoke("save_config", {"config":saved_config})

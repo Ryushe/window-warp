@@ -335,3 +335,28 @@ Full app run `hoster-warp-gui-20261025-plasma6-authorized` fails at the pointer
 position assertion after right-center push (`gui.py` line 991). It is not a full
 app pass. Capture actual and expected coordinates on the next diagnostic run.
 Logs and screenshots are under `src-tauri/target/kde-validation/plasma6-authorized/`.
+
+
+### Plasma 6 pointer edge resistance: corrected runtime
+
+The earlier pointer assertion failure is superseded by the corrected build.
+KWin6.3.6 subtracts output-edge resistance even from absolute fake-input motion.
+The app now repeats a verified target within a bounded correction budget; the
+fixture independently waits for pointer completion after window placement.
+
+Use `--hold --pointer --strong-pointer-barrier` to set normal resistance1000
+(the supported maximum) in the private KWin session only. This does not modify
+the user's settings. It is a normal-edge test, not actual corner-path coverage.
+Permission refusal remains a separate fresh session with `--hold
+--pointer-denied`.
+
+Final units `hoster-warp-gui-20261025-plasma6-pointer-{fixed,strong}` each pass39
+combined checks with `--hold --pointer --radial --tray --terminal
+--terminal-concurrent` (strong additionally sets the flag above). The denied
+run with `--tray` passes27. Real Portafort regression
+`portafort-warp-gui-20261025-pointer-fixed` passes39 via WSL -> Hoster -> Portafort.
+The current native X11 opt-in also passes on private Xvfb. Receipts are under
+`src-tauri/target/kde-validation/` in the matching pointer directories and logs.
+
+These results cover core app pointer/gesture/workspace/terminal/tray behavior,
+not all Plasma6 Firefox, overlap, physical display, or login/installer cases.

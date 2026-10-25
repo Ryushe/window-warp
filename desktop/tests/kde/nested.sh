@@ -59,6 +59,12 @@ for name, executable in [("window-warp", sys.argv[1]), ("warp-input-fixture", sy
 PY
     kbuildsycoca5 --noincremental >"$session_dir/desktop-cache.log" 2>&1
 fi
+# Exercise KWin 6's strongest supported normal output-edge resistance without
+# changing the user's compositor settings. Older KWin versions ignore this key.
+if [[ " $* " == *" --strong-pointer-barrier "* ]]; then
+    [[ " $* " == *" --pointer "* ]] || { printf '%s\n' '--strong-pointer-barrier requires --pointer' >&2; exit 1; }
+    printf '[EdgeBarrier]\nEdgeBarrier=1000\nCornerBarrier=true\n' >"$XDG_CONFIG_HOME/kwinrc"
+fi
 # KWin's documented source-level test switch exposes fake-input to our helper.
 # It applies only to this private compositor/bus/runtime, never the user's seat.
 KWIN_WAYLAND_NO_PERMISSION_CHECKS=$((1-permission_checks)) kwin_wayland --virtual --output-count 2 --width 1280 --height 720 --socket warp-test --no-lockscreen --no-kactivities >"$session_dir/kwin.log" 2>&1 &
