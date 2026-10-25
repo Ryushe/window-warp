@@ -1,5 +1,29 @@
 # Native Windows application validation
 
+## Installer acceptance
+
+`installer.ps1` checks a freshly built NSIS package in a temporary directory.
+Run it in 64-bit PowerShell; without `-Execute` it only checks prerequisites.
+
+```powershell
+./desktop/tests/windows/installer.ps1
+./desktop/tests/windows/installer.ps1 -Execute
+```
+
+The fixture refuses existing Window Warp installations, shortcuts, startup
+entries or running app processes. WebView2 must already be installed. It runs
+silent current-user installs without launching the app, verifies Start Menu and
+desktop shortcut targets and uninstall registration, then checks owned startup
+removal, foreign startup preservation and same-path update preservation. It
+removes its installation and metadata, retains existing settings, and writes
+`target/windows-validation/installer-<uuid>/result.json` under `src-tauri`.
+Unique sentinel files in the actual roaming/local app-data directories prove
+preservation through each uninstall; the fixture removes only those exact files
+and newly created empty directories afterward.
+This does not test the interactive wizard, WebView2 bootstrap or login launch.
+
+## Native application acceptance
+
 Run from the repository root in an interactive Windows desktop session with
 Node 22 or newer, Python 3, Rust, the project's dependencies and WebView2 installed:
 

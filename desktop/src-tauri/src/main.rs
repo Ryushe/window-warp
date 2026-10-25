@@ -183,6 +183,11 @@ fn change_enabled(app: &AppHandle, enabled: bool, current: &mut bool) -> Result<
         }
     }
     *current = enabled;
+    if let Some(menu) = app.try_state::<MenuItem<tauri::Wry>>() {
+        if let Err(error) = menu.set_text(if enabled { "Pause shortcuts" } else { "Enable shortcuts" }) {
+            eprintln!("Could not update the shortcut tray label: {error}");
+        }
+    }
     let _ = app.emit("warp-enabled", enabled);
     Ok(enabled)
 }
@@ -339,7 +344,8 @@ fn main() {
     builder
         .setup(|app| {
             let open = MenuItem::with_id(app, "open", "Open Window Warp", true, None::<&str>)?;
-            let pause = MenuItem::with_id(app, "pause", "Pause shortcuts", true, None::<&str>)?;
+            let pause = MenuItem::with_id(app, "pause", "Enable shortcuts", true, None::<&str>)?;
+            app.manage(pause.clone());
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &pause, &quit])?;
             let mut rgba = vec![0u8; 32 * 32 * 4];
@@ -365,7 +371,12 @@ fn main() {
                         let quit = event.id.as_ref() == "quit";
                         let app = app.clone();
                         tauri::async_runtime::spawn_blocking(move || {
-                            if let Err(message) = set_enabled_blocking(app.clone(), false) {
+                            let result = if quit {
+                                set_enabled_blocking(app.clone(), false)
+                            } else {
+                                toggle_enabled(&app)
+                            };
+                            if let Err(message) = result {
                                 let _ = app.emit("warp-error", message);
                                 show(&app);
                             } else if quit {

@@ -912,8 +912,10 @@ try {
     await native("reserve",{key:0x7c}); await native("release",{key:0x7c});
     await assert.rejects(()=>native("reserve",{key:0x81})); // Pause F18 remains registered.
     checks.push("native tray Pause releases action keys while preserving the pause key");
-    await invoke("set_enabled",{enabled:true});
+    report.tray.push(await native("tray_menu",{action:"enable"}));
+    await paused(false);
     await assert.rejects(()=>native("reserve",{key:0x7c}));
+    checks.push("native tray Enable restores shortcuts without opening the editor settings");
     const persisted = ["settings.json","workspaces.json"].map(name=>{
         const file=path.join(state,name); return {file,bytes:fs.existsSync(file)?fs.readFileSync(file):null};
     });

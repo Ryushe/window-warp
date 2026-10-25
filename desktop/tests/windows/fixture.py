@@ -524,7 +524,7 @@ def owned_app_windows(class_name, visible=False):
 
 
 def tray_menu(action):
-    labels = {"open": "Open Window Warp", "pause": "Pause shortcuts", "quit": "Quit"}
+    labels = {"open": "Open Window Warp", "pause": "Pause shortcuts", "enable": "Enable shortcuts", "quit": "Quit"}
     if action not in labels:
         raise RuntimeError("Unsupported fixture tray action")
     trays = owned_app_windows("tray_icon_app")
@@ -566,7 +566,8 @@ def tray_menu(action):
             if item_id == 0xffffffff or state == 0xffffffff or state & 3:
                 raise RuntimeError("Fixture tray item is unavailable")
             items.append({"label": label.value.replace("&", "").split("\t")[0], "id": item_id})
-        if [item["label"] for item in items] != list(labels.values()):
+        if (items[0]["label"] != labels["open"] or items[2]["label"] != labels["quit"]
+                or items[1]["label"] not in (labels["pause"], labels["enable"])):
             raise RuntimeError("Owned popup does not contain the expected fixture tray actions")
         selected = next(item for item in items if item["label"] == labels[action])
     finally:

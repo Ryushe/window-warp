@@ -1,5 +1,7 @@
 # Cross-platform application integration dossier
 
+**Resuming agent: start at “Agent handoff — basic installer” near the end.**
+
 - Status: feature, incomplete
 - Owner: current Codex chat, user-requested full feature port
 - Branch / owning ref: `codex/cross-platform-app`
@@ -2329,3 +2331,149 @@ includes physical mixed-DPI/portrait/removal, ordinary login/startup, installer
 execution/uninstall, default Firefox startup and live lock/inhibitor cases.
 KDE Wayland app gestures require the matching native KWin companion package.
 Continue those Windows/Wayland requirements before revisiting X11.
+
+### Basic installer and on/off lifecycle — active increment
+
+User priority: a basic installable app with easy enable/disable and uninstall.
+Root owns tray toggle and startup-entry behavior, native tray fixtures and usage
+documentation. `lifecycle_review` owns Windows NSIS hooks and isolated installer
+acceptance; `terminal_release_review` owns disposable Debian install/remove and
+installed-app acceptance. `companion_review` independently reviews the changes.
+Children remain addressable by those native task names. X11 stays deferred.
+
+Tray Enable/Pause now toggles saved shortcuts and updates its label; Quit always
+disables before exiting. Normal manual launches stay paused and start-at-login
+remains opt-in. Windows packaging explicitly uses current-user installation,
+with an uninstall hook removing only its exact installed-path WindowWarp Run
+value outside update mode. Linux autostart gains TryExec, leaving a preserved
+preference dormant when its executable is removed. User settings are preserved
+by default; no package script scans or removes other users' home directories.
+
+Acceptance gates: actual install/remove, launcher/uninstall registration, owned
+startup cleanup, update/foreign-path preservation, saved-data preservation and
+native tray enable/pause/quit. Tests use fresh owned install paths or disposable
+containers; no persistent normal installation is requested. Final packages must
+include these runtime changes. Remaining full-port requirements stay open.
+
+## Agent handoff — basic installer
+
+User requested this handoff immediately because of usage limits. Do not restart
+the port or pursue X11. Finish the basic installer/on/off/uninstall increment.
+The larger user goal remains “please port over all features :)” and is active,
+not complete. Windows and KDE Wayland are the current scope; X11 was explicitly
+deferred. All code stays on `codex/cross-platform-app`; no main merge or push.
+Repository: `C:/Users/jaady/OneDrive/Documentos/hotkeyable_windows`.
+Shell: PowerShell with `login:false`. Read the coding/operations/branch and
+Hoster skills under `C:/Users/jaady/.codex/skills` before continuing.
+
+### Current implementation and ownership
+
+- Root changed `main.rs`: managed tray MenuItem starts as **Enable shortcuts**,
+  becomes **Pause shortcuts** while active, and toggles through the existing
+  serialized worker. Quit explicitly disables then exits. Closing the editor
+  still hides it. Normal launches start paused; login launch is opt-in.
+- Root changed `startup.rs`: Linux autostart includes properly escaped TryExec
+  filename, so a retained preference stays dormant after uninstall.
+- `lifecycle_review` owns `tauri.conf.json`, `nsis-hooks.nsh`,
+  `tests/windows/installer.ps1`, and its Windows test README. NSIS is explicitly
+  currentUser. POSTUNINSTALL deletes HKCU Run `WindowWarp` only when it exactly
+  matches the quoted installed binary plus `--startup`, and not in update mode.
+- Root changed native Windows/KDE tray fixtures to test real enable/pause/quit,
+  and README install/use/remove instructions. README behavior claims describe
+  intended current implementation; final artifact acceptance is still pending.
+- `terminal_release_review` owns ignored Debian lifecycle scratch/build jobs.
+  `companion_review` completed independent review with no confirmed production
+  findings. These are existing native agents: reuse their handles where possible.
+
+### Verified current evidence
+
+- Windows native suite **55 checks passed**, including real tray Open, Pause,
+  Enable and Quit, key release, persisted files and ordinary debug-build restore.
+  Receipt: `desktop/src-tauri/target/windows-validation/WARP-NATIVE-6362f3c4-930a-4199-9a2d-a10de22cd8f4/result.json`.
+  Exec session90475 is terminal exit0. Earlier run f28758a0 failed only because
+  the fixture expected four menu labels simultaneously; corrected to the actual
+  three-item menu with dynamic Enable/Pause. Its failure receipt is preserved.
+- Focused startup Rust test passed (root and independent reviewer); both Python
+  fixtures and native.mjs syntax pass. `git diff --check` passes.
+- Windows optimized executable compiled successfully with current runtime code.
+  **Final NSIS bundle did not finish**: bundler tried to download NSIS3.13 from
+  GitHub and failed DNS (`No such host is known`). Log:
+  `desktop/src-tauri/target/basic-installer-build.log`, build session82260.
+  Existing setup.exe may still be OLD; do not distribute or test it as updated
+  until bundle succeeds and its hash is recorded. Reuse compiled release exe
+  with bundle-only once NSIS dependency is resolved, rather than recompiling.
+- Old Debian package install/remove succeeded in a disposable container, but
+  final rebuilt runtime/installer acceptance is not yet complete. Existing deb
+  hash c44b423b81cb1261133d3566299ffe38e5c67c53607bd74a1d632aa692458327
+  predates these tray/TryExec changes. The old-package fixture uses source
+  snapshot c3e84a7 deliberately, because current GUI expects new tray behavior.
+
+### Remote handles and recovery
+
+All Portafort KDE tests MUST use **WSL Ubuntu → Hoster → Portafort**, never treat
+Hoster tests as the requested Portafort live proof. WSL SSH key:
+`/home/ryushe/.ssh/hoster`. Remote task root on both hosts:
+`/home/ryushe/.cache/window-warp-01a16f69`. Use the canonical
+`hoster-ssh/scripts/hoster_user_unit.py` for durable jobs; inspect matching live
+units before any replacement. No durable workloads under ssh.service.
+
+Debian scratch directory: `desktop/src-tauri/target/package-validation/`.
+Read `README.md`, `remote.py`, `lifecycle.py` and their dispatch/status receipts.
+Known handles to re-poll (dispatch receipts are not completion evidence):
+
+- `hoster-warp-deb-runtime-image-1`: creates a disposable derivative of the
+  existing Noble GUI image with python3-gi (the old provisioned image lacked it).
+- `hoster-warp-deb-lifecycle-3`: old-package dpkg + installed-path GUI + remove.
+- `hoster-warp-easy-install-final-build-1`: final Linux rebuild helper is prepared;
+  confirm whether dispatched with the agent/status before starting it.
+
+Convenient existing commands from repository root:
+`python -X utf8 desktop/src-tauri/target/package-validation/remote.py status 3`,
+`... remote.py image-status`, `... remote.py build-status`. Use normal network
+escalation as needed. The helper's final-build sync currently uses read_text()
+without explicit UTF-8: correct that before syncing non-ASCII source. Do not
+overwrite current sources with historical fixture snapshots.
+
+Final Linux bundle uses `tests/kde/build.sh` with
+`WARP_COMPANION_STAGE=/work/src-tauri/target/kwin-companion-5-final3/production-stage`
+and `WARP_KWIN_PACKAGE_VERSION=4:5.27.11-0ubuntu3`. Native companion itself is
+unchanged and already reviewed/tested on KWin5/6; do not repeat its full suite.
+
+### Exact next steps
+
+1. Obtain final worker status and inspect the named handles. Windows native
+   suite is done, so installer fixture may now execute without UI interference.
+2. Resolve NSIS download (network-enabled bundle-only or supported verified
+   cached tool path; do not falsify version/hash). Rebuild setup.exe, then run
+   `desktop/tests/windows/installer.ps1 -Execute` in normal registry access.
+   It refuses existing install/startup/shortcut collisions and installs only to
+   a fresh owned target directory. It tests own vs foreign startup, update
+   preservation, links/uninstall registration and cleanup. Reviewer requested
+   a unique owned data sentinel if baseline settings are absent, to strengthen
+   saved-data preservation evidence; check agent's final fixture state.
+3. Finish final Linux build/package. Run real dpkg install, installed binary
+   tray test, removal and TryExec before/after parser acceptance in the disposable
+   container. Preserve settings. Then run changed tray behavior on Portafort
+   through the required hop route using the fresh executable and matching module.
+4. Refresh artifact hashes and test receipts, reconcile README/PARITY stale
+   package claims, and get final scoped review. Save a tested checkpoint. Give
+   user clickable installer/package links plus short Enable/Pause/Quit/uninstall
+   instructions. Do not claim full port completion or normal-session installation.
+
+No user permission question is pending. User requested making the installer
+easy; isolated reversible testing is authorized. No persistent installation on
+their normal desktop was requested. Preserve all unrelated data and processes.
+X11 unit `portafort-warp-x11-probe-1` is terminal, MainPID0, empty cgroup; it failed
+in scratch setup and no subsequent X11 unit was dispatched. Its research stays
+ignored. Keep the full goal active; remaining Windows/Wayland parity requirements
+are in `desktop/PARITY.md` after this installer milestone.
+
+Final Windows worker status: session82260 is terminal exit1, no later bundle job.
+The sandbox's LOCALAPPDATA points at its Packages/sandbox.../AC directory, so
+it missed the real user's existing tauri/NSIS cache. Next try normal-user /
+escalated bundle-only with that legitimate cache, not a full release rebuild.
+The existing OLD installer hash is
+`532b88253705b8069d2c88ff59a8f78accfd9c34bcfa1df3207c7e42d836b813`.
+Installer fixture now includes owned sentinels in both actual app-data roots;
+PowerShell parser passed, but fixture execution has NOT occurred. No registry,
+shortcut, sentinel or installation mutation was performed by that worker.

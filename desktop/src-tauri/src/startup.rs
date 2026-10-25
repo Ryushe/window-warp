@@ -88,7 +88,10 @@ fn desktop_entry(executable: &Path) -> Result<String, String> {
         .replace('$', "\\$")
         .replace('%', "%%");
     let encoded = quoted.replace('\\', "\\\\");
-    Ok(format!("[Desktop Entry]\nType=Application\nName=Window Warp\nExec=\"{encoded}\" --startup\nTerminal=false\nOnlyShowIn=KDE;\nX-KDE-autostart-after=panel\n"))
+    // TryExec is a filename, not an Exec command: no quotes or field expansion.
+    // Keep the preference dormant if the package is later removed.
+    let try_exec = text.replace('\\', "\\\\");
+    Ok(format!("[Desktop Entry]\nType=Application\nName=Window Warp\nTryExec={try_exec}\nExec=\"{encoded}\" --startup\nTerminal=false\nOnlyShowIn=KDE;\nX-KDE-autostart-after=panel\n"))
 }
 
 #[cfg(target_os = "linux")]
@@ -125,6 +128,7 @@ mod tests {
     fn desktop_entry_preserves_spaces_and_prevents_field_expansion() {
         let entry = desktop_entry(Path::new("/home/person/My Apps/100% Warp")).unwrap();
         assert!(entry.contains("Exec=\"/home/person/My Apps/100%% Warp\" --startup\n"));
+        assert!(entry.contains("TryExec=/home/person/My Apps/100% Warp\n"));
         assert!(desktop_entry(Path::new("/tmp/app\nHidden=true")).is_err());
         let escaped = desktop_entry(Path::new("/tmp/$quoted\"app")).unwrap();
         assert!(escaped.contains("\\\\$quoted\\\\\"app"));

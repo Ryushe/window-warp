@@ -197,7 +197,6 @@ def test_tray(driver, environment, log, report):
     owner, item_path, identity = candidates[0]
     menu_path = call(owner, item_path, "org.freedesktop.DBus.Properties", "Get", "(ss)", ("org.kde.StatusNotifierItem", "Menu"))[0]
     assert isinstance(menu_path, str) and menu_path.startswith("/")
-    layout = call(owner, menu_path, "com.canonical.dbusmenu", "GetLayout", "(iias)", (0, -1, ["label", "enabled", "visible"]))[1]
     menu = {}
 
     def read_menu(node):
@@ -209,9 +208,15 @@ def test_tray(driver, environment, log, report):
             menu[label] = dict(id=identifier, enabled=properties.get("enabled", True), visible=properties.get("visible", True))
         for child in children: read_menu(child)
 
-    read_menu(layout)
-    for label in ["Open Window Warp", "Pause shortcuts", "Quit"]:
+    def refresh_menu():
+        menu.clear()
+        layout = call(owner, menu_path, "com.canonical.dbusmenu", "GetLayout", "(iias)", (0, -1, ["label", "enabled", "visible"]))[1]
+        read_menu(layout)
+
+    refresh_menu()
+    for label in ["Open Window Warp", "Quit"]:
         assert label in menu and menu[label]["enabled"] and menu[label]["visible"], menu
+    assert ("Enable shortcuts" in menu) != ("Pause shortcuts" in menu), menu
     proof = dict(pid=identity["pid"], owner=owner, itemPath=item_path, menuPath=menu_path, menu=menu,
         host="private StatusNotifier protocol fixture; physical panel rendering not tested", checks=[])
 
@@ -226,6 +231,8 @@ def test_tray(driver, environment, log, report):
 
     def event(label):
         assert current_app() and bus_call("GetConnectionUnixProcessID", "(s)", (owner,))[0] == identity["pid"]
+        refresh_menu()
+        assert label in menu and menu[label]["enabled"] and menu[label]["visible"], menu
         call(owner, menu_path, "com.canonical.dbusmenu", "Event", "(isvu)",
             (menu[label]["id"], "clicked", GLib.Variant("s", ""), 0))
 
@@ -269,6 +276,12 @@ def test_tray(driver, environment, log, report):
     wait_for("return document.querySelector('#status').textContent.includes('Paused')")
     assert not invoke("get_status")["enabled"] and not kwin_loaded() and kwin_loaded("window-warp-pause-session")
     record("native tray Pause disables actions and retains the resume shortcut")
+    event("Enable shortcuts")
+    wait_for("return !document.querySelector('#status').textContent.includes('Paused')")
+    assert invoke("get_status")["enabled"] and kwin_loaded()
+    record("native tray Enable restores shortcuts without editing settings")
+    event("Pause shortcuts")
+    wait_for("return document.querySelector('#status').textContent.includes('Paused')")
     close_editor()
     assert current_app() and bus_call("NameHasOwner", "(s)", (owner,))[0]
     record("closing the editor hides it while the owned app and tray stay alive")

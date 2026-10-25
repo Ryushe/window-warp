@@ -11,5 +11,6 @@
     "security": { "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost" }
   },
   "bundle": { "active": true, "targets": "all", "icon": ["icons/icon.png", "icons/icon.ico"],
+    "windows": {"nsis": {"installMode": "currentUser", "installerHooks": "nsis-hooks.nsh"}},
     "linux": {"deb": {"desktopTemplate": "linux.desktop.hbs", "depends": ["qdbus-qt6 | qdbus-qt5 | qdbus"]}, "rpm": {"desktopTemplate": "linux.desktop.hbs"}} }
 }

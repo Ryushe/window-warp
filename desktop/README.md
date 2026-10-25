@@ -4,7 +4,7 @@ A standalone Tauri 2 application for Windows and **KDE Plasma 5.27 and 6**, with
 
 ## Implemented
 
-- Native settings window and tray menu (open, pause, quit).
+- Native settings window and tray menu (open, enable/pause, quit).
 - Editable global shortcuts with validation, duplicate detection, and reviewed reassignment.
 - A pause/resume shortcut retained while paused, plus current-app editor and workspace control shortcuts.
 - Push the focused window between monitors, ordered left to right, wrapping at the ends.
@@ -38,6 +38,35 @@ Open **Workspaces → Capture current**, choose which windows to keep, and save 
 
 Firefox captures its profile, tab URLs, and selected tab from its last readable session file. Review them under **Firefox profile and tabs**. If the browser has not written its session yet, or the window cannot be matched reliably, the editor shows a note and allows manual entry. Restore opens the selected tab last, matching the original app's behavior. Existing profile windows are reused unless **Require a new window** is checked. When Firefox starts without profile arguments, Window Warp also checks which process holds the profile lock. This helps distinguish profiles with identical window titles; unavailable lock evidence or identical sessions within one profile may still need review. Capture does not modify browser profiles. Windows Terminal and Konsole entries also expose shell, profile, arguments, and working directory. WSL capture recognizes explicit distributions, legacy launchers, and unambiguous user/hostname prompts. Ambiguous terminals show a review note; select their distribution before saving. Capturing a terminal does not replay its running command. Browser-tab and terminal-session restoration use executable launches to supply their application-specific options.
 
+## Install, turn on/off, and uninstall
+
+On Windows, run `Window Warp_0.1.0_x64-setup.exe`. It installs for your Windows
+account and adds Window Warp to the Start menu and **Settings → Apps → Installed
+apps**. On KDE, install the matching Debian package with:
+
+```sh
+sudo apt install "./Window Warp_0.1.0_amd64.deb"
+```
+
+The current Debian package is for Ubuntu 24.04 with KWin
+`4:5.27.11-0ubuntu3`; other KWin versions need a matching companion build.
+
+- **Turn on:** open Window Warp and click **Enable shortcuts**, or choose
+  **Enable shortcuts** from its tray menu.
+- **Temporarily turn off:** choose **Pause shortcuts** in the app or tray.
+  The pause/resume hotkey remains available (default **Ctrl+Alt+P**).
+- **Completely stop:** choose **Quit** from the tray. Closing the editor hides
+  it in the tray; it does not quit.
+- **Start at login:** opt in using the app's startup setting. Turn that setting
+  off to prevent automatic launches. Normal manual launches start paused.
+- **Uninstall:** quit first. Windows: use **Installed apps → Window Warp →
+  Uninstall**. KDE: run `sudo apt remove window-warp`.
+
+Uninstalling preserves saved settings by default. Windows offers a separate
+option to remove application data. The Windows uninstaller removes its own
+login-start entry; KDE's startup entry checks that the executable exists, so
+a retained startup preference stays inactive while the package is absent.
+
 ## Development
 
 Install Node.js, Rust 1.90 or newer, and the [Tauri platform prerequisites](https://tauri.app/start/prerequisites/). Windows requires the Visual Studio C++ build tools and WebView2. Linux requires the WebKitGTK 4.1 and tray development packages described by Tauri.
@@ -58,9 +87,9 @@ Build outputs are under `src-tauri/target/release/`; installers are under its `b
 
 ## KDE setup
 
-Use a Plasma 5.27 or 6 session (Wayland or X11) and Qt's qdbus executable. Supported executable names are `qdbus6`, `qdbus-qt6`, `/usr/lib/qt6/bin/qdbus`, and `qdbus`. The Debian package declares `qdbus-qt6 | qdbus-qt5 | qdbus` as alternatives so the package manager can install the needed tool. For other distributions, package names vary: for example `qdbus-qt5` / `qdbus` for Plasma 5, or `qdbus-qt6` / `qt6-tools` for Plasma 6. The app detects the script-object path and the script adapts to each version's window, desktop, and output APIs.
+Use a Plasma 5.27 or 6 Wayland session and Qt's qdbus executable. X11 support is deferred. Supported executable names are `qdbus6`, `qdbus-qt6`, `/usr/lib/qt6/bin/qdbus`, and `qdbus`. The Debian package declares `qdbus-qt6 | qdbus-qt5 | qdbus` as alternatives so the package manager can install the needed tool. For other distributions, package names vary: for example `qdbus-qt5` / `qdbus` for Plasma 5, or `qdbus-qt6` / `qt6-tools` for Plasma 6. The app detects the script-object path and the script adapts to each version's window, desktop, and output APIs.
 
-The application loads session-only KWin scripts via the session D-Bus service. KWin registers the shortcuts and performs window operations, so native Wayland windows do not depend on X11 automation. App-pull tap/hold gestures additionally require the [native companion](kwin-companion/README.md) built for the exact installed KWin version. The app loads that module when needed. It tracks accepted physical key cycles independently, including overlapping chords, and exports only configured shortcut events. Missing or incompatible support produces an activation error. The current companion targets Wayland; X11 gesture support remains a porting requirement.
+The application loads session-only KWin scripts via the session D-Bus service. KWin registers the shortcuts and performs window operations, so native Wayland windows do not depend on X11 automation. App-pull tap/hold gestures additionally require the [native companion](kwin-companion/README.md) built for the exact installed KWin version. The app loads that module when needed. It tracks accepted physical key cycles independently, including overlapping chords, and exports only configured shortcut events. Missing or incompatible support produces an activation error. The current companion targets Wayland; X11 gesture support is deferred.
 
 Pause cancels pending gestures and unloads window-action registrations. The companion retains only the release guards needed to prevent an already-held key from restarting after resume or reassignment. The pause/resume binding and workspace command bridge remain available. Quit removes the owned scripts and detaches the companion's app session; startup also reclaims scripts left by a crash. The shared scripts can be manually unloaded with your qdbus executable:
 
