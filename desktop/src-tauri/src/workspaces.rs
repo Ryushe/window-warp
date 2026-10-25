@@ -31,6 +31,8 @@ pub struct WorkspaceItem {
     pub launch: LaunchSpec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser: Option<crate::firefox::Browser>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<crate::terminal::Terminal>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub capture_note: String,
 }
@@ -91,6 +93,14 @@ impl WorkspaceStore {
             for item in &profile.items {
                 if let Some(browser) = &item.browser {
                     browser.validate()?;
+                }
+                if let Some(terminal) = &item.terminal {
+                    terminal.validate()?;
+                    if item.browser.is_some() {
+                        return Err(
+                            "A workspace window cannot be both a browser and a terminal.".into(),
+                        );
+                    }
                 }
                 let w = &item.window;
                 for rect in [w.rect, w.work_area] {
@@ -187,6 +197,7 @@ pub fn capture(windows: Vec<WindowInfo>, name: String) -> Workspace {
                     window,
                     launch,
                     browser: None,
+                    terminal: None,
                     capture_note: String::new(),
                 }
             })
@@ -243,6 +254,11 @@ pub fn restore(
     }
     let mut used = HashSet::new();
     let mut browser_matcher = crate::firefox::Matcher::default();
+    let terminal_capture = profile
+        .items
+        .iter()
+        .any(|i| i.terminal.is_some())
+        .then(crate::terminal::Capture::new);
     let mut results = Vec::new();
     for item in &profile.items {
         if cancelled.load(Ordering::Relaxed) {
@@ -251,6 +267,15 @@ pub fn restore(
         let mut launched = false;
         let result = (|| {
             let mut windows = crate::platform::snapshot(app)?;
+            if let Some(terminal) = &item.terminal {
+                let all = windows.clone();
+                windows.retain(|w| {
+                    crate::terminal::kind(w) == Some(terminal.kind)
+                        && terminal_capture
+                            .as_ref()
+                            .is_some_and(|capture| capture.matches(w, &all, terminal))
+                });
+            }
             if let Some(browser) = &item.browser {
                 windows.retain(|w| {
                     !crate::firefox::is_firefox(w) || browser_matcher.matches(w, browser)
@@ -271,6 +296,8 @@ pub fn restore(
                     .collect();
                 let commands = if let Some(browser) = &item.browser {
                     browser.launch_commands(&item.launch)?
+                } else if let Some(terminal) = &item.terminal {
+                    vec![terminal.launch_command(&item.launch)?]
                 } else {
                     vec![item.launch.clone()]
                 };
@@ -282,7 +309,10 @@ pub fn restore(
                         return Err("Workspace restore canceled.".into());
                     }
                     let windows = crate::platform::snapshot(app)?;
-                    let excluded: HashSet<_> = if item.launch.new_window || item.browser.is_some() {
+                    let excluded: HashSet<_> = if item.launch.new_window
+                        || item.browser.is_some()
+                        || item.terminal.is_some()
+                    {
                         used.union(&before).cloned().collect()
                     } else {
                         used.clone()

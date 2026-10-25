@@ -10,6 +10,41 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const item = title => ({label:title, window:{title, appId:"fixture", monitor:1, rect:{width:640,height:400}}, launch:{program:"fixture", args:[], workingDirectory:"", newWindow:false}});
 const profile = (id, name) => ({id,name,platform:"linux",items:[item(name + " window")]});
 
+test("terminal profile, WSL identity and shell arguments remain editable in a workspace draft", async()=>{
+    const p=profile("terminal","Development");
+    p.items[0].terminal={kind:"windows-terminal",profileName:"Ubuntu",shell:"wsl.exe",shellArgs:[],wslDistro:"Ubuntu",wslUser:"",workingDirectory:"/home/alice"};
+    const e=await editor({profiles:[p]});
+    await e.click('[data-action="edit"]');
+    assert.equal(e.document.querySelector(".terminal-settings").hidden,false);
+    assert.equal(e.document.querySelector(".wsl-settings").hidden,false);
+    e.input('[data-terminal="wslDistro"]',"Ubuntu-24.04");
+    e.input('[data-terminal="wslUser"]',"alice");
+    e.input('[data-terminal="workingDirectory"]',"/home/alice/my work");
+    e.input('[data-terminal="shellArgs"]',"--exec\n/bin/bash\n--noprofile");
+    await e.click("#save-workspace");
+    const terminal=e.stored().profiles[0].items[0].terminal;
+    assert.equal(terminal.wslDistro,"Ubuntu-24.04");
+    assert.equal(terminal.wslUser,"alice");
+    assert.equal(terminal.workingDirectory,"/home/alice/my work");
+    assert.deepEqual(terminal.shellArgs,["--exec","/bin/bash","--noprofile"]);
+    await e.click('[data-action="edit"]');
+    e.change(".restore-terminal",false);
+    await e.click("#save-workspace");
+    assert.equal(e.stored().profiles[0].items[0].terminal,null);
+});
+
+test("Konsole shows terminal profile controls without WSL fields", async()=>{
+    const p=profile("konsole","Development");
+    p.items[0].terminal={kind:"konsole",profileName:"Work",shell:"/bin/bash",shellArgs:[],wslDistro:"",wslUser:"",workingDirectory:"/tmp"};
+    const e=await editor({profiles:[p]});
+    await e.click('[data-action="edit"]');
+    assert.equal(e.document.querySelector(".terminal-summary").textContent,"Konsole session");
+    assert.equal(e.document.querySelector(".wsl-settings").hidden,true);
+    e.input('[data-terminal="profileName"]',"Development");
+    await e.click("#save-workspace");
+    assert.equal(e.stored().profiles[0].items[0].terminal.profileName,"Development");
+});
+
 test("Firefox profile, tabs, active tab and capture notes survive review and save",async()=>{
     const p=profile("browser","Research");
     p.items[0].browser={profilePath:"/profiles/work",profileName:"Work",tabs:[{url:"https://example.test/one",title:"One"}],activeTab:1};

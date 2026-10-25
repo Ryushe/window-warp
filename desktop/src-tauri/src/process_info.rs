@@ -11,9 +11,51 @@ pub fn arguments(pid: u32) -> Result<Vec<String>, String> {
 
 #[cfg(windows)]
 pub fn arguments(pid: u32) -> Result<Vec<String>, String> {
-    use std::os::windows::process::CommandExt;
     // PID is an integer obtained from Win32, never interpolated user text.
-    let script = format!("[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); (Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}' -ErrorAction Stop).CommandLine");
+    let script = format!(
+        "(Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}' -ErrorAction Stop).CommandLine"
+    );
+    split_windows_command_line(cim_query(&script)?.trim())
+}
+
+#[cfg(windows)]
+pub struct Process {
+    pub pid: u32,
+    pub parent: u32,
+    pub name: String,
+    pub args: Vec<String>,
+}
+
+/// One bounded query per capture, shared by all Terminal windows.
+#[cfg(windows)]
+pub fn snapshot() -> Result<Vec<Process>, String> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Row {
+        process_id: u32,
+        parent_process_id: u32,
+        name: String,
+        command_line: Option<String>,
+    }
+    let output = cim_query("ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,ParentProcessId,Name,CommandLine)")?;
+    let rows: Vec<Row> = serde_json::from_str(output.trim())
+        .map_err(|e| format!("Cannot read terminal process metadata: {e}"))?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(Process {
+                pid: row.process_id,
+                parent: row.parent_process_id,
+                name: row.name,
+                args: split_windows_command_line(row.command_line.as_deref().unwrap_or(""))?,
+            })
+        })
+        .collect()
+}
+
+#[cfg(windows)]
+fn cim_query(query: &str) -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+    let script = format!("[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); {query}");
     let mut child = std::process::Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .creation_flags(0x08000000)
@@ -48,7 +90,7 @@ pub fn arguments(pid: u32) -> Result<Vec<String>, String> {
     if !status.success() {
         return Err("Cannot read application arguments.".into());
     }
-    split_windows_command_line(String::from_utf8_lossy(&output).trim())
+    Ok(String::from_utf8_lossy(&output).into_owned())
 }
 
 #[cfg(windows)]

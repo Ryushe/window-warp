@@ -90,6 +90,21 @@
                 });
             }
             const include = fragment.querySelector(".include-window");
+            if (item.terminal) {
+                const terminal = item.terminal;
+                fragment.querySelector(".terminal-settings").hidden = false;
+                fragment.querySelector(".terminal-summary").textContent = terminal.kind === "konsole" ? "Konsole session" : "Windows Terminal session";
+                fragment.querySelector(".wsl-settings").hidden = terminal.kind !== "windows-terminal";
+                fragment.querySelector(".konsole-profile").hidden = terminal.kind !== "konsole";
+                fragment.querySelector(".restore-terminal").addEventListener("change", event => { item.terminal = event.target.checked ? terminal : null; });
+                fragment.querySelectorAll("[data-terminal]").forEach(input => {
+                    const field = input.dataset.terminal;
+                    input.value = field === "shellArgs" ? terminal.shellArgs.join("\n") : terminal[field] || "";
+                    input.addEventListener("input", () => {
+                        terminal[field] = field === "shellArgs" ? input.value.split(/\r?\n/).filter(Boolean) : input.value;
+                    });
+                });
+            }
             include.addEventListener("change", () => { selected[index] = include.checked; count(); controls(); });
             fragment.querySelectorAll("[data-launch]").forEach(input => {
                 const field = input.dataset.launch;

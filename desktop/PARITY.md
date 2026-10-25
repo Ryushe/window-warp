@@ -21,7 +21,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | Workspace capture/create/update, best-match update selection, rename/delete/reorder/browser | Partial | Implemented; Rust matching/persistence model and Node editor tests pass; KDE native capture/save/browser pass; full Windows editor workflow pending |
 | Workspace launch/reuse, exclude already-consumed windows, wait for new windows, restore placement/state | Partial | KDE native two-window reuse, forced new launch, placement, per-axis maximize/fullscreen pass; Windows owned-window placement/maximize/minimize pass; Windows multi-window launch workflow pending |
 | Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Partial | Implemented; synthetic codec/profile/launch/editor tests pass; Firefox 158 live capture, reuse, and new-window tab/selection restore pass on isolated KDE; live Windows browser path pending |
-| Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Pending | Shell/profile fixtures and native launch checks |
+| Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native WSL/profile variants, legacy distro launchers/prompt fallback, and multi-window ambiguity cases still required |
 | Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Pending | Argument-safe launch tests and native fixtures |
 | Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Pending | Fixtures including disabled keys, legacy terminal fields, browser tabs |
 | Single instance, tray, settings failures, session cleanup, installers | Partial | Preview verified; repeat for final implementation |
@@ -87,3 +87,30 @@ Resume `tests/kde/nested.sh --gui ... --firefox` when load permits. The current
 binary is on Portafort at `~/.cache/window-warp-01a16f69/window-warp`; the build
 receipt is Hoster `hoster-warp-build-20261024-firefox-resize` (exit 0).
 Live Windows Firefox and the native browser-editor screenshot remain unverified.
+
+## Terminal increment
+
+Terminal workspace entries now have editable profile, shell, shell arguments,
+working directory, and WSL distribution/user fields. Windows capture reads one
+bounded process snapshot; ambiguous descendants require review. Konsole capture
+reads the active session, profile, shell PID and directory through D-Bus and
+`/proc`. Restore compares terminal identity before reusing a window and launches
+a separate native window when needed. Commands running inside a captured shell
+are not automatically replayed. Literal semicolons are escaped for wt's parser.
+
+27 JavaScript tests and 34 Windows Rust tests pass. The opt-in native Windows
+Terminal test separately passed capture and new-window launch and closed its two
+owned windows. Linux has 28 passing Rust tests. The `--terminal` GUI fixture
+passed 14 native checks in `hoster-warp-gui-20261024-terminal-checkpoint`, including
+shell/profile/directory capture, reuse and new-window restoration. The profile
+display name deliberately differs from its filename. The editor screenshot was
+inspected and is under `src-tauri/target/kde-validation/terminal/`.
+Konsole's unnamed runtime profile uses an explicit launch-profile fallback when
+one process owns one window. A missing saved profile file reports an error.
+Native WSL/Powershell/custom-profile cases, legacy distro launchers and prompt
+identity fallback remain required before the terminal row is complete.
+
+The recovered-host Firefox run (`hoster-warp-gui-20261024-firefox-recovered`)
+failed the restored-tab URL assertion before reaching the two-profile/geometry
+checks. Inspect the owned capture data and asynchronous session-update timing;
+do not treat the earlier high-load environment as the only remaining issue.

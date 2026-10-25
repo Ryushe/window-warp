@@ -544,6 +544,90 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "opens and closes two owned Windows Terminal fixture windows"]
+    fn native_terminal_capture_and_new_window_launch() {
+        use crate::{terminal, workspaces};
+        use std::{
+            collections::HashSet,
+            time::{Duration, Instant},
+        };
+        struct OwnedTerminals(Vec<workspaces::WindowInfo>);
+        impl Drop for OwnedTerminals {
+            fn drop(&mut self) {
+                for window in &self.0 {
+                    unsafe {
+                        let hwnd = window.id.parse::<usize>().unwrap() as HWND;
+                        let mut pid = 0;
+                        GetWindowThreadProcessId(hwnd, &mut pid);
+                        if pid == window.pid {
+                            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                        }
+                    }
+                }
+            }
+        }
+        let before: HashSet<_> = unsafe { snapshot_native(true).unwrap() }
+            .into_iter()
+            .map(|w| w.id)
+            .collect();
+        let mut owned = OwnedTerminals(Vec::new());
+        let status = std::process::Command::new("wt.exe")
+            .args([
+                "-w",
+                "new",
+                "new-tab",
+                "--title",
+                "Command Prompt",
+                "--suppressApplicationTitle",
+                "cmd.exe",
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let deadline = Instant::now() + Duration::from_secs(12);
+        loop {
+            let windows = unsafe { snapshot_native(true).unwrap() };
+            if let Some(window) = windows.into_iter().find(|w| {
+                !before.contains(&w.id)
+                    && w.title == "Command Prompt"
+                    && terminal::kind(w) == Some(terminal::Kind::WindowsTerminal)
+            }) {
+                owned.0.push(window);
+                break;
+            }
+            assert!(Instant::now() < deadline, "Owned terminal did not open");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let mut profile = workspaces::capture(owned.0.clone(), "Terminal fixture".into());
+        terminal::enrich(&mut profile.items);
+        let item = &profile.items[0];
+        assert!(item.capture_note.is_empty(), "{}", item.capture_note);
+        let mut terminal = item.terminal.clone().unwrap();
+        assert_eq!(terminal.shell, "cmd.exe");
+        let marker = format!("Window Warp terminal {}", uuid::Uuid::new_v4());
+        terminal.shell_args = vec!["/k".into(), format!("title {marker}")];
+        workspaces::launch(&terminal.launch_command(&item.launch).unwrap()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(12);
+        loop {
+            let windows = unsafe { snapshot_native(true).unwrap() };
+            if let Some(window) = windows.into_iter().find(|w| {
+                !before.contains(&w.id)
+                    && w.title == marker
+                    && terminal::kind(w) == Some(terminal::Kind::WindowsTerminal)
+            }) {
+                assert_ne!(window.id, owned.0[0].id);
+                owned.0.push(window);
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Restored terminal did not open with its own shell arguments"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    #[test]
     fn recorded_punctuation_and_navigation_keys_parse_natively() {
         for key in [
             ";",

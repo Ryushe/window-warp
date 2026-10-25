@@ -12,6 +12,7 @@ mod platform;
 mod platform;
 mod process_info;
 mod startup;
+mod terminal;
 mod workspaces;
 
 use config::Config;
@@ -128,6 +129,7 @@ async fn capture_workspace(app: AppHandle, name: String) -> Result<serde_json::V
         let suggested = workspaces::best_match(&store.profiles, &windows);
         let mut profile = workspaces::capture(windows, name);
         firefox::enrich(&mut profile.items);
+        terminal::enrich(&mut profile.items);
         Ok(serde_json::json!({"profile":profile, "suggestedId":suggested}))
     })
     .await

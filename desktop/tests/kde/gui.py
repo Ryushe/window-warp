@@ -79,6 +79,8 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
     fixture = None
     browser_fixture = None
     other_browser_fixture = None
+    terminal_fixture = None
+    terminal_launched = []
     launched_pids = set()
     try:
         for _ in range(50):
@@ -292,9 +294,73 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             screenshot = request("GET", f"/session/{session}/screenshot")
             (output / "window-warp-firefox-kde.png").write_bytes(base64.b64decode(screenshot))
             report["screenshot"] = str(output / "window-warp-firefox-kde.png")
+        if "--terminal" in sys.argv[4:]:
+            assert os.environ.get("WAYLAND_DISPLAY") == "warp-test", "Terminal tests require the isolated compositor"
+            terminal_dir = Path(temporary) / "terminal working directory"
+            terminal_dir.mkdir()
+            profile_dir = Path(environment["XDG_DATA_HOME"]) / "konsole"
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            profile_file = profile_dir / "warp-owned.profile"
+            profile_file.write_text("[General]\nName=Warp Fixture\nCommand=/bin/bash\nParent=FALLBACK/\n")
+            terminal_fixture = subprocess.Popen(["konsole", "--separate", "--profile", str(profile_file), "--workdir", str(terminal_dir), "-e", "/bin/bash", "--noprofile", "--norc"], env=fixture_env, stdout=log, stderr=log, start_new_session=True)
+            captured_terminal = None
+            for _ in range(50):
+                capture = invoke("capture_workspace", {"name": "Owned Konsole fixture"})["profile"]
+                capture["items"] = [i for i in capture["items"] if i["window"]["pid"] == terminal_fixture.pid]
+                if len(capture["items"]) == 1 and capture["items"][0].get("terminal", {}).get("shell"):
+                    captured_terminal = capture
+                    break
+                time.sleep(0.2)
+            assert captured_terminal, "Could not capture the owned Konsole shell"
+            terminal = captured_terminal["items"][0]["terminal"]
+            assert terminal["kind"] == "konsole" and Path(terminal["shell"]).name == "bash", terminal
+            assert terminal["workingDirectory"] == str(terminal_dir), terminal
+            assert terminal["profileName"] == "Warp Fixture", terminal
+            assert terminal["profilePath"] == str(profile_file), terminal
+            invoke("save_workspaces", {"store": {"version": 1, "profiles": [captured_terminal]}})
+            result = invoke("restore_workspace", {"id": captured_terminal["id"]})
+            assert result[0]["restored"] and not result[0]["launched"], result
+            captured_terminal["items"][0]["launch"]["newWindow"] = True
+            captured_terminal["items"][0]["terminal"]["shellArgs"] = ["--noprofile", "--norc"]
+            before_terminal = {w["id"] for w in invoke("get_windows")}
+            invoke("save_workspaces", {"store": {"version": 1, "profiles": [captured_terminal]}})
+            result = invoke("restore_workspace", {"id": captured_terminal["id"]})
+            # Record task-owned launches before any assertion, so failure still cleans up.
+            for w in invoke("get_windows"):
+                if w["id"] not in before_terminal and Path(w["path"]).name == "konsole":
+                    args = Path(f'/proc/{w["pid"]}/cmdline').read_bytes().split(b"\0")
+                    if str(terminal_dir).encode() in args:
+                        terminal_launched.append(w["pid"])
+            assert result[0]["restored"] and result[0]["launched"], result
+            assert len(terminal_launched) == 1, terminal_launched
+            capture = invoke("capture_workspace", {"name": "Restored Konsole"})["profile"]
+            restored = [i for i in capture["items"] if i["window"]["pid"] in terminal_launched]
+            assert len(restored) == 1 and restored[0]["terminal"]["workingDirectory"] == str(terminal_dir), restored
+            assert restored[0]["terminal"]["profileName"] == terminal["profileName"]
+            report["checks"].extend(["Konsole shell/profile/working directory capture", "Konsole reuse", "Konsole new-window launch preserves profile and directory"])
+            evaluate("location.reload(); return true;")
+            wait_for("return document.querySelectorAll('.binding').length === 5 && !document.querySelector('#toggle').disabled")
+            click("#show-workspaces")
+            wait_for("return document.querySelectorAll('#workspace-list article').length === 1")
+            click('[data-action="edit"]')
+            evaluate("const panel=document.querySelector('.terminal-settings'); panel.open=true; panel.scrollIntoView(); return true;")
+            assert evaluate("return document.querySelector('[data-terminal=workingDirectory]').value") == str(terminal_dir)
+            screenshot = request("GET", f"/session/{session}/screenshot")
+            (output / "window-warp-terminal-kde.png").write_bytes(base64.b64decode(screenshot))
+            report["screenshot"] = str(output / "window-warp-terminal-kde.png")
         (output / "gui-result.json").write_text(json.dumps(report, indent=2))
         print(json.dumps(report, indent=2), flush=True)
     finally:
+        for pid in terminal_launched:
+            try:
+                args = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+                if str(terminal_dir).encode() in args:
+                    os.kill(pid, signal.SIGTERM)
+            except (FileNotFoundError, ProcessLookupError):
+                pass
+        if terminal_fixture:
+            terminal_fixture.terminate()
+            terminal_fixture.wait(timeout=10)
         if other_browser_fixture:
             try:
                 os.killpg(other_browser_fixture.pid, signal.SIGTERM)

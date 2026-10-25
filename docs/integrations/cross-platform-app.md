@@ -16,7 +16,7 @@
 Port all original features into a standalone Windows/KDE application. The user's
 explicit branch requirement is satisfied by this existing feature branch.
 Original AHK sources remain unchanged. Full parity is not achieved: the checklist
-is the completion gate, including remaining browser verification, terminal capture, INI migration,
+is the completion gate, including remaining browser verification, terminal variants, INI migration,
 tap/hold, radial selection, pointer movement, and remaining shortcut/editor paths.
 
 The current implementation includes the Tauri editor/tray, native Windows/KWin
@@ -84,8 +84,8 @@ parser; Linux uses `/proc`. Neither path invokes a shell for app launch.
 
 ## Resume and gates
 
-Resume final Firefox revalidation when the host load permits; terminal specialization
-and INI migration can progress locally meanwhile. Then gesture/radial,
+Resume terminal variant coverage and Firefox restored-tab investigation;
+INI migration can progress independently. Then gesture/radial,
 pointer, and outstanding editor/global-hotkey behavior. Preserve all checklist rows.
 Native KDE fixture tests and local Node/Rust tests are ready for reuse.
 The implementation checkpoint is reachable from the owning branch; the subsequent
@@ -105,3 +105,38 @@ feature work, not a release candidate.
   continue the full port.
 - 2026-10-24: Firefox capture/restore and editor implemented; live testing found
   and prompted a correction for asynchronous session selected-tab metadata.
+
+## Terminal increment
+
+- Added terminal capture, editable session fields, identity-aware reuse, and native
+  Windows Terminal/Konsole launch commands. Windows metadata is one bounded CIM
+  snapshot; KDE uses Konsole's active session API and reads that shell's `/proc`
+  executable/directory. Ambiguous capture prompts review instead of selecting a
+  different shell silently. The model preserves separate program/argument values.
+- 27 Node tests and 34 Windows Rust tests pass. Native opt-in
+  `cargo test --manifest-path desktop/src-tauri/Cargo.toml --offline
+  native_terminal_capture_and_new_window_launch -- --ignored --nocapture` passed:
+  captures an owned cmd Terminal, launches another window, closes only those two.
+- Linux build `hoster-warp-build-20261024-terminal-checkpoint` has passed 27 Node
+  and 28 Rust tests and produced the executable and Debian package (exit 0).
+- Native `hoster-warp-gui-20261024-terminal-checkpoint` passed 14 checks, including
+  Konsole shell/profile/directory capture, reuse, and new-window restoration.
+  The profile display name differs from its file name. This is the current binary
+  on Portafort. Its nested logs are `/tmp/window-warp-nested.j8ZpJB`.
+  `src-tauri/target/kde-validation/terminal/window-warp-terminal-kde.png` was
+  inspected: controls and saved values render without clipping.
+- Konsole's session API returned an unnamed runtime profile with `-e`, even
+  when a named profile was explicitly selected. The fallback reads the explicit
+  profile launch argument only when the process owns one window. Captured
+  profile files take priority over display names, as required by Konsole's CLI.
+- Remaining terminal gaps: native WSL/Powershell/custom-profile verification,
+  legacy distribution launcher detection and prompt-identity fallback, and
+  ambiguous multi-window/profile cases. Keep the parity row partial.
+- Firefox retry on the recovered host ended with status 1 at the restored-tab
+  URL assertion (`gui.py`), unit `hoster-warp-gui-20261024-firefox-recovered`;
+  nested logs `/tmp/window-warp-nested.ZUjbKP`. It did not reach the geometry
+  assertion. Add owned-window/session diagnostics before changing production
+  behavior; a two-tab count alone may precede navigation/session persistence.
+- Disk-space interruption is resolved: the user-approved incremental cache was
+  removed; afterward C: regained roughly 14.5 GiB externally. The larger cache
+  cleanup was not performed. No unrelated files were deleted.

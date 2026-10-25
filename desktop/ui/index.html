@@ -78,6 +78,16 @@
       <label>Selected tab number<input data-browser="activeTab" type="number" min="1" step="1"></label>
       <small>The selected tab opens last. Existing matching browser windows are reused unless “Always open a new window” is checked.</small>
     </details>
+    <details class="terminal-settings" hidden><summary class="terminal-summary">Terminal session</summary>
+      <label class="enabled-field"><input type="checkbox" class="restore-terminal" checked>Restore this terminal session</label>
+      <label>Profile name<input data-terminal="profileName" spellcheck="false"></label>
+      <label class="konsole-profile">Konsole profile file (takes priority over its name)<input data-terminal="profilePath" spellcheck="false"></label>
+      <label>Shell program<input data-terminal="shell" placeholder="Use the profile’s default shell" spellcheck="false"></label>
+      <label>Shell arguments (one per line)<textarea data-terminal="shellArgs" rows="3" spellcheck="false"></textarea></label>
+      <label>Terminal working directory<input data-terminal="workingDirectory" spellcheck="false"></label>
+      <div class="wsl-settings"><label>WSL distribution (requires wsl.exe)<input data-terminal="wslDistro" spellcheck="false"></label><label>WSL user (optional)<input data-terminal="wslUser" spellcheck="false"></label></div>
+      <small>Opens a fresh shell. Commands running inside the captured terminal are not replayed. These settings replace the generic app arguments below while terminal restoration is enabled.</small>
+    </details>
     <details><summary>App launch settings</summary><label>Program<input data-launch="program" spellcheck="false"></label><label>Arguments (one per line)<textarea data-launch="args" rows="3" spellcheck="false"></textarea></label><label>Working directory<input data-launch="workingDirectory" spellcheck="false"></label><label class="enabled-field"><input type="checkbox" data-launch="newWindow">Always open a new window</label></details>
   </article></template>
 </body>

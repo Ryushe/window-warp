@@ -70,3 +70,19 @@ Subsequent full-port work increased coverage to 18 live two-output checks and
 13 Linux Rust tests, and 16 Windows Rust tests. See `../../PARITY.md` for the
 current evidence and remaining feature scope; the counts above describe the
 earlier preview only.
+## Terminal workspace verification
+
+Append `--terminal` to the existing isolated `nested.sh --gui BINARY DRIVER OUTPUT`
+invocation. The fixture creates its own Konsole process and a temporary working
+directory, checks shell/profile/directory capture, reuses that window, launches a
+new one and verifies the saved identity. It cleans up only its owned terminals.
+The editor screenshot is `OUTPUT/window-warp-terminal-kde.png`.
+
+On Windows, explicitly run the opt-in Rust test
+`cargo test --manifest-path desktop/src-tauri/Cargo.toml --offline native_terminal_capture_and_new_window_launch -- --ignored --nocapture`.
+It opens and closes two test Terminal windows; ordinary unit-test runs skip it.
+
+API sources: [Konsole session](https://github.com/KDE/konsole/blob/master/src/session/Session.h),
+[Konsole window](https://github.com/KDE/konsole/blob/master/src/ViewManager.h),
+[Konsole profile resolution](https://github.com/KDE/konsole/blob/master/src/profile/ProfileManager.cpp),
+[Windows Terminal parser](https://github.com/microsoft/terminal/blob/main/src/cascadia/TerminalApp/Commandline.cpp).
