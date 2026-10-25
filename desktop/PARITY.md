@@ -15,16 +15,16 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE focus-last and minimized checks pass; Windows native behavior checks pending |
 | Tap vs hold, configurable 100–5000 ms delay, disable hold | Pending | Actual press/release path, repeats, modifier-first release, pause cancellation |
 | Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Pending | Both native desktop paths and rendered overlay |
-| Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed reassignment tested; native KDE current-app capture passes; native Windows editor workflow pending |
-| Global pause/resume hotkey stays available while paused; editor/workspace/update hotkeys | Partial | Implemented with separate pause registration; native KDE KGlobalAccel action dispatch passes; physical key delivery, Windows native lifecycle and registration-failure scenarios remain |
-| Settings persistence and startup registration | Partial | KDE native toggle creates/removes isolated autostart entry; Windows toggle and actual login/startup launch pending |
-| Workspace capture/create/update, best-match update selection, rename/delete/reorder/browser | Partial | Implemented; Rust matching/persistence model and Node editor tests pass; KDE native capture/save/browser pass; full Windows editor workflow pending |
-| Workspace launch/reuse, exclude already-consumed windows, wait for new windows, restore placement/state | Partial | KDE native two-window reuse, forced new launch, placement, per-axis maximize/fullscreen pass; Windows owned-window placement/maximize/minimize pass; Windows multi-window launch workflow pending |
+| Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed reassignment tested; native KDE current-app capture passes; Windows native current-app capture, key recording, reassignment and persistence pass |
+| Global pause/resume hotkey stays available while paused; editor/workspace/update hotkeys | Partial | Implemented with separate pause registration; native KDE KGlobalAccel action dispatch passes; Windows OS key delivery, lifecycle and registration-failure recovery pass; KDE key delivery beyond direct action dispatch remains |
+| Settings persistence and startup registration | Partial | Windows Run entry and KDE autostart toggles pass; actual login/startup launches remain pending |
+| Workspace capture/create/update, best-match update selection, rename/delete/reorder/browser | Partial | Implemented; Rust matching/persistence model and Node editor tests pass; KDE native capture/save/browser pass; Windows capture/review/save and closest-match update draft now pass natively |
+| Workspace launch/reuse, exclude already-consumed windows, wait for new windows, restore placement/state | Partial | KDE native two-window reuse, forced new launch, placement, per-axis maximize/fullscreen pass; Windows owned-window placement/maximize/minimize pass; Windows two-window reuse and separate-process launch now pass natively; physical display-change acceptance remains |
 | Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Partial | 15 native KDE checks pass on the caption-fix build, including tabs/selection, same-title profile isolation, floating geometry and editor; codec/profile/launch tests pass; live Windows browser path pending |
 | Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native Ubuntu capture/directory restoration passes; legacy launchers, prompt fallback, and ambiguity have regression coverage; native PowerShell/custom-profile variants still required |
-| Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Pending | Argument-safe launch tests and native fixtures |
+| Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Partial | Ordinary executable launch and argument boundaries pass native Windows/KDE fixtures; packaged Windows and Linux desktop-entry launch remain |
 | Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Pending | Fixtures including disabled keys, legacy terminal fields, browser tabs |
-| Single instance, tray, settings failures, session cleanup, installers | Partial | Preview verified; repeat for final implementation |
+| Single instance, tray, settings failures, session cleanup, installers | Partial | Windows native single instance, registration failures and process-exit key release pass; final tray/graceful-exit and installer checks remain |
 
 ## Platform investigation
 
@@ -182,3 +182,29 @@ and inspected screenshots are under `src-tauri/target/kde-validation/controls/`.
 The update shortcut scrolls to its draft and focuses the name field. Windows
 native control/UI testing and physical key delivery on both platforms remain
 required.
+
+## Native Windows application fixture
+
+`node desktop/tests/windows/native.mjs` passed all 14 checks with no skips. This
+uses the actual Tauri app, a fresh WebView2 profile, isolated app directories and
+owned Win32 windows. It delivers keyboard events through `SendInput`, verifies
+pause/resume, native shortcut recording, current-app capture and reviewed alias
+reassignment. A helper deliberately holds a key to prove that failed pause-key
+changes preserve the previous file/key and failed action registration releases
+partial registrations without dropping pause.
+
+The native UI captures and saves only selected fixture windows. Two existing
+windows restore to separate placements; a forced launch creates a new process
+and restores its placement. Workspace update opens a closest-match draft without
+auto-saving. Startup creates/removes a temporary Run entry when none already
+exists, a second instance exits, and the pause key becomes free after test-app
+termination. The fixture restores the ordinary debug build after testing.
+
+Passing receipt and inspected screenshots:
+`src-tauri/target/windows-validation/WARP-NATIVE-515ce6ab-3676-4ca7-9506-cb310df92747/`.
+The first harness run stopped on a duplicate CDP JavaScript declaration; a later
+recording attempt stopped on an auxiliary-window lookup. Both harness issues are
+fixed. The final run passed, its startup entry was absent afterward, and no test
+app remained running. This is not evidence of actual login launch, graceful tray
+quit, Firefox/profile variants, KDE keyboard delivery or physical display removal.
+Those checks and the remaining feature requirements above stay in scope.

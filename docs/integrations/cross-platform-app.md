@@ -267,3 +267,39 @@ For the Windows fixture, installed `tauri-codegen-2.7.4/src/lib.rs` confirms tha
 WebView data directory can isolate the app's settings/browser state without
 editing the production manifest or borrowing a personal browser profile. No
 Windows fixture has been implemented yet; do not count this as native evidence.
+
+## Native Windows control/editor/workspace verification
+
+Added `desktop/tests/windows/native.mjs` and a standard-library Python Win32
+fixture. The harness builds the production app with a unique identity and
+`appDirectoriesOverride` under its ignored validation directory. WebView2 has
+fresh task-owned data and a loopback debugging endpoint; no personal browser
+profile is attached. The production manifest is unchanged. After copying the
+fixture binary, the harness restores the ordinary debug build without the
+configuration override. The final restore-build log confirms success.
+
+`node desktop/tests/windows/native.mjs` passed all 14 checks, with no skips, in
+`desktop/src-tauri/target/windows-validation/WARP-NATIVE-515ce6ab-3676-4ca7-9506-cb310df92747/`.
+Its report and both current-app/workspace screenshots were inspected. The UI fits
+without clipping. Earlier attempts found two harness issues (a duplicate lexical
+declaration in the CDP evaluator, and inclusion of small auxiliary windows);
+these are fixed in the committed fixture. No production change was needed.
+
+Native evidence covers Windows keyboard delivery and recording, pause retention,
+failed pause reassignment preserving the file and prior key, partial action-hook
+rollback preserving pause, current-app capture, conflict reassignment, selected
+workspace capture, closest-match review without persistence, two-window reuse,
+separate-process launch/placement, startup registration/removal, single instance,
+and release of the pause key after process termination. Only owned fixture windows
+are saved/restored; the helper refuses key injection into unowned windows or while
+a modifier is already held. Existing startup entries cause a recorded skip rather
+than replacement. This run began with no entry and removed its own entry; a
+subsequent check confirmed the entry absent and no fixture app process remaining.
+
+The fixture terminates its own process tree; this does not prove graceful tray
+quit. Actual login, Firefox-specific Windows restoration, terminal variants, KDE
+OS keyboard delivery and physical display changes still need their stated checks.
+Next implementation: press/release and hold state, mouse-driven portrait tiling,
+radial selection, pointer centering and retile timeout, then complete INI migration
+and remaining platform acceptance. Keep every PARITY row in scope. No merge/push
+or user-session activation has been requested.
