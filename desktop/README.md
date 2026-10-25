@@ -89,7 +89,7 @@ Node tests execute the actual KWin script against simulated Plasma 5/6 workspace
 
 On tested Plasma 5.27 Wayland, pressing another app shortcut ends the first shortcut’s hold tracking early. Independent overlapping app chords pass on Windows but remain a KDE parity gap; the opt-in native regression and signal evidence are recorded in [PARITY.md](PARITY.md).
 
-Live Wayland tests verify the integration on Plasma 5.27, including a separate two-output KWin session for monitor push/pull and maximized/fullscreen tiling. The compiled Linux app also passed native UI checks for rendering, saving settings, enabling, and pausing. Windows x64 and Ubuntu 24.04 amd64 builds produced an NSIS installer and Debian package. See [live KDE validation](tests/kde/README.md) for reproducible commands and coverage limits. Live Plasma 6 testing is still pending.
+Live Wayland tests verify the integration on Plasma 5.27, including a separate two-output KWin session for monitor push/pull and maximized/fullscreen tiling. The compiled Linux app also passed native UI checks for rendering, saving settings, enabling, and pausing. Windows x64 and Ubuntu 24.04 amd64 builds produced an NSIS installer and Debian package. See [live KDE validation](tests/kde/README.md) for reproducible commands and coverage limits. A supplemental KWin 6.3.6 / Qt 6.8.2 session passes 35 native script checks; full Plasma 6 app testing currently stops at a pointer-position assertion after centered push. Live Portafort Plasma 5.27 testing passes 39 combined app checks through WSL → Hoster → Portafort.
 
 Manual acceptance on each OS: enable the app; push a floating window across two monitors; pull it back; tile it on each side; switch between two windows of the same app; unplug the original display and pull; pause and verify shortcuts are released; quit and verify cleanup. Repeat with maximized windows, portrait displays, and mixed scaling.
 
@@ -163,5 +163,13 @@ The current feature-branch builds are available locally after validation:
 Their embedded executables and package metadata were inspected without installing
 them. The preview includes the recent terminal, Firefox, tiling and gesture
 changes. Tray handlers and graceful shutdown pass on Windows and Plasma5.27. Full parity,
-installer behavior and Plasma6 runtime remain under validation; see PARITY.md,
+installer behavior and full Plasma6 application behavior remain under validation; see PARITY.md,
 especially the KDE overlapping-shortcut limit.
+
+
+Terminal restoration checks fresh shell/profile/distribution identity while
+waiting for a new window, so a known incompatible concurrent terminal is not
+moved into the saved placement. Konsole selected profile files, shell aliases,
+and wrappers with an exactly verified launch command are supported. Shared
+processes, multiple tabs, and otherwise identical or unknown session identities
+can still require manual review; see [parity tracking](PARITY.md).

@@ -1421,9 +1421,32 @@ mod tests {
                 same_profile(&proof.profile),
                 "Restored shell must actually use the configured fixture profile GUID"
             );
+            let excluded: HashSet<_> = windows.iter().map(|window| window.id.clone()).collect();
+            let current = unsafe { snapshot_native(true).unwrap() };
+            let matching = terminal::matching_new_windows(&current, &excluded, &saved);
+            assert!(
+                matching
+                    .iter()
+                    .any(|window| window.id == second.window.id && window.pid == second.window.pid),
+                "Fresh native terminal identity must admit the newly restored owned window"
+            );
+            assert!(
+                !matching.iter().any(|window| window.id == first.window.id),
+                "The preexisting owned terminal must stay excluded"
+            );
+            let incompatible = terminal::Terminal {
+                shell: "cmd.exe".into(),
+                ..saved.clone()
+            };
+            assert!(
+                !terminal::matching_new_windows(&current, &excluded, &incompatible)
+                    .iter()
+                    .any(|window| window.id == second.window.id),
+                "The native PowerShell window must not satisfy a different saved shell"
+            );
             second.close().unwrap();
             first.close().unwrap();
-            eprintln!("Portable Terminal {shell_name}: capture, profile, directory, compatibility and new-window restore passed; {}", directory.display());
+            eprintln!("Portable Terminal {shell_name}: capture, profile, directory, compatibility, new-window restore and fresh identity filtering passed; {}", directory.display());
         }
     }
 

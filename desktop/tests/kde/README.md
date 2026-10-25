@@ -84,7 +84,7 @@ Mozilla's [command-line reference](https://github.com/mozilla-firefox/firefox/bl
 
 ## Verified environment
 
-On 2026-10-24, the live script tests passed on Plasma 5.27 (KWin 5.27.11, Qt 5.15.13), with native Wayland fixture windows. The isolated two-output session passed all nine checks. This run discovered and fixed the fullscreen capability-flag guard. Plasma 6 compatibility remains covered by simulated-workspace tests, pending a live Plasma 6 environment. Mixed-DPI physical displays and unplugging an actual monitor remain manual checks.
+On 2026-10-24, the live script tests passed on Plasma 5.27 (KWin 5.27.11, Qt 5.15.13), with native Wayland fixture windows. The isolated two-output session passed all nine checks. This run discovered and fixed the fullscreen capability-flag guard. The later native Plasma 6 run below adds standalone coverage; full application acceptance remains incomplete. Mixed-DPI physical displays and unplugging an actual monitor remain manual checks.
 
 The compiled Linux application also passed all four native UI checks on that session with WebKitGTK 2.52.6: rendering, settings persistence, loading the KWin integration, and unloading it on pause. The Linux build passed five Rust tests and twelve Node tests. A Debian amd64 package was generated on Ubuntu 24.04; the package itself has not been installed during testing. The Windows build passed six Rust tests, including native Win32 positioning, and produced an x64 NSIS installer.
 
@@ -252,7 +252,7 @@ run passes 39 checks on Plasma 5.27, including a withheld control reply proving
 that ordinary typing resumes before window I/O finishes. The fault injection
 replaces and restores only the private compositor's control script. Receipt:
 `src-tauri/target/kde-validation/retile-cleanup/`, remote service
-`hoster-warp-gui-20261025-retile-cleanup` (exit 0). Plasma 6 remains a native acceptance gap.
+`hoster-warp-gui-20261025-retile-cleanup` (exit 0). Full Plasma 6 application acceptance remains a gap; see the later native runtime result below.
 
 
 ### Tray lifecycle acceptance
@@ -310,3 +310,28 @@ with `--desktop-entry --dbus-desktop-entry --tray`. Receipts are in
 `src-tauri/target/kde-validation/dbus-activation/gui-dbus-activation/`, including
 gui-result.json and dbus-desktop-calls.json. The updated private bus also passes
 35 standalone KWin checks on Portafort. No login-session services were changed.
+
+
+### Concurrent terminal and updated Plasma 6 receipts
+
+Add `--terminal --terminal-concurrent` to test a gated intended launch against a
+concurrent incompatible Konsole, then selected-profile precedence, a `/bin/sh`
+alias, and `/usr/bin/env bash` wrapper restoration. The old binary fails the
+concurrent case by moving the wrong window before the intended launch appears.
+Portafort unit `portafort-warp-gui-20261025-terminal-wrappers` passes all 39 checks
+with `--hold --pointer --radial --tray --terminal --terminal-concurrent`.
+The route is WSL -> SSH Hoster -> SSH Portafort, running a private KWin session
+on Portafort. Receipts are under
+`src-tauri/target/kde-validation/terminal-wrappers/tile-browser/gui-terminal-wrappers/`.
+
+The separate Hoster Plasma 6 image now runs actual KWin 6.3.6 / Qt 6.8.2;
+`hoster-warp-live-20261025-plasma6` passes 35 native standalone checks. With
+permission checks enabled, `nested.sh` writes private menu metadata and copies
+the fixture interpreter to give its declared fake-input capability a unique
+executable identity. This avoids picking the system Python desktop entry and
+does not modify system metadata or disable compositor permission checks.
+
+Full app run `hoster-warp-gui-20261025-plasma6-authorized` fails at the pointer
+position assertion after right-center push (`gui.py` line 991). It is not a full
+app pass. Capture actual and expected coordinates on the next diagnostic run.
+Logs and screenshots are under `src-tauri/target/kde-validation/plasma6-authorized/`.

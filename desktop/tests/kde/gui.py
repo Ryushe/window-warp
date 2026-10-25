@@ -26,6 +26,8 @@ if "--firefox-tiles" in sys.argv and "--firefox" not in sys.argv:
     raise ValueError("Firefox tile acceptance requires --firefox")
 if "--overlap" in sys.argv and "--firefox-tiles" not in sys.argv:
     raise ValueError("Overlapping shortcut acceptance requires --firefox-tiles")
+if "--terminal-concurrent" in sys.argv and "--terminal" not in sys.argv:
+    raise ValueError("Concurrent terminal acceptance requires --terminal")
 
 
 def kwin_loaded(name="window-warp-session"):
@@ -295,6 +297,222 @@ def test_tray(driver, environment, log, report):
     assert not remaining, f"Graceful tray exit left KWin scripts loaded before fixture cleanup: {remaining}"
     record("native tray Quit exits the owned app and releases action, pause, control and gesture scripts before fixture cleanup")
     report["tray"] = proof
+
+
+def test_terminal_concurrent(environment, temporary, template, log, report):
+    directory = Path(temporary) / "terminal-concurrent"
+    directory.mkdir()
+    started = directory / "started.json"
+    release = directory / "release"
+    wrapper = directory / "gated-konsole"
+    original = template["items"][0]
+    konsole = original["launch"]["program"]
+    assert Path(konsole).is_absolute() and Path(konsole).name == "konsole", konsole
+    wrapper.write_text(f'''#!{sys.executable}
+import json, os, pathlib, sys, time
+os.setsid()
+marker = pathlib.Path({str(started)!r})
+pending = marker.with_suffix('.pending')
+pending.write_text(json.dumps({{"pid":os.getpid(),"birth":pathlib.Path('/proc/self/stat').read_text().rsplit(')',1)[1].split()[19],"args":sys.argv[1:]}}))
+pending.replace(marker)
+deadline = time.monotonic() + 10
+while not pathlib.Path({str(release)!r}).exists():
+    if time.monotonic() >= deadline: raise SystemExit("Timed out waiting for owned terminal launch release")
+    time.sleep(0.025)
+os.execv({konsole!r}, [{konsole!r}, *sys.argv[1:]])
+''')
+    wrapper.chmod(0o700)
+    wrong_profile = directory / "wrong.profile"
+    wrong_profile.write_text("[General]\nName=Warp Wrong Concurrent\nCommand=/bin/sh\nParent=FALLBACK/\n")
+    profile = json.loads(json.dumps(template))
+    profile["id"] = "terminal-concurrent"
+    item = profile["items"][0]
+    item["launch"].update({"program": str(wrapper), "newWindow": True})
+    area = item["window"]["workArea"]
+    target = {"x": area["x"] + 140, "y": area["y"] + 115, "width": 550, "height": 350}
+    item["window"].update({"rect": target, "maximizedHorizontal": False, "maximizedVertical": False, "fullscreen": False, "minimized": False})
+    invoke("save_workspaces", {"store": {"version": 1, "profiles": [profile]}})
+    evidence = {"target": target, "passed": False}
+    receipt = output / "terminal-concurrent.json"
+    wrong = None
+    owned = []
+    alias_evidence = None
+    alias_receipt = output / "terminal-selected-profile.json"
+    command_evidence = None
+    command_receipt = output / "terminal-command-wrapper.json"
+    selected_profile = directory / "selected.profile"
+
+    def birth(pid):
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        if fields[0] == "Z": raise ProcessLookupError("Owned process exited")
+        return fields[19]
+
+    def owned_capture(pid):
+        capture = invoke("capture_workspace", {"name": "Concurrent terminal observation"})["profile"]
+        return [i for i in capture["items"] if i["window"]["pid"] == pid]
+
+    def observation():
+        return evaluate("return window.__terminalConcurrent")
+
+    try:
+        # Returning from JS immediately leaves the real restore running, while
+        # subsequent observations use the same native bridge normally.
+        evaluate("window.__terminalConcurrent={pending:true};window.__TAURI__.core.invoke('restore_workspace',{id:'terminal-concurrent'}).then(result=>{window.__terminalConcurrent={result}},error=>{window.__terminalConcurrent={error:String(error)}});return true;")
+        deadline = time.monotonic() + 5
+        while not started.exists() and time.monotonic() < deadline: time.sleep(0.025)
+        assert started.exists(), {"restore": observation(), "error": "Gated launch did not start"}
+        launch = json.loads(started.read_text())
+        pid = launch["pid"]
+        argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        assert str(wrapper).encode() in argv and os.getpgid(pid) == pid, "Unexpected gated launch owner"
+        assert birth(pid) == launch["birth"]
+        owned.append((pid, launch["birth"]))
+        evidence["intendedLaunch"] = launch
+        wrong = subprocess.Popen([konsole, "--separate", "--profile", str(wrong_profile), "--workdir", str(directory), "-e", "/bin/sh"],
+            env=environment, stdout=log, stderr=log, start_new_session=True)
+        deadline = time.monotonic() + 5
+        wrong_items = []
+        while time.monotonic() < deadline:
+            assert wrong.poll() is None, "Wrong-profile fixture exited before it could be observed"
+            wrong_items = owned_capture(wrong.pid)
+            if len(wrong_items) == 1 and wrong_items[0].get("terminal", {}).get("shell"): break
+            time.sleep(0.05)
+        assert len(wrong_items) == 1, "Owned wrong-profile Konsole did not become visible"
+        candidate = wrong_items[0]
+        assert candidate["terminal"]["profileName"] == "Warp Wrong Concurrent", candidate
+        assert Path(candidate["terminal"]["shell"]).name != Path(item["terminal"]["shell"]).name, candidate
+        evidence["wrongBeforeRelease"] = candidate
+        # The intended process is still the waiting wrapper: this is a proven
+        # candidate ordering, not a guess about which Konsole starts faster.
+        assert str(wrapper).encode() in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        time.sleep(0.6)  # More than three 150ms production polling intervals.
+        evidence["beforeRelease"] = observation()
+        receipt.write_text(json.dumps(evidence, indent=2))
+        release.touch()
+        deadline = time.monotonic() + 8
+        intended = []
+        while time.monotonic() < deadline:
+            intended = owned_capture(pid)
+            if len(intended) == 1 and intended[0].get("terminal", {}).get("shell") and not observation().get("pending"): break
+            time.sleep(0.05)
+        evidence["result"] = observation()
+        evidence["intendedAfter"] = intended
+        wrong_after = owned_capture(wrong.pid)
+        evidence["wrongAfter"] = wrong_after
+        receipt.write_text(json.dumps(evidence, indent=2))
+        assert evidence["beforeRelease"] == {"pending": True}, "Restore accepted the incompatible new terminal while the intended launch was gated; see terminal-concurrent.json"
+        result = evidence["result"].get("result", [])
+        assert len(result) == 1 and result[0]["restored"] and result[0]["launched"], evidence["result"]
+        assert len(intended) == 1 and intended[0]["terminal"]["profileName"] == item["terminal"]["profileName"] and Path(intended[0]["terminal"]["shell"]).name == Path(item["terminal"]["shell"]).name, intended
+        assert intended[0]["window"]["rect"] == target, intended
+        assert len(wrong_after) == 1 and wrong_after[0]["window"]["rect"] == candidate["window"]["rect"] and wrong_after[0]["window"]["rect"] != target, wrong_after
+        evidence["passed"] = True
+        report["checks"].append("terminal launch ignores a proven incompatible new Konsole until the gated matching profile/shell appears, preserving the unrelated window placement")
+
+        # Independent launch acceptance: the chosen profile file takes priority
+        # over a stale captured name, and /bin/sh may resolve to /usr/bin/dash.
+        selected_profile.write_text("[General]\nName=Warp Selected Profile\nCommand=/bin/bash\nParent=FALLBACK/\n")
+        selected_dir = directory / "selected working directory"
+        selected_dir.mkdir()
+        selected = json.loads(json.dumps(profile))
+        selected["id"] = "terminal-selected-profile"
+        selected_item = selected["items"][0]
+        stale_name = selected_item["terminal"]["profileName"]
+        assert stale_name != "Warp Selected Profile"
+        selected_item["terminal"].update({"profilePath": str(selected_profile), "shell": "/bin/sh", "shellArgs": [], "workingDirectory": str(selected_dir)})
+        selected_item["window"]["rect"] = dict(target, x=target["x"] + 100, y=target["y"] + 70)
+        alias_evidence = {"passed": False, "requestedTerminal": selected_item["terminal"], "target": selected_item["window"]["rect"]}
+        alias_receipt.write_text(json.dumps(alias_evidence, indent=2))
+        invoke("save_workspaces", {"store": {"version": 1, "profiles": [selected]}})
+        started.unlink()
+        # The first gate is already released; the same owned wrapper now only
+        # records process identity before exec, without delaying this launch.
+        alias_evidence["result"] = invoke("restore_workspace", {"id": selected["id"]})
+        alias_launch = json.loads(started.read_text())
+        alias_pid = alias_launch["pid"]
+        assert birth(alias_pid) == alias_launch["birth"] and os.getpgid(alias_pid) == alias_pid
+        alias_argv = Path(f"/proc/{alias_pid}/cmdline").read_bytes().split(b"\0")
+        assert str(selected_profile).encode() in alias_argv and Path(f"/proc/{alias_pid}/exe").resolve() == Path(konsole).resolve()
+        owned.append((alias_pid, alias_launch["birth"]))
+        alias_evidence["launch"] = alias_launch
+        selected_items = owned_capture(alias_pid)
+        alias_evidence["actual"] = selected_items
+        alias_receipt.write_text(json.dumps(alias_evidence, indent=2))
+        selected_result = alias_evidence["result"]
+        assert len(selected_result) == 1 and selected_result[0]["restored"] and selected_result[0]["launched"], selected_result
+        assert len(selected_items) == 1, selected_items
+        actual = selected_items[0]
+        assert Path(actual["terminal"]["shell"]).samefile("/bin/sh"), actual
+        assert actual["terminal"]["profileName"] == "Warp Selected Profile" and Path(actual["terminal"]["profilePath"]).samefile(selected_profile), actual
+        assert actual["terminal"]["workingDirectory"] == str(selected_dir) and actual["window"]["rect"] == selected_item["window"]["rect"], actual
+        alias_evidence["passed"] = True
+        report["checks"].append("Konsole launch honors the selected profile file over a stale name and restores an explicit /bin/sh alias with its actual shell, directory and placement")
+
+        # A configured shell command may intentionally exec another program.
+        # Exercise that ordinary command contract without a shell-name allowlist.
+        command_profile = json.loads(json.dumps(selected))
+        command_profile["id"] = "terminal-command-wrapper"
+        command_item = command_profile["items"][0]
+        command_item["terminal"].update({"shell": "/usr/bin/env", "shellArgs": ["bash", "--noprofile", "--norc"]})
+        command_item["window"]["rect"] = dict(target, x=target["x"] + 170, y=target["y"] + 95)
+        command_evidence = {"passed": False, "requestedTerminal": command_item["terminal"], "target": command_item["window"]["rect"]}
+        command_receipt.write_text(json.dumps(command_evidence, indent=2))
+        invoke("save_workspaces", {"store": {"version": 1, "profiles": [command_profile]}})
+        started.unlink()
+        command_evidence["result"] = invoke("restore_workspace", {"id": command_profile["id"]})
+        command_launch = json.loads(started.read_text())
+        command_pid = command_launch["pid"]
+        assert birth(command_pid) == command_launch["birth"] and os.getpgid(command_pid) == command_pid
+        command_argv = Path(f"/proc/{command_pid}/cmdline").read_bytes().split(b"\0")
+        assert str(selected_profile).encode() in command_argv and Path(f"/proc/{command_pid}/exe").resolve() == Path(konsole).resolve()
+        owned.append((command_pid, command_launch["birth"]))
+        command_evidence["launch"] = command_launch
+        command_items = owned_capture(command_pid)
+        command_evidence["actual"] = command_items
+        command_receipt.write_text(json.dumps(command_evidence, indent=2))
+        command_result = command_evidence["result"]
+        assert len(command_result) == 1 and command_result[0]["restored"] and command_result[0]["launched"], command_result
+        assert len(command_items) == 1, command_items
+        actual = command_items[0]
+        assert Path(actual["terminal"]["shell"]).samefile("/bin/bash"), actual
+        assert actual["terminal"]["profileName"] == "Warp Selected Profile" and Path(actual["terminal"]["profilePath"]).samefile(selected_profile), actual
+        assert actual["terminal"]["workingDirectory"] == str(selected_dir) and actual["window"]["rect"] == command_item["window"]["rect"], actual
+        command_evidence["passed"] = True
+        report["checks"].append("Konsole restores an explicit /usr/bin/env bash command after it execs bash, preserving selected profile, directory and placement")
+    finally:
+        receipt.write_text(json.dumps(evidence, indent=2))
+        if alias_evidence is not None: alias_receipt.write_text(json.dumps(alias_evidence, indent=2))
+        if command_evidence is not None: command_receipt.write_text(json.dumps(command_evidence, indent=2))
+        if started.exists():
+            recorded = json.loads(started.read_text())
+            pid = recorded["pid"]
+            try:
+                argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+                recognized = str(wrapper).encode() in argv or (str(selected_profile).encode() in argv and Path(f"/proc/{pid}/exe").resolve() == Path(konsole).resolve())
+                identity = (pid, recorded["birth"])
+                if recognized and birth(pid) == recorded["birth"] and os.getpgid(pid) == pid and identity not in owned: owned.append(identity)
+            except (FileNotFoundError, ProcessLookupError): pass
+        for owner in owned:
+            try:
+                if birth(owner[0]) == owner[1] and os.getpgid(owner[0]) == owner[0]:
+                    os.killpg(owner[0], signal.SIGTERM)
+                    deadline = time.monotonic() + 3
+                    while time.monotonic() < deadline:
+                        if birth(owner[0]) != owner[1]: break
+                        time.sleep(0.05)
+                    else:
+                        if birth(owner[0]) == owner[1] and os.getpgid(owner[0]) == owner[0]: os.killpg(owner[0], signal.SIGKILL)
+            except (FileNotFoundError, ProcessLookupError): pass
+        if wrong is not None:
+            try:
+                if wrong.poll() is None: os.killpg(wrong.pid, signal.SIGTERM)
+            except ProcessLookupError: pass
+            try: wrong.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(wrong.pid, signal.SIGKILL)
+                wrong.wait(timeout=5)
+        if observation().get("pending"): invoke("cancel_workspace_restore")
+        invoke("save_workspaces", {"store": {"version": 1, "profiles": [template]}})
 
 
 def test_dbus_desktop_entry(environment, template, report):
@@ -1560,6 +1778,8 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             assert len(restored) == 1 and restored[0]["terminal"]["workingDirectory"] == str(terminal_dir), restored
             assert restored[0]["terminal"]["profileName"] == terminal["profileName"]
             report["checks"].extend(["Konsole shell/profile/working directory capture", "Konsole reuse", "Konsole new-window launch preserves profile and directory"])
+            if "--terminal-concurrent" in sys.argv:
+                test_terminal_concurrent(fixture_env, temporary, captured_terminal, log, report)
             evaluate("location.reload(); return true;")
             wait_for(f"return document.querySelectorAll('.binding').length === {len(terminal_config['bindings'])} && !document.querySelector('#toggle').disabled")
             click("#show-workspaces")

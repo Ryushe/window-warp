@@ -21,7 +21,7 @@ have been exercised. Bundles are rebuilt at the checkpoints below; installer exe
 | Workspace capture/create/update, best-match update selection, rename/delete/reorder/browser | Partial | Implemented; Rust matching/persistence model and Node editor tests pass; KDE native capture/save/browser pass; Windows capture/review/save and closest-match update draft now pass natively |
 | Workspace launch/reuse, exclude already-consumed windows, wait for new windows, restore placement/state | Partial | KDE native two-window reuse, forced new launch, placement, per-axis maximize/fullscreen pass; Windows owned-window placement/maximize/minimize pass; Windows two-window reuse and separate-process launch now pass natively; physical display-change acceptance remains |
 | Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Partial | Native Windows Firefox158.0.1 and KDE Firefox158 capture/reuse/new-window, selected URL, explicit-profile isolation, floating geometry and editor pass; polling rejects resolved wrong profiles; default-started Firefox without profile arguments still has ambiguous title/app matching and needs separate acceptance |
-| Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native Ubuntu capture/directory restoration passes; legacy launchers, prompt fallback, and ambiguity have regression coverage; Windows PowerShell and PowerShell7 custom portable-profile GUID, explicit executable, directory and new-window restoration pass; packaged cmd regression and refreshed18-check Konsole editor fixture pass; shared-process/multi-tab profile identity and concurrent terminal launch matching remain limited |
+| Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native Ubuntu capture/directory restoration passes; legacy launchers, prompt fallback, and ambiguity have regression coverage; Windows PowerShell and PowerShell7 custom portable-profile GUID, explicit executable, directory and new-window restoration pass; packaged cmd regression and refreshed18-check Konsole editor fixture pass; fresh post-launch identity filtering rejects a concurrent incompatible terminal on Windows/Konsole; selected profile files, shell aliases and exact wrapper launches pass; shared-process/multi-tab and identical or unknown concurrent identity remain limited |
 | Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Partial | Executable launch passes native Windows/KDE fixtures; Calculator AUMID capture/activation/reuse and native KDE desktop-entry URL/document launch, working directory, reuse and missing-target errors pass; native D-Bus service autostart, Activate/Open URI delivery, forced new window, reuse and rejected activation now pass; hosted UWP/packaged Win32 variants remain |
 | Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Partial | Review/import/save verified natively on Windows and KDE; disabled keys, terminal fields, Firefox tabs and geometry retained; legacy package paths resolve a single registered AUMID during unsaved review; missing/ambiguous families stay editable; title/class/exe/PID/HWND/active WinTitle rules now migrate to reviewed selectors; undefined groups/duplicate or unknown criteria remain visible for manual review; both center actions convert |
 | Single instance, tray, settings failures, session cleanup, installers | Partial | Windows native single instance, registration failures and process-exit key release pass; fresh NSIS and Debian payloads inspected; Windows and Plasma5.27 tray handlers, close/reopen, and graceful shutdown pass; physical tray presentation, Plasma6 and installer execution checks remain |
@@ -923,3 +923,49 @@ not installation/login acceptance. Builder unit
 `hoster-warp-bundle-20261025-qdbus` completed inactive/exit0. Updated Debian preview
 SHA256: `59b3b8761a0d75fb122dfcac5f3365fd0a442693158f00322d6314169c4dae7d`.
 Windows preview and runtime are unchanged; remaining parity gates still apply.
+
+
+### 2026-10-25 concurrent terminal restoration and native Plasma 6
+
+Restore now checks fresh terminal identity during new-window polling, before
+ranking app/title matches. The old Linux binary demonstrably selected and moved
+an unrelated terminal before the intended launch appeared. The corrected binary
+waits for the matching terminal and preserves the unrelated window's placement.
+Selected Konsole profile files take precedence over stale display names; shell
+aliases resolve to their executable. A wrapper that execs its shell is accepted
+only with exact generated launch argv from a fresh, single-window Konsole owner.
+Linux command-line parsing preserves empty argument boundaries for that proof.
+Known identity mismatches remain rejected; shared-PID/multi-tab and identical or
+unknown concurrent identity remain unresolved.
+
+Live testing used WSL -> Hoster -> Portafort. Unit
+`portafort-warp-gui-20261025-terminal-wrappers` completed inactive/exit 0 with
+**39 checks** using `--hold --pointer --radial --tray --terminal
+--terminal-concurrent`. This includes gated concurrent launches, selected profile
+precedence, `/bin/sh` alias and `/usr/bin/env bash` wrapper restoration, and tray
+cleanup. Receipts: `src-tauri/target/kde-validation/terminal-wrappers/tile-browser/gui-terminal-wrappers/`.
+The tested Linux executable SHA256 is
+`0c8edca14b5f0ab45f8e60c8398b390f057fd7e3acb9be38f0eb37be2cd3c5b3`.
+
+Fresh Linux compilation passed 129 Node and 68 Rust tests (one ignored).
+Windows passed 74 Rust tests (six ignored), two later focused wrapper/parser
+regressions, native PowerShell/pwsh launch filtering, and final debug/NSIS builds.
+Fresh Debian package SHA256:
+`eb7f652281bb084d91607973f826cbbb538357f5e7b5857b4d4364acddb80f5f`.
+Fresh NSIS SHA256:
+`2fbce0768cade06be4ae60e9903a3fed1792c66cb06f59079427b1793f6069ba`.
+These are built artifacts, not installed releases.
+
+A supplemental isolated Hoster container runs actual KWin 6.3.6 / Qt 6.8.2.
+Its standalone native suite passes 35 checks. The permission-enabled fixture now
+uses private menu metadata and a uniquely identified copied Python executable,
+so KWin grants only the fixture's declared fake-input capability. Full app unit
+`hoster-warp-gui-20261025-plasma6-authorized` failed/exit 1 at the pointer assertion
+after right-center push (`gui.py` line 991). Actual/expected coordinates were not
+recorded by that assertion; diagnose them before choosing a fix. This run does
+not establish complete Plasma 6 application acceptance. Receipts:
+`src-tauri/target/kde-validation/plasma6-authorized/`.
+
+All other incomplete rows remain in scope: Plasma 5 overlapping held chords,
+Plasma 6 application/overlap acceptance, ambiguous app/session identity, physical
+mixed-DPI/portrait/removal, real login/startup, and installer execution/uninstall.

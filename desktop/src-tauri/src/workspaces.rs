@@ -364,7 +364,7 @@ pub fn restore(
             let target = if let Some(window) = existing {
                 window
             } else {
-                // Include all preexisting browser windows, even other profiles.
+                // Include all preexisting windows, even incompatible profiles.
                 let before: HashSet<_> = crate::platform::snapshot(app)?
                     .iter()
                     .map(|w| w.id.clone())
@@ -384,12 +384,6 @@ pub fn restore(
                         return Err("Workspace restore canceled.".into());
                     }
                     let mut windows = crate::platform::snapshot(app)?;
-                    if let Some(browser) = &item.browser {
-                        windows.retain(|w| {
-                            !crate::firefox::is_firefox(w)
-                                || browser_matcher.matches_new_window(w, browser)
-                        });
-                    }
                     let excluded: HashSet<_> = if item.launch.new_window
                         || item.browser.is_some()
                         || item.terminal.is_some()
@@ -398,6 +392,16 @@ pub fn restore(
                     } else {
                         used.clone()
                     };
+                    if let Some(terminal) = &item.terminal {
+                        windows =
+                            crate::terminal::matching_new_windows(&windows, &excluded, terminal);
+                    }
+                    if let Some(browser) = &item.browser {
+                        windows.retain(|w| {
+                            !crate::firefox::is_firefox(w)
+                                || browser_matcher.matches_new_window(w, browser)
+                        });
+                    }
                     if let Some(window) = find_match(&item.window, &windows, &excluded) {
                         break window.clone();
                     }

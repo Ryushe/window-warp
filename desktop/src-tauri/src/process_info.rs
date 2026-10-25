@@ -2,11 +2,22 @@
 #[cfg(target_os = "linux")]
 pub fn arguments(pid: u32) -> Result<Vec<String>, String> {
     let bytes = std::fs::read(format!("/proc/{pid}/cmdline")).map_err(|e| e.to_string())?;
-    Ok(bytes
+    Ok(split_linux_command_line(&bytes))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn split_linux_command_line(bytes: &[u8]) -> Vec<String> {
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+    // Only the final NUL terminates the vector; every earlier NUL separates
+    // arguments, including explicitly empty arguments supplied by the user.
+    bytes
+        .strip_suffix(&[0])
+        .unwrap_or(bytes)
         .split(|b| *b == 0)
-        .filter(|s| !s.is_empty())
         .map(|s| String::from_utf8_lossy(s).into_owned())
-        .collect())
+        .collect()
 }
 
 #[cfg(windows)]
@@ -135,8 +146,30 @@ fn split_windows_command_line(command: &str) -> Result<Vec<String>, String> {
     }
 }
 
-#[cfg(all(windows, test))]
+#[cfg(test)]
 mod tests {
+    #[test]
+    fn linux_command_line_preserves_empty_argument_boundaries() {
+        assert_eq!(
+            super::split_linux_command_line(b"konsole\0-e\0wrapper\0"),
+            ["konsole", "-e", "wrapper"]
+        );
+        assert_eq!(
+            super::split_linux_command_line(b"wrapper\0\0bash\0"),
+            ["wrapper", "", "bash"]
+        );
+        assert_eq!(
+            super::split_linux_command_line(b"wrapper\0\0"),
+            ["wrapper", ""]
+        );
+        assert_eq!(
+            super::split_linux_command_line(b"wrapper\0\0\0"),
+            ["wrapper", "", ""]
+        );
+        assert_eq!(super::split_linux_command_line(b"wrapper"), ["wrapper"]);
+        assert!(super::split_linux_command_line(b"").is_empty());
+    }
+    #[cfg(windows)]
     #[test]
     fn current_process_arguments_are_read_through_cim() {
         let args = super::arguments(std::process::id()).unwrap();
@@ -145,6 +178,7 @@ mod tests {
             std::env::current_exe().unwrap().file_name()
         );
     }
+    #[cfg(windows)]
     #[test]
     fn quoted_profile_paths_and_empty_arguments_keep_boundaries() {
         assert_eq!(

@@ -125,6 +125,89 @@ impl Terminal {
             && (self.wsl_distro.is_empty() || self.wsl_distro == other.wsl_distro)
             && (self.wsl_user.is_empty() || self.wsl_user == other.wsl_user)
     }
+
+    fn compatible_new_window(&self, other: &Self) -> bool {
+        // A new shared-process Terminal window can expose its shell without a
+        // reliable per-window profile. Reject proven differences without
+        // pretending those deliberately unknown fields are differences.
+        let known_agrees =
+            |saved: &str, current: &str| saved.is_empty() || current.is_empty() || saved == current;
+        let profile_agrees = if self.kind == Kind::Konsole && !self.profile_path.is_empty() {
+            // Launch uses the selected file before the captured display name.
+            // A runtime/unnamed session may not expose that file yet.
+            match (
+                std::fs::canonicalize(&self.profile_path),
+                std::fs::canonicalize(&other.profile_path),
+            ) {
+                (Ok(selected), Ok(current)) => selected == current,
+                _ => std::fs::read_to_string(&self.profile_path)
+                    .ok()
+                    .and_then(|text| profile_display_name(&text).map(str::to_owned))
+                    .is_none_or(|name| known_agrees(&name, &other.profile_name)),
+            }
+        } else {
+            known_agrees(&self.profile_name, &other.profile_name)
+        };
+        self.kind == other.kind
+            && (self.shell.is_empty()
+                || (!other.shell.is_empty() && same_new_shell(&self.shell, &other.shell)))
+            && profile_agrees
+            && known_agrees(&self.wsl_distro, &other.wsl_distro)
+            && known_agrees(&self.wsl_user, &other.wsl_user)
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    fn compatible_new_konsole_launch(&self, current: &Self, owner_args: &[String]) -> bool {
+        if self.kind != Kind::Konsole || self.shell.is_empty() || current.shell.is_empty() {
+            return false;
+        }
+        // A wrapper can exec a different shell. The separate Konsole process
+        // retains the exact requested command, including its argument boundaries.
+        // Do not infer wrapper behavior from names, scripts, or shell arguments.
+        let Ok(expected) = self.launch_command(&LaunchSpec::default()) else {
+            return false;
+        };
+        if owner_args.get(1..) != Some(expected.args.as_slice()) {
+            return false;
+        }
+        let mut launched = current.clone();
+        launched.shell.clone_from(&self.shell);
+        self.compatible_new_window(&launched)
+    }
+}
+
+fn same_new_shell(saved: &str, current: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let search_path = std::env::var_os("PATH");
+        if let (Some(saved), Some(current)) = (
+            linux_shell_path(saved, search_path.as_deref()),
+            linux_shell_path(current, search_path.as_deref()),
+        ) {
+            return saved == current;
+        }
+    }
+    basename(saved) == basename(current)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_shell_path(
+    shell: &str,
+    search_path: Option<&std::ffi::OsStr>,
+) -> Option<std::path::PathBuf> {
+    use std::{os::unix::fs::PermissionsExt, path::Path};
+    let executable = |path: &Path| {
+        let metadata = std::fs::metadata(path).ok()?;
+        (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+            .then(|| std::fs::canonicalize(path).ok())
+            .flatten()
+    };
+    let path = Path::new(shell);
+    if path.components().count() > 1 {
+        executable(path)
+    } else {
+        std::env::split_paths(search_path?).find_map(|directory| executable(&directory.join(path)))
+    }
 }
 
 fn basename(path: &str) -> String {
@@ -188,6 +271,54 @@ impl Capture {
         self.read(window, windows)
             .is_ok_and(|current| saved.compatible(&current))
     }
+}
+
+/// New processes may not have existed in the reuse snapshot. Refresh identity
+/// once per polling pass, only after a new terminal candidate is visible.
+pub fn matching_new_windows(
+    windows: &[WindowInfo],
+    excluded: &std::collections::HashSet<String>,
+    saved: &Terminal,
+) -> Vec<WindowInfo> {
+    matching_new_windows_with(windows, excluded, saved, Capture::new)
+}
+
+fn matching_new_windows_with(
+    windows: &[WindowInfo],
+    excluded: &std::collections::HashSet<String>,
+    saved: &Terminal,
+    capture: impl FnOnce() -> Capture,
+) -> Vec<WindowInfo> {
+    let candidates: Vec<_> = windows
+        .iter()
+        .filter(|window| !excluded.contains(&window.id) && kind(window) == Some(saved.kind))
+        .collect();
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let capture = capture();
+    candidates
+        .into_iter()
+        // Preserve full snapshot context for shared Terminal processes. Unreadable
+        // startup identity is retried by the next pass, not cached as a match.
+        .filter(|window| {
+            let Ok(current) = capture.read(window, windows) else {
+                return false;
+            };
+            if saved.compatible_new_window(&current) {
+                return true;
+            }
+            #[cfg(target_os = "linux")]
+            if saved.kind == Kind::Konsole
+                && windows.iter().filter(|w| w.pid == window.pid).count() == 1
+            {
+                return crate::process_info::arguments(window.pid)
+                    .is_ok_and(|args| saved.compatible_new_konsole_launch(&current, &args));
+            }
+            false
+        })
+        .cloned()
+        .collect()
 }
 
 pub fn enrich(items: &mut [WorkspaceItem]) {
@@ -361,7 +492,7 @@ impl Capture {
         if let Some(shell) = title_shell {
             choices.retain(|s| basename(&s.shell) == shell);
             if choices.is_empty() {
-                return Ok(Terminal {
+                choices.push(Terminal {
                     shell: shell.into(),
                     ..Default::default()
                 });
@@ -604,7 +735,6 @@ fn konsole_profile_reference(reference: &str, pid: u32) -> Option<std::path::Pat
         .find(|path| path.is_file())
 }
 
-#[cfg(any(target_os = "linux", test))]
 fn profile_display_name(text: &str) -> Option<&str> {
     let mut general = false;
     for line in text.lines().map(str::trim) {
@@ -622,10 +752,392 @@ fn profile_display_name(text: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn terminal_window(id: &str, pid: u32, title: &str) -> WindowInfo {
+        serde_json::from_value(serde_json::json!({
+            "id":id,"pid":pid,"title":title,"appId":"WindowsTerminal.exe","desktopId":"","path":"WindowsTerminal.exe",
+            "rect":{"x":0,"y":0,"width":800,"height":600},"workArea":{"x":0,"y":0,"width":1920,"height":1080},
+            "monitor":1,"monitorName":"main","maximizedHorizontal":false,"maximizedVertical":false,
+            "fullscreen":false,"minimized":false,"active":false
+        })).unwrap()
+    }
+
+    #[cfg(windows)]
+    fn terminal_processes(entries: &[(u32, &str, Option<&str>)]) -> Capture {
+        use crate::process_info::Process;
+        let mut processes = Vec::new();
+        for (pid, profile, shell) in entries {
+            processes.push(Process {
+                pid: *pid,
+                parent: 1,
+                name: "WindowsTerminal.exe".into(),
+                args: ["WindowsTerminal.exe", "--profile", profile]
+                    .map(String::from)
+                    .to_vec(),
+            });
+            if let Some(shell) = shell {
+                processes.push(Process {
+                    pid: pid + 1,
+                    parent: *pid,
+                    name: (*shell).into(),
+                    args: vec![(*shell).into()],
+                });
+            }
+        }
+        Capture {
+            processes: Ok(processes),
+            wsl: crate::wsl::Discovery::fixture(&[]),
+        }
+    }
+
+    #[test]
+    fn new_terminal_poll_does_not_capture_without_an_unclaimed_terminal() {
+        let old = terminal_window("old", 10, "Existing terminal");
+        let mut other = terminal_window("other", 20, "Unrelated editor");
+        other.path = "editor.exe".into();
+        other.app_id = "editor.exe".into();
+        let excluded = std::collections::HashSet::from([old.id.clone()]);
+        let result =
+            matching_new_windows_with(&[old, other], &excluded, &Terminal::default(), || {
+                panic!("No new terminal means no process/session metadata query")
+            });
+        assert!(result.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn new_terminal_poll_rejects_concurrent_wrong_profile_and_shell_before_title_ranking() {
+        let saved_window = terminal_window("saved", 10, "Preferred title");
+        let wrong_profile = terminal_window("wrong-profile", 20, "Preferred title");
+        let wrong_shell = terminal_window("wrong-shell", 30, "Other terminal");
+        let intended = terminal_window("intended", 40, "Starting session");
+        let windows = vec![wrong_profile, wrong_shell, intended.clone()];
+        let excluded = std::collections::HashSet::new();
+        let saved = Terminal {
+            profile_name: "Dev".into(),
+            shell: "powershell.exe".into(),
+            ..Default::default()
+        };
+        // This is the prior post-launch behavior: generic app/title matching
+        // takes the concurrent wrong-profile window before the intended one.
+        assert_eq!(
+            crate::workspaces::find_match(&saved_window, &windows, &excluded)
+                .unwrap()
+                .id,
+            "wrong-profile"
+        );
+        let filtered = matching_new_windows_with(&windows, &excluded, &saved, || {
+            terminal_processes(&[
+                (20, "Other", Some("powershell.exe")),
+                (30, "Dev", Some("cmd.exe")),
+                (40, "Dev", Some("powershell.exe")),
+            ])
+        });
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(
+            crate::workspaces::find_match(&saved_window, &filtered, &excluded)
+                .unwrap()
+                .id,
+            intended.id
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn new_terminal_poll_refreshes_startup_identity_and_keeps_full_window_context() {
+        let window = terminal_window("new", 20, "Starting session");
+        let windows = vec![window.clone()];
+        let saved = Terminal {
+            profile_name: "Dev".into(),
+            shell: "powershell.exe".into(),
+            ..Default::default()
+        };
+        let excluded = std::collections::HashSet::new();
+        let reads = std::cell::Cell::new(0);
+        for ready in [false, true] {
+            let result = matching_new_windows_with(&windows, &excluded, &saved, || {
+                reads.set(reads.get() + 1);
+                terminal_processes(&[(20, "Dev", ready.then_some("powershell.exe"))])
+            });
+            assert_eq!(
+                result.len(),
+                usize::from(ready),
+                "A later process snapshot must recover incomplete startup identity"
+            );
+        }
+        assert_eq!(reads.get(), 2);
+        let sibling = terminal_window("preexisting", 20, "Another tab/window in this process");
+        let excluded = std::collections::HashSet::from([sibling.id.clone()]);
+        let result = matching_new_windows_with(&[window, sibling], &excluded, &saved, || {
+            terminal_processes(&[(
+                20,
+                "Other existing window's profile",
+                Some("powershell.exe"),
+            )])
+        });
+        assert!(
+            result.len() == 1,
+            "The full snapshot must keep a shared-process profile unknown, allowing a readable matching shell"
+        );
+    }
+
+    #[test]
+    fn new_terminal_identity_rejects_proven_differences_without_requiring_unknown_profile_fields() {
+        let saved = Terminal {
+            profile_name: "Dev".into(),
+            shell: "wsl.exe".into(),
+            wsl_distro: "Ubuntu".into(),
+            wsl_user: "developer".into(),
+            ..Default::default()
+        };
+        let unknown_fields = Terminal {
+            shell: "wsl.exe".into(),
+            ..Default::default()
+        };
+        assert!(
+            !saved.compatible(&unknown_fields),
+            "Existing-window reuse remains strict"
+        );
+        assert!(saved.compatible_new_window(&unknown_fields));
+        for current in [
+            Terminal {
+                profile_name: "Other".into(),
+                ..unknown_fields.clone()
+            },
+            Terminal {
+                wsl_distro: "Debian".into(),
+                ..unknown_fields.clone()
+            },
+            Terminal {
+                wsl_user: "other-user".into(),
+                ..unknown_fields.clone()
+            },
+            Terminal {
+                shell: "cmd.exe".into(),
+                ..unknown_fields.clone()
+            },
+            Terminal {
+                shell: String::new(),
+                ..unknown_fields
+            },
+        ] {
+            assert!(
+                !saved.compatible_new_window(&current),
+                "Known mismatch or missing required shell must not match: {current:?}"
+            );
+        }
+    }
+
     #[test]
     fn command_options_are_not_mistaken_for_wsl_distribution() {
         let args = ["wsl.exe", "--exec", "something", "-d", "not-a-distro"].map(String::from);
         assert!(from_shell("wsl.exe", &args).unwrap().wsl_distro.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn new_terminal_title_fallback_preserves_known_profile_but_not_shared_process_guesses() {
+        let window = terminal_window("starting", 20, "Windows PowerShell");
+        let saved = Terminal {
+            profile_name: "Dev".into(),
+            shell: "powershell.exe".into(),
+            ..Default::default()
+        };
+        let capture = terminal_processes(&[(20, "Other", None)]);
+        let current = capture
+            .read(&window, std::slice::from_ref(&window))
+            .unwrap();
+        assert_eq!(current.shell, "powershell.exe");
+        assert_eq!(
+            current.profile_name, "Other",
+            "Title fallback must retain known owner profile arguments"
+        );
+        assert!(!saved.compatible_new_window(&current));
+        let sibling = terminal_window("existing", 20, "Another window in the same process");
+        let current = capture.read(&window, &[window.clone(), sibling]).unwrap();
+        assert!(current.profile_name.is_empty());
+        assert!(
+            saved.compatible_new_window(&current),
+            "Shared-process owner profile is not per-window proof"
+        );
+    }
+
+    #[test]
+    fn new_konsole_profile_file_takes_priority_over_stale_display_name() {
+        struct Profiles(Vec<std::path::PathBuf>);
+        impl Drop for Profiles {
+            fn drop(&mut self) {
+                for path in &self.0 {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+        let paths = Profiles(
+            (0..2)
+                .map(|_| {
+                    std::env::temp_dir()
+                        .join(format!("warp-profile-{}.profile", uuid::Uuid::new_v4()))
+                })
+                .collect(),
+        );
+        for path in &paths.0 {
+            std::fs::write(path, "[General]\nName=Selected profile\n").unwrap();
+        }
+        let selected = paths.0[0].to_string_lossy().into_owned();
+        let saved = Terminal {
+            kind: Kind::Konsole,
+            profile_path: selected.clone(),
+            profile_name: "Stale captured name".into(),
+            shell: "bash".into(),
+            ..Default::default()
+        };
+        let mut current = Terminal {
+            kind: Kind::Konsole,
+            profile_path: std::fs::canonicalize(&paths.0[0])
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            profile_name: "Selected profile".into(),
+            shell: "bash".into(),
+            ..Default::default()
+        };
+        assert!(saved.compatible_new_window(&current));
+        current.profile_path = paths.0[1].to_string_lossy().into_owned();
+        assert!(
+            !saved.compatible_new_window(&current),
+            "A different known file must not match even with the same display name"
+        );
+        current.profile_path.clear();
+        assert!(
+            saved.compatible_new_window(&current),
+            "Unavailable runtime profile file remains unknown, not a stale-name mismatch"
+        );
+        current.profile_name = "Other profile".into();
+        assert!(!saved.compatible_new_window(&current),
+            "The selected file's actual name must reject a known different runtime name even without its path");
+        current.profile_name.clear();
+        assert!(
+            saved.compatible_new_window(&current),
+            "An unknown runtime file and name remain eligible"
+        );
+        current.profile_name = "Selected profile".into();
+        let name_only = Terminal {
+            profile_path: String::new(),
+            ..saved
+        };
+        assert!(
+            !name_only.compatible_new_window(&current),
+            "Without a selected file, known profile-name differences still reject"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn new_terminal_shell_identity_resolves_linux_paths_and_path_aliases() {
+        let actual_sh =
+            std::fs::canonicalize("/bin/sh").expect("Linux fixture requires the POSIX shell");
+        assert!(same_new_shell("/bin/sh", &actual_sh.to_string_lossy()));
+        let search_path = std::env::var_os("PATH");
+        let path_sh = linux_shell_path("sh", search_path.as_deref())
+            .expect("Linux fixture requires sh on PATH");
+        assert!(same_new_shell("sh", &path_sh.to_string_lossy()));
+        assert_eq!(
+            linux_shell_path("sh", Some(std::ffi::OsStr::new("/bin"))),
+            Some(actual_sh)
+        );
+        assert!(
+            !same_new_shell("bash", "dash"),
+            "Recognizing sh's resolved executable must not equate different shells"
+        );
+        assert!(!same_new_shell("/bin/bash", "/bin/dash"));
+    }
+
+    #[test]
+    fn new_konsole_wrapper_requires_exact_owner_launch_and_matching_profile() {
+        let current = Terminal {
+            kind: Kind::Konsole,
+            profile_name: "Dev".into(),
+            shell: "/usr/bin/bash".into(),
+            ..Default::default()
+        };
+        for (shell, shell_args) in [
+            ("/usr/bin/env", vec!["bash".into()]),
+            ("/fixture/custom-shell-wrapper", vec![]),
+            (
+                "/fixture/custom-shell-wrapper",
+                vec![String::new(), "bash".into(), String::new()],
+            ),
+        ] {
+            let saved = Terminal {
+                shell: shell.into(),
+                shell_args,
+                working_directory: "/fixture/directory with spaces".into(),
+                ..current.clone()
+            };
+            assert!(
+                !saved.compatible_new_window(&current),
+                "The original executable-only comparison rejects wrappers that exec bash"
+            );
+            let mut owner_args = vec!["/usr/bin/konsole".into()];
+            owner_args.extend(saved.launch_command(&LaunchSpec::default()).unwrap().args);
+            assert!(saved.compatible_new_konsole_launch(&current, &owner_args));
+            for unrelated in [
+                vec![
+                    "konsole".into(),
+                    "--separate".into(),
+                    "-e".into(),
+                    "/usr/bin/bash".into(),
+                ],
+                owner_args
+                    .iter()
+                    .map(|arg| {
+                        if arg == "--separate" {
+                            "--new-tab".into()
+                        } else {
+                            arg.clone()
+                        }
+                    })
+                    .collect(),
+                {
+                    let mut args = owner_args.clone();
+                    args.push("extra-argument".into());
+                    args
+                },
+                vec![],
+            ] {
+                assert!(!saved.compatible_new_konsole_launch(&current, &unrelated));
+            }
+            let wrong_profile = Terminal {
+                profile_name: "Other".into(),
+                ..current.clone()
+            };
+            assert!(!saved.compatible_new_konsole_launch(&wrong_profile, &owner_args));
+            let unreadable_shell = Terminal {
+                shell: String::new(),
+                ..current.clone()
+            };
+            assert!(!saved.compatible_new_konsole_launch(&unreadable_shell, &owner_args));
+        }
+        let saved = Terminal {
+            shell: "/usr/bin/bash".into(),
+            ..current.clone()
+        };
+        let wrong_shell = Terminal {
+            shell: "/usr/bin/dash".into(),
+            ..current
+        };
+        let mut owner_args = vec!["konsole".into()];
+        owner_args.extend(
+            wrong_shell
+                .launch_command(&LaunchSpec::default())
+                .unwrap()
+                .args,
+        );
+        assert!(!saved.compatible_new_window(&wrong_shell));
+        assert!(
+            !saved.compatible_new_konsole_launch(&wrong_shell, &owner_args),
+            "An independently launched direct shell must not gain wrapper compatibility"
+        );
     }
 
     #[cfg(windows)]

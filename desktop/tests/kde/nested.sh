@@ -28,15 +28,28 @@ gui_output="${5:-}"
 export QT_QPA_PLATFORM=offscreen KWIN_COMPOSE=Q XDG_CURRENT_DESKTOP=KDE
 unset DISPLAY WAYLAND_DISPLAY
 permission_checks=0
+fixture_python=python3
 if [[ " $* " == *" --pointer "* || " $* " == *" --pointer-denied "* ]]; then
     # Match installed-package authorization, within this private XDG data root.
     # The native keyboard fixture gets its own explicit desktop declaration too.
     permission_checks=1
-    python3 - "$3" "$*" <<'PY'
+    # KWin takes the first desktop entry matching the canonical executable.
+    # A system Python entry can otherwise shadow our capability declaration.
+    python_source="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve())')"
+    fixture_python="$session_dir/fixture-python"
+    cp -- "$python_source" "$fixture_python"
+    "$fixture_python" - "$3" "$*" <<'PY'
 import os, sys
 from pathlib import Path
 applications = Path(os.environ["XDG_DATA_HOME"]) / "applications"
 applications.mkdir(parents=True)
+# Minimal runtime images may have no system applications.menu. KService needs
+# a menu to index even our explicit desktop entries for interface permission.
+menus = Path(os.environ["XDG_CONFIG_HOME"]) / "menus"
+menus.mkdir(parents=True)
+menu_name = os.environ.get("XDG_MENU_PREFIX", "") + "applications.menu"
+assert Path(menu_name).name == menu_name, "Menu prefix must stay inside the private fixture directory"
+(menus / menu_name).write_text('<Menu><Name>Applications</Name><DefaultAppDirs/><Include><All/></Include></Menu>\n')
 for name, executable in [("window-warp", sys.argv[1]), ("warp-input-fixture", sys.executable)]:
     if name == "window-warp" and "--pointer-denied" in sys.argv[2].split():
         continue
@@ -67,10 +80,10 @@ for attempt in $(seq 1 60); do
 done
 export WAYLAND_DISPLAY=warp-test QT_QPA_PLATFORM=wayland
 if [[ "${2:-}" == "--input-probe" ]]; then
-    python3 "$root/tests/kde/input_probe.py"
+    "$fixture_python" "$root/tests/kde/input_probe.py"
 elif [[ "${2:-}" == "--gui" ]]; then
     shift 2
-    python3 "$root/tests/kde/gui.py" "$@"
+    "$fixture_python" "$root/tests/kde/gui.py" "$@"
 else
-    python3 "$root/tests/kde/live.py" "$root/src-tauri/kwin/warp.js"
+    "$fixture_python" "$root/tests/kde/live.py" "$root/src-tauri/kwin/warp.js"
 fi

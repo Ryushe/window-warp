@@ -1821,3 +1821,146 @@ Verified D-Bus/package checkpoint:
 `d7976800cca251a4c8425cd7c32eee955cbbd627` on `codex/cross-platform-app`.
 This dossier-only follow-up records its immutable SHA. Resume the exact live
 Plasma6 image unit above; full PARITY.md scope remains active and unmerged.
+
+
+## Fresh terminal identity and native Plasma 6 validation (2026-10-25)
+
+Work in progress on the same owning feature branch/base/target; no merge/push,
+normal-session activation or installation. Main has no desktop implementation.
+Parent owns native dispatch, artifact refresh, documentation and checkpoint.
+/root/packaged_native owns Rust changes/Windows validation; /root/retile_review
+owns scoped KDE fixtures and peer review; fresh /root/terminal_release_review
+independently reviewed final source and closed the wrapper finding. All are
+reopenable by their task names. Hoster reaper retained2 live unregistered scopes,
+stopped0. This section will receive final receipts before checkpoint.
+
+Implemented contract:
+- Post-launch terminal polling now filters new/nonexcluded terminal candidates
+  before title/app ranking. It reads fresh process/session identity only once a
+  candidate exists; the prelaunch capture stays reuse-only. Full window context
+  preserves shared-process evidence. Known profile/shell/distribution/user
+  mismatches are rejected; unreadable startup identity retries. Unknown shared-
+  process profile fields remain tolerated. Identical/ambiguous terminal sessions
+  are still not uniquely attributable; full multi-tab identity is not claimed.
+- Linux shell aliases resolve to executable identity. A selected Konsole profile
+  file takes priority over a stale captured name; when current file identity is
+  unavailable, its known name is checked against the selected file's readable
+  Name. Windows title-derived shell fallback retains available owner profile
+  metadata, while shared-PID profile identity remains deliberately unknown.
+- For a wrapper that execs a different shell, a new single-window Konsole owner
+  can prove the requested launch by exact fresh argv against the generated
+  command, including profile, directory, wrapper and argument boundaries. This
+  retains profile checks and does not guess wrapper types or parse script bodies.
+  Linux /proc parsing now removes only the final NUL and preserves empty args.
+- Peer review found alias, profile-file priority/unknown-file name, and Windows
+  title-fallback evidence gaps; focused regressions address each. Fresh review
+  found valid env/custom shell wrappers; exact owner argv addresses it. Existing
+  strict reuse is retained, except that already-available Windows profile
+  evidence is no longer discarded by the title-only fallback.
+
+Native evidence already complete:
+- Portafort ...terminal-concurrent-before failed/exit1 on the old binary. An
+  owned wrapper gates the intended launch; a wrong-profile/shell Konsole appears
+  after the before-snapshot. Old code reports restored=true and resizes that
+  wrong window to140,115,550,350 while the intended launch is still gated.
+- ...terminal-concurrent-fixed completed inactive/exit0 with20 checks before
+  the wrapper follow-up. The same gate stays pending until intended launch;
+  wrong geometry remains unchanged. Selected profilePath with stale name and
+  explicit /bin/sh -> /usr/bin/dash also restores actual profile/cwd/placement.
+  Local receipts target/kde-validation/terminal-concurrent-{before,fixed}/.
+- Windows full suite74passes/6ignored, portable PowerShell+pwsh native new-window
+  filter/owned HWND/exclusion/wrong-shell assertions pass. Final receipt
+  target/windows-validation/terminal-6bf10727-5a8d-49c1-8999-73bd0d658530/;
+  logs target/terminal-matching-windows-{rust,native,build,release}.log.
+  Two subsequent wrapper/parser focused regressions pass separately. Final
+  ordinary debug and NSIS builds pass (terminal-wrapper-windows-{build,release}.log).
+  Current NSIS SHA2562fbce0768cade06be4ae60e9903a3fed1792c66cb06f59079427b1793f6069ba,
+  size2353426. Release EXE SHA25633a4d70d422cd239783f80a9d3c1522b4db8464993a1c510d8d0d772b3debb6f.
+
+Build provenance/corrections:
+- First Linux terminal-matching unit failed2 before compilation: git archive of
+  HEAD:desktop omitted root attributes and exported build.sh as CRLF despite its
+  LF Git blob. Normalized explicit UTF-8 text transfer fixes this (source already
+  has *.sh eol=lf; no repository workaround added).
+- ...terminal-matching-final then failed1 at npm ECONNRESET. A bounded retry with
+  NPM_CONFIG_CACHE=/work/npm-cache and prefer-offline succeeded,129Node/66Rust,
+  one Linux test ignored, executable/Deb rebuilt. Engine warnings remain for the
+  image's Node18 against newer declared dev-dependency engines; tests pass, and
+  builder runtime modernization remains a tooling follow-up, not a product fix.
+- ...terminal-wrappers initially exited0 but WAS STALE: transferred TarInfo
+  entries defaulted to epoch mtime and Cargo reused66-test/prior executable.
+  This does not verify the wrapper/parser changes. Source timestamps and unchanged
+  binary SHA9ec07e313eac7430d6c70f2df08c917c8ea7cc61c48e8ca9ae5bb99b7caa07ac proved it.
+  All subsequent source tar entries explicitly set current mtime. Exact unit
+  hoster-warp-build-20261025-terminal-wrappers-fresh is now rebuilding; verify
+  new test names/count and binary hash before native acceptance. Never count a
+  successful build status alone as proof of newly compiled source.
+
+Plasma6 evidence:
+- hoster-warp-image-20261025-plasma6 completed inactive/exit0. Image
+  window-warp-plasma6:local is sha256:3bd7c2e4540385c0a4e86d25e4cac7c393488001c6cbda0b90505d529564e631;
+  actual KWin6.3.6 and Qt6.8.2. Runtime metadata under target/kde-validation/plasma6/.
+- hoster-warp-live-20261025-plasma6 passes35 native standalone checks, plasmaApi6,
+  Wayland and script unload. Receipt target/kde-validation/hoster-warp-live-20261025-plasma6.log.
+- First GUI run ...gui-20261025-plasma6 failed1 at native Input registry setup
+  with permissions enabled. It used frozen previous runtime SHA6320a0af... and
+  does not establish full application/gesture acceptance.
+- Exact6.3.6 sanitized source and bounded diagnostics established missing menu
+  metadata, then duplicate Python desktop identity. The private menu fixed cache
+  discovery; the system Python entry still supplied no input capability. A copied
+  private interpreter gives the fixture one unique canonical executable/entry.
+  No global metadata changed and permissions remain enabled. Probe
+  hoster-warp-probe-20261025-185223-plasma6-identity passes/exits0; KWin authorizes
+  fake-input and native key delivery/release works. Copied Python imports system
+  stdlib/GI/PyQt successfully. Prior failed auth/menu probes retained.
+  Evidence target/kde-validation/plasma6/{auth,menu,identity}-evidence.json.
+  nested.sh now makes a private menu and copies its input interpreter only for
+  permission-enabled tests. Production app and desktop capability are unchanged.
+
+Next: verify fresh Linux compilation, run final wrapper acceptance on Portafort
+via WSL -> Hoster -> Portafort, then full Plasma6 GUI with fixed private input
+identity. Retrieve fresh Debian artifact and final receipts, update PARITY.md,
+and checkpoint. Plasma5.27 overlap remains open; native6 overlap, physical
+portrait/mixed-DPI/removal, startup/login/install and ambiguous app identity
+requirements remain active. Do not complete or narrow the full goal.
+
+
+Fresh compilation is now proven: hoster-warp-build-20261025-terminal-wrappers-fresh
+completed inactive/exit0,129Node and68Rust pass/one ignored. Its log contains the
+new empty-argv and exact-Konsole-wrapper tests and an actual release recompilation
+(38.53s). Receipt target/kde-validation/terminal-wrappers-fresh-build.log.
+Final Windows exact-source normal debug and NSIS builds also passed after the
+Linux-only follow-ups; current installer hash above remains2fbce076... .
+Final combined native runs are now active: Portafort
+portafort-warp-gui-20261025-terminal-wrappers and supplemental
+hoster-warp-gui-20261025-plasma6-authorized. Both run --hold --pointer --radial
+--tray --terminal --terminal-concurrent against the freshly compiled Linux app.
+The Portafort connection remains WSL -> Hoster -> Portafort. Record their actual
+terminal states/results before claiming final wrapper or full6app acceptance.
+
+
+Final terminal checkpoint result (supersedes running status above):
+- Portafort unit portafort-warp-gui-20261025-terminal-wrappers is inactive/exit0,
+  39 checks pass through WSL -> Hoster -> Portafort. Final wrapper/profile/alias,
+  concurrent launch, pointer, gesture and lifecycle receipts retrieved to
+  target/kde-validation/terminal-wrappers/tile-browser/gui-terminal-wrappers/.
+- Hoster build and Portafort executable hashes agree:
+  0c8edca14b5f0ab45f8e60c8398b390f057fd7e3acb9be38f0eb37be2cd3c5b3.
+- Fresh final Deb retrieved, size5025120,
+  SHA256eb7f652281bb084d91607973f826cbbb538357f5e7b5857b4d4364acddb80f5f.
+  Control retains qdbus-qt6 | qdbus-qt5 | qdbus and existing GUI dependencies.
+  This replaces the intermediate66-test Deb; no package installed.
+- Supplemental hoster-warp-gui-20261025-plasma6-authorized failed/exit1 at
+  gui.py:991 after right-center push. Input authorization is now working;
+  actual/expected cursor coordinates were not recorded. No complete6app pass.
+  Retrieved output: target/kde-validation/plasma6-authorized/. Native standalone
+  35-check6pass remains valid. All described build/native units are terminal.
+- Independent terminal_release_review re-review closed the wrapper/parser
+  findings, no remaining actionable scoped findings. Source frozen after final
+  Windows builds and Linux/Portafort acceptance; PARITY/README/test docs updated.
+
+Next action: instrument the failing6pointer assertion to record actual/expected
+coordinates and app message, rerun bounded isolated6GUI, and distinguish
+asynchronous observation from a product positioning defect before patching.
+Then continue6overlap and the entire PARITY checklist. Keep the existing feature
+branch, no merge/push/stable activation; full goal remains active.
