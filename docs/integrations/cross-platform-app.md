@@ -1335,3 +1335,86 @@ Verified implementation checkpoint: `346a4a02b7ec81f9f1c8803a5066dfde87649352`
 on `codex/cross-platform-app`. This follow-up changes only the dossier pointer.
 Resume from this checkpoint at delayed-client tile/retile acceptance, keeping
 the remaining full-port PARITY.md requirements active.
+
+
+## Delayed KDE tiling - verified (2026-10-25)
+
+Previous goal turn made verified progress at `346a4a0` / dossier `fc0c8df`.
+The same feature branch owns this continuation; no main desktop code exists.
+Contract: direct four-way tiles, post-push retile, held mouse tiles and tiled
+burner layouts retain the requested geometry after a delayed Wayland restore.
+Reuse the persistent owner's timer, queue, identity checks and enqueue deadline:
+known tile hint, unmaximize/fullscreen-exit acknowledgment, authoritative tile,
+then placement acknowledgment. No new polling service or independent state owner.
+
+Child `/root/retile_review` owns warp.js and KWin regressions; parent owns native
+Firefox fixture and integration; `/root/packaged_native` independently reviews.
+Four delayed-state regressions failed on baseline source; initial corrected
+source passes 125 Node tests including 80 focused KWin tests. Native Firefox158
+runs in Portafort's separate virtual compositor with temporary profiles. Only
+its own process group is stopped for300ms to delay acknowledgment, always resumed
+in finally; the real desktop seat and existing browser profiles are unaffected.
+
+The old-build native run `portafort-warp-gui-20261025-tile-red` is terminal/failed.
+It reached the fullscreen preparation and exposed a related restore expectation
+bug: expected fullscreenfalse was computed immediately after requesting true;
+Firefox later reached true and the owner timed out. Receipt:
+`desktop/src-tauri/target/kde-validation/tiles/browser-red-journal.log` and
+`browser-red/nested-kwin.log`. This is a real workspace restoration regression,
+not proof of a real-browser tile failure. The requested-state expectation is now
+corrected and the complete browser routes pass, as recorded below.
+The first staged-tile build `hoster-warp-build-20261025-tiles` is terminal/exit0;
+it predates the requested fullscreen expectation correction.
+
+
+Final delayed-client verification:
+
+- `hoster-warp-build-20261025-tiles-fullscreen`: inactive/exit0, 129 Node tests,
+  60 Linux Rust tests / one ignored, executable and Debian bundle rebuilt.
+  Only existing Linux unused geometry::relative warning remains.
+- `hoster-warp-gui-20261025-tiles`: inactive/exit0, 37 native application checks
+  pass with hold/radial/retile/resume-held/reassign-native. This uses the final
+  corrected binary with the shared persistent owner and staged tile operation.
+- `portafort-warp-gui-20261025-tiles-fullscreen`: terminal/exit1 after completing
+  all window operations, at an outdated fixture-only editor assertion requiring
+  five bindings. Browser path now captures actual config count before testing.
+- `portafort-warp-gui-20261025-tiles-final`: inactive/exit0, 25 native Firefox158
+  checks pass with --firefox --firefox-tiles. Private two-output compositor on
+  Portafort, cached native WebKitWebDriver, same corrected Linux binary. All
+  eight direct max/fullscreen tile combinations, held mouse tile, tiled burner
+  left/right, maximized burner, maximize toggle and one-shot X retile pass after
+  delaying the owned browser process group's acknowledgment for300ms. Existing
+  session/profile/tab reuse/new-window/duplicate-title acceptance also passes.
+- Parent reran129 local Node tests, syntax checks, Python AST and diff checks.
+  Local log: `desktop/src-tauri/target/tiles-node.log`. No Windows production
+  source changed, so the preceding64-Rust/45-native Windows receipt remains
+  applicable; no redundant Windows run was needed for this KDE-only change.
+
+Artifacts under `desktop/src-tauri/target/kde-validation/tiles/`:
+`build-journal.log`, `gui-result.json`, `gui-journal.log`, `gui/`,
+`browser-final-result.json`, `browser-final-journal.log`, `browser-final/`.
+Earlier failing fixtures remain in `browser-red/`, `browser-fullscreen/` and their
+journals. All named build/test units are terminal; fixture scripts, app processes
+and private browser groups cleaned up. No normal user session was activated,
+installer installed, branch merged or pushed. Cached Portafort test binary is
+isolated at `~/.cache/window-warp-01a16f69/tile-browser/window-warp`.
+
+`/root/retile_review` implemented shared staged tiling and the requested fullscreen
+state correction, with32 delayed route/state/API combinations plus cancellation,
+deadline/no-op and asynchronous fullscreen regressions. `/root/packaged_native`
+independently passed84 focused tests and found no remaining production issue;
+its final-state settling assertion improvement is included. Parent implemented
+native browser acceptance, diagnosed the native fullscreen expectation failure,
+corrected the stale Firefox fixture binding-count assertion, and integrated.
+All child packets are terminal and reopenable by these names. Cleanup sidecar
+retained two unregistered live scopes, stopped none.
+
+Reference audit found no external Warp.tile callers; all direct/hold/burner
+routes use the one shared completion-aware tile helper. README documents the
+new --firefox-tiles flag and owned delayed-client boundary. A similar hard-coded
+five-binding assertion remains in the independent terminal fixture path; recorded
+in PARITY.md for correction when that path is exercised, without unrelated edits.
+
+Next: Windows Firefox native capture/restore with owned temporary profiles,
+followed by remaining terminal variants, burner/chord cases and final package/
+Plasma6/physical-display/login gates. Keep the full feature-port goal active.

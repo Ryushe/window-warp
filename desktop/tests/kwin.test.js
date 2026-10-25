@@ -85,6 +85,151 @@ function fixture(bindings, legacy = false, settings = {mainMonitor: 1, burnerMon
 const push = { label: "Push", shortcut: "Ctrl+Alt+Right", action: "push-right", appMatch: "" };
 const pull = { label: "Pull", shortcut: "Ctrl+Alt+Down", action: "pull", appMatch: "" };
 
+function delayedRestore(f, fullscreen=false) {
+    const restored={x:-1700,y:80,width:700,height:500};
+    f.window.frameGeometry=clone(restored);
+    if(!fullscreen) f.window.setMaximize(true,true);
+    else f.window.frameGeometry=clone(f.left.geometry);
+    let full=fullscreen, requested=false;
+    Object.defineProperty(f.window,"fullScreen",{get:()=>full,set:value=>{if(!value&&full)requested=true;else full=value;}});
+    f.window.setMaximize=(vertical,horizontal)=>{
+        assert.equal(vertical,false); assert.equal(horizontal,false);
+        requested=true;
+    };
+    return ()=>{
+        assert.ok(requested,"restoration must have been requested");
+        full=false;
+        f.states.set(f.window,{maximizeHorizontal:false,maximizeVertical:false});
+        f.window.frameGeometry=clone(restored); // Wayland's delayed configure overwrites the first resize.
+    };
+}
+function controlRetile(f, direction, completed) {
+    let dispatch;
+    vm.runInNewContext(controlSource,{
+        WARP_CONTROL:{service:"fixture",token:"owned",action:"dispatch"}, Warp:f.warp,
+        Date:{now:()=>f.clock.now}, print:()=>{},
+        registerShortcut:(_id,_label,_key,callback)=>{dispatch=callback;return true;},
+        callDBus:(_service,_path,_interface,method,...args)=>{
+            if(method==="InputGeneration")args.at(-1)(JSON.stringify("generation-1"));
+            else if(method==="Next")args.at(-1)(JSON.stringify({id:1,expires:f.clock.now+5000,command:{kind:"retile",direction,window:{id:"a",pid:0},generation:"generation-1",at:f.clock.now}}));
+            else if(method==="Reply")completed(JSON.parse(args.at(-1)));
+        }
+    });
+    dispatch();
+}
+for(const legacy of [false,true]) for(const fullscreen of [false,true]) {
+    test(`delayed ${fullscreen?"fullscreen exit":"unmaximize"} cannot overwrite any tile path on Plasma ${legacy?5:6}`,()=>{
+        const app={action:"pull-app",shortcut:"Ctrl+J",appMatch:"firefox",mainMonitorAction:"burner"};
+        const routes=[
+            {name:"left",rect:{x:-1920,y:0,width:960,height:1080},run:(f,done)=>f.warp.run({action:"tile-left"},null,null,null,null,done)},
+            {name:"right",rect:{x:-960,y:0,width:960,height:1080},run:(f,done)=>f.warp.run({action:"tile-right"},null,null,null,null,done)},
+            {name:"up",rect:{x:-1920,y:0,width:1920,height:540},run:(f,done)=>f.warp.run({action:"tile-up"},null,null,null,null,done)},
+            {name:"down",rect:{x:-1920,y:540,width:1920,height:540},run:(f,done)=>f.warp.run({action:"tile-down"},null,null,null,null,done)},
+            {name:"retile",rect:{x:-1920,y:0,width:960,height:1080},run:(f,done)=>controlRetile(f,"tile-left",result=>done(result.error||null))},
+            {name:"hold",rect:{x:0,y:1000,width:1081,height:960},run:(f,done)=>f.warp.run(app,{mainMonitor:2,burnerMonitor:1},{x:100,y:1800},null,null,done)},
+            {name:"burner left",rect:{x:0,y:40,width:540,height:1920},run:(f,done)=>f.warp.run({...app,burnerLayout:"tile-left"},null,null,null,null,done)},
+            {name:"burner right",rect:{x:540,y:40,width:541,height:1920},run:(f,done)=>f.warp.run({...app,burnerLayout:"tile-right"},null,null,null,null,done)},
+        ];
+        for(const route of routes) {
+            const f=fixture([],legacy),completed=[];
+            const commit=delayedRestore(f,fullscreen);
+            route.run(f,error=>completed.push(error));
+            assert.deepEqual(completed,[],route.name+" waits for native acknowledgment");
+            commit(); f.tick(50);
+            assert.deepEqual(clone(f.window.frameGeometry),route.rect,route.name+" reapplies after the delayed restore");
+            assert.deepEqual(completed,[null],route.name+" completes once");
+            assert.deepEqual(f.errors,[]);
+            assert.ok(f.timers.every(timer=>!timer.running));
+        }
+    });
+}
+for(const legacy of [false,true]) {
+    test(`maximize transitions wait for requested fullscreen exit on Plasma ${legacy?5:6}`,()=>{
+        for(const route of ["toggle","burner"]) {
+            const f=fixture([],legacy),completed=[];
+            let fullscreen=true,requested=true;
+            f.window.frameGeometry=clone(f.left.geometry);
+            Object.defineProperty(f.window,"fullScreen",{get:()=>fullscreen,set:value=>{requested=value;}});
+            const binding=route==="toggle" ? {action:"toggle-maximize"} : {action:"pull-app",appMatch:"firefox",shortcut:"Ctrl+J",mainMonitorAction:"burner",burnerLayout:"fullscreen"};
+            f.warp.run(binding,null,null,null,null,error=>completed.push(error));
+            assert.equal(requested,false);
+            assert.deepEqual(completed,[],route+" awaits fullscreen exit rather than accepting the old state");
+            fullscreen=false; f.tick();
+            assert.deepEqual(completed,[null]);
+            assert.deepEqual(f.states.get(f.window),{maximizeHorizontal:true,maximizeVertical:true});
+            assert.deepEqual(f.errors,[]);
+        }
+    });
+    test(`workspace restore waits for requested asynchronous fullscreen state on Plasma ${legacy?5:6}`,()=>{
+        const f=fixture([],legacy),completed=[];
+        let fullscreen=false,requested=false;
+        Object.defineProperty(f.window,"fullScreen",{get:()=>fullscreen,set:value=>{requested=value;}});
+        const saved={rect:{x:-1700,y:80,width:700,height:500},workArea:clone(f.left.geometry),monitorName:legacy?"1":"left",monitor:1,maximizedHorizontal:false,maximizedVertical:false,fullscreen:true,minimized:false};
+        f.warp.restore(f.window,saved,(error,result)=>completed.push({error,result}));
+        assert.equal(requested,true);
+        assert.deepEqual(completed,[],"the requested state has not committed yet");
+        fullscreen=true;
+        f.window.frameGeometry=clone(f.left.geometry);
+        f.tick();
+        assert.equal(completed.length,1);
+        assert.equal(completed[0].error,null);
+        assert.deepEqual(clone(completed[0].result),saved.rect);
+        assert.deepEqual(f.errors,[]);
+        assert.ok(f.timers.every(timer=>!timer.running));
+    });
+    test(`pause ignores a late tile restore acknowledgment on Plasma ${legacy?5:6}`,()=>{
+        for(const held of [false,true]) {
+            const f=fixture([],legacy),completed=[];
+            const commit=delayedRestore(f,true);
+            const invocation={generation:"generation-1",at:f.clock.now,window:{id:"a",pid:0},previous:{id:"a",pid:0}};
+            const binding=held ? {action:"pull-app",appMatch:"firefox",shortcut:"Ctrl+J"} : {action:"tile-right"};
+            f.warp.run(binding,null,held?{x:-1800,y:200}:null,null,null,(error,_result,cancelled)=>completed.push({error,cancelled}),invocation);
+            commit();
+            f.stateRpc.defer=true; f.tick();
+            const acknowledged=f.stateReplies.shift();
+            assert.ok(acknowledged,"native false-state reply is pending");
+            const restored=clone(f.window.frameGeometry);
+            f.warp.configureSession(null);
+            acknowledged(); f.tick(5000);
+            assert.deepEqual(clone(f.window.frameGeometry),restored,"paused continuation must not reapply the tile");
+            assert.equal(completed.length,1);
+            assert.equal(completed[0].cancelled,true);
+            assert.deepEqual(f.errors,[]);
+            assert.ok(f.timers.every(timer=>!timer.running));
+        }
+    });
+    test(`tile restore and final placement share one enqueue deadline on Plasma ${legacy?5:6}`,()=>{
+        const f=fixture([],legacy),completed=[];
+        const commit=delayedRestore(f);
+        f.warp.run({action:"tile-left"},null,null,null,null,error=>completed.push(error));
+        commit(); f.stateRpc.defer=true; f.tick(1725);
+        f.stateReplies.shift()(); // Restored state accepted; final placement query starts.
+        assert.deepEqual(completed,[]);
+        f.tick(75);
+        assert.equal(completed.length,1);
+        assert.match(completed[0],/1\.8 seconds/);
+        f.stateReplies.shift()();
+        assert.equal(completed.length,1,"late placement reply cannot complete twice");
+        assert.ok(f.timers.every(timer=>!timer.running));
+    });
+    test(`nonresizable ordinary tile paths complete once without changing geometry on Plasma ${legacy?5:6}`,()=>{
+        for(const route of ["direct","hold","burner"]) {
+            const f=fixture([],legacy),completed=[];
+            f.window.resizeable=false;
+            const original=clone(f.window.frameGeometry);
+            const binding=route==="direct" ? {action:"tile-left"} : {action:"pull-app",appMatch:"firefox",shortcut:"Ctrl+J",mainMonitorAction:"burner",burnerLayout:"tile-right"};
+            f.warp.run(binding,null,route==="hold"?{x:-1800,y:200}:null,null,null,error=>completed.push(error));
+            assert.deepEqual(completed,[null],route);
+            assert.deepEqual(clone(f.window.frameGeometry),original,route);
+            assert.ok(f.timers.every(timer=>!timer.running));
+            f.window.resizeable=true;
+            f.warp.run({action:"tile-left"});
+            assert.equal(f.window.frameGeometry.x,-1920,"no-op releases the queue");
+            assert.deepEqual(f.errors,[]);
+        }
+    });
+}
+
 test("a late generation bootstrap cannot undo a newer session update",()=>{
     let bootstrap,dispatch;
     const generations=[],replies=[];

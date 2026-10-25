@@ -73,11 +73,11 @@ var Warp = (function () {
         if (modern) workspace.activeWindow = window;
         else workspace.activeClient = window;
     }
-    function tile(window, output, direction) {
-        if (!window.resizeable && !window.fullScreen) return;
-        window.fullScreen = false;
-        window.setMaximize(false, false);
-        send(window, output);
+    function tile(window, output, direction, done, accepted) {
+        if (!window.resizeable && !window.fullScreen) {
+            if (accepted) accepted();
+            done(); return;
+        }
         var rect = copy(area(output));
         if (direction === "tile-up" || direction === "tile-down") {
             var half = Math.floor(rect.height / 2);
@@ -88,8 +88,12 @@ var Warp = (function () {
             if (direction === "tile-right") { rect.x += half; rect.width -= half; }
             else rect.width = half;
         }
-        window.frameGeometry = rect;
-        return rect;
+        var target = identity(window);
+        restoreFloating(target, window, function(window) {
+            send(window, output);
+            window.frameGeometry = copy(rect);
+            awaitPlacement(target, placement({horizontal:false, vertical:false}, window, output, rect), done, accepted);
+        }, done, rect);
     }
     function matches(window, match) {
         return !window.deleted && !window.dock && !window.desktopWindow &&
@@ -101,12 +105,12 @@ var Warp = (function () {
         window.frameGeometry = rect;
         return rect;
     }
-    function pullApp(binding, all, holdPointer, selected, previous, state, configuration) {
+    function pullApp(binding, all, holdPointer, selected, previous, state, configuration, done) {
         var current = previous;
         var candidates = windows().filter(function (w) { return matches(w, binding.appMatch.toLowerCase()); });
         var window = selected || (candidates.indexOf(current) >= 0 ? current : candidates[candidates.length - 1]);
         if (selected && candidates.indexOf(selected) < 0) throw new Error("The selected window no longer matches this app.");
-        if (!window) { print("Window Warp: no open window for " + binding.appMatch); return; }
+        if (!window) { done("No matching app window is open."); return; }
         var wasActive = window === current;
         if (!wasActive && current) previousWindows[binding.shortcut] = identity(current);
         var mainIndex = configuration.mainMonitor ? Math.min(configuration.mainMonitor - 1, all.length - 1) : 0;
@@ -122,18 +126,19 @@ var Warp = (function () {
             var direction = work.height > work.width
                 ? (holdPointer.y < work.y + work.height / 2 ? "tile-up" : "tile-down")
                 : (holdPointer.x < work.x + work.width / 2 ? "tile-left" : "tile-right");
-            var rect = tile(window, main, direction);
-            focus(window);
-            return placement({horizontal:false, vertical:false}, window, main, rect);
+            tile(window, main, direction, done, function() { focus(window); });
+            return;
         }
         if (from !== main) {
             var rect = moveRelative(window, from || main, main);
             focus(window); centerPointer(main);
-            return placement(state, window, main, rect);
+            awaitPlacement(identity(window), placement(state, window, main, rect), done);
+            return;
         }
         if (wasActive && binding.mainMonitorAction === "focus-last") {
             var previous = previousWindows[binding.shortcut] && live(previousWindows[binding.shortcut]);
             if (previous) focus(previous);
+            done();
             return;
         }
         if (wasActive && all.length > 1) {
@@ -141,20 +146,22 @@ var Warp = (function () {
             if (burnerIndex === mainIndex) burnerIndex = (mainIndex + 1) % all.length;
             var burner = all[burnerIndex];
             if (binding.burnerLayout === "tile-left" || binding.burnerLayout === "tile-right") {
-                var rect = tile(window, burner, binding.burnerLayout);
-                state = {horizontal:false, vertical:false};
+                tile(window, burner, binding.burnerLayout, done, function() { focus(window); });
+                return;
             }
             else if (binding.burnerLayout === "fullscreen") {
                 window.fullScreen = false;
                 send(window, burner);
                 window.setMaximize(true, true);
-                state = {horizontal:true, vertical:true};
+                state = {horizontal:true, vertical:true, fullscreen:false};
             } else { var rect = moveRelative(window, main, burner); }
             focus(window);
-            return placement(state, window, burner, rect);
+            awaitPlacement(identity(window), placement(state, window, burner, rect), done);
+            return;
         }
         focus(window);
         if (!wasActive) centerPointer(main);
+        done();
     }
     function finishWait(wait, error, window, state) {
         if (stateWait !== wait) return;
@@ -217,8 +224,9 @@ var Warp = (function () {
         }, callback, done, {phase:"unmaximize", horizontal:false, vertical:false, fullscreen:false});
     }
     function placement(state, window, output, rect) {
-        var expected = {horizontal:state.horizontal, vertical:state.vertical, fullscreen:!!window.fullScreen, output:output.name};
-        if (window.fullScreen) expected.rect = copy(output.geometry);
+        var fullscreen = state.fullscreen === undefined ? !!window.fullScreen : state.fullscreen;
+        var expected = {horizontal:state.horizontal, vertical:state.vertical, fullscreen:fullscreen, output:output.name};
+        if (fullscreen) expected.rect = copy(output.geometry);
         else if (rect || state.horizontal || state.vertical) {
             expected.rect = copy(rect || window.frameGeometry);
             var work = area(output);
@@ -248,7 +256,7 @@ var Warp = (function () {
             var saved = job.placement;
             var output = all.filter(function(o) { return o.name === saved.monitorName; })[0] || all[Math.min(Math.max(0, saved.monitor - 1), all.length - 1)];
             var requested = relative(saved.rect, saved.workArea, area(output));
-            var state = {horizontal:saved.maximizedHorizontal, vertical:saved.maximizedVertical};
+            var state = {horizontal:saved.maximizedHorizontal, vertical:saved.maximizedVertical, fullscreen:saved.fullscreen};
             job.result = requested;
             existing.minimized = false;
             function placed() {
@@ -304,10 +312,8 @@ var Warp = (function () {
             if (!selected) { done("No matching app window is open."); return; }
             var target = identity(selected);
             withWindowState(target, function(window, state) {
-                var expected = pullApp(job.binding, screens(), job.pointer, window,
-                    job.previous ? live(job.previous) || null : null, state, job.settings);
-                if (expected) awaitPlacement(target, expected, done);
-                else done();
+                pullApp(job.binding, screens(), job.pointer, window,
+                    job.previous ? live(job.previous) || null : null, state, job.settings, done);
             }, done);
             return;
         }
@@ -317,9 +323,7 @@ var Warp = (function () {
         var current = all.indexOf(outputFor(window, all));
         if (current < 0) { done(); return; }
         if (job.action.indexOf("tile-") === 0) {
-            var rect = tile(window, all[current], job.action);
-            if (rect) awaitPlacement(job.target, placement({horizontal:false, vertical:false}, window, all[current], rect), done);
-            else done();
+            tile(window, all[current], job.action, done);
             return;
         }
         if (job.action === "toggle-maximize") {
@@ -346,7 +350,7 @@ var Warp = (function () {
                     savedMaximize = savedMaximize.filter(function(entry) { return entry.target.id !== job.target.id; });
                     savedMaximize.push({target:job.target, rect:copy(window.frameGeometry), output:output ? output.name : ""});
                     window.setMaximize(true, true);
-                    awaitPlacement(job.target, placement({horizontal:true, vertical:true}, window, output), done);
+                    awaitPlacement(job.target, placement({horizontal:true, vertical:true, fullscreen:false}, window, output), done);
                 }
             }, done);
             return;

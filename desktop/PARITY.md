@@ -10,8 +10,8 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | Monitor push, wrap, relative placement, maximized state, history pull (`window_manager.ahk`) | Partial | Windows maximized push/history pull passes; KDE two-output and real one-output tests verify direct maximized pull and restoring maximization after tiling; Windows and KDE pause/configuration reload retain history; physical Windows multi-monitor and monitor removal remain |
 | Push and center pointer; pull centers primary; 1-second X/C retiling | Partial | Native Windows and KDE retile chords, one-use consumption, expiry, renewal and pause cancellation pass; Windows one-display wrap/centering and KDE two-output centering pass; KDE permission refusal and X11 movement pass; physical Windows multi-monitor and live Plasma 6 acceptance remain |
 | Four-way tiling; portrait mouse-aware tile choice | Partial | Four-way implemented; 18 live KDE checks cover vertical tiling; Windows mouse hold tiles natively and portrait/midpoint geometry has regression coverage; KDE native hold verifies key-down pointer choice; physical portrait acceptance remains |
-| Maximize/restore toggle (original “fullscreen”); graceful close | Partial | Saved floating geometry survives maximized moves and history pull on Windows and KDE; KDE rapid double-toggle and same-script maximize/burner ordering pass, including real Portafort 5.27.11; Windows close honors an application's veto; KDE registration reload retains caches and shortcut/workspace actions share the persistent geometry queue; real Plasma 6 and delayed-browser tile acceptance remain |
-| App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Tiled burner round trip live KDE verified; Windows native pull and all four one-monitor burner fallbacks pass; other KDE layouts and physical Windows two-monitor burner checks remain |
+| Maximize/restore toggle (original “fullscreen”); graceful close | Partial | Saved floating geometry survives maximized moves and history pull on Windows and KDE; KDE rapid double-toggle and same-script maximize/burner ordering pass, including real Portafort 5.27.11; Windows close honors an application's veto; KDE registration reload retains caches and shortcut/workspace actions share the persistent geometry queue; delayed Firefox tiling/fullscreen transitions pass; real Plasma 6 acceptance remains |
+| App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Tiled burner round trip live KDE verified; Windows native pull and all four one-monitor burner fallbacks pass; KDE left/right tiled and maximized burner layouts pass with delayed Firefox; floating burner and physical Windows two-monitor checks remain |
 | App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE and Windows focus-last/minimized checks pass, including previous-focus retention across pause/configuration reload; Windows pull/focus restore minimized floating geometry; compound title/class/executable/PID matching, full-path focus and tap/radial consistency pass; real Plasma 6 acceptance remains |
 | Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE native key delivery verifies tap, hold, repeats, pause cancellation and disabled hold; resume before key release and reassignment while held now pass; overlapping distinct chords and live Plasma 6 remain |
 | Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows and KDE native selection/dead-zone/Escape/pause checks pass; focus loss cancels before release, including Windows Alt+Escape; shared eight-slot layout/order tested; physical portrait/mixed-DPI and Plasma 6 acceptance remain |
@@ -21,7 +21,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | Workspace capture/create/update, best-match update selection, rename/delete/reorder/browser | Partial | Implemented; Rust matching/persistence model and Node editor tests pass; KDE native capture/save/browser pass; Windows capture/review/save and closest-match update draft now pass natively |
 | Workspace launch/reuse, exclude already-consumed windows, wait for new windows, restore placement/state | Partial | KDE native two-window reuse, forced new launch, placement, per-axis maximize/fullscreen pass; Windows owned-window placement/maximize/minimize pass; Windows two-window reuse and separate-process launch now pass natively; physical display-change acceptance remains |
 | Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Partial | 15 native KDE checks pass on the caption-fix build, including tabs/selection, same-title profile isolation, floating geometry and editor; codec/profile/launch tests pass; live Windows browser path pending |
-| Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native Ubuntu capture/directory restoration passes; legacy launchers, prompt fallback, and ambiguity have regression coverage; native PowerShell/custom-profile variants still required |
+| Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native Ubuntu capture/directory restoration passes; legacy launchers, prompt fallback, and ambiguity have regression coverage; native PowerShell/custom-profile variants still required; refresh the terminal fixture's hard-coded five-binding editor assertion when running that path |
 | Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Partial | Executable launch passes native Windows/KDE fixtures; Calculator AUMID capture/activation/reuse and native KDE desktop-entry URL/document launch, working directory, reuse and missing-target errors pass; hosted UWP/packaged Win32 variants and D-Bus-activated desktop entries remain |
 | Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Partial | Review/import/save verified natively on Windows and KDE; disabled keys, terminal fields, Firefox tabs and geometry retained; legacy package paths resolve a single registered AUMID during unsaved review; missing/ambiguous families stay editable; title/class/exe/PID/HWND/active WinTitle rules now migrate to reviewed selectors; undefined groups/duplicate or unknown criteria remain visible for manual review; both center actions convert |
 | Single instance, tray, settings failures, session cleanup, installers | Partial | Windows native single instance, registration failures and process-exit key release pass; final tray/graceful-exit and installer checks remain |
@@ -702,3 +702,29 @@ tests (one opt-in ignored) pass. Local receipts are under
 Linux executable and Debian bundle were rebuilt; no installer was installed.
 Remaining gates in the table still apply, including delayed-browser tile/retile,
 physical display cases, real Plasma 6 and final installer/login acceptance.
+
+
+## Delayed KDE client tiling and fullscreen state - verified (2026-10-25)
+
+The shared tile operation waits for a client to finish leaving maximized or
+fullscreen state, reapplies the requested rectangle, then confirms placement.
+Direct four-way tiling, held mouse tiles, tiled burner layouts and post-push
+retiling use the same queue/deadline and cancel correctly during pause. Workspace
+restore, maximize toggles and maximized burner layouts now verify the requested
+fullscreen state rather than sampling it immediately after an asynchronous setter.
+
+129 Node tests pass, including 84 KWin cases. The Linux builder passes 60 Rust
+tests / one opt-in ignored and rebuilds the executable and Debian bundle.
+The corrected build passes 37 general KDE native application checks and 25 real
+Firefox158 application checks in separate two-output Plasma5.27 compositors.
+Firefox tests include eight delayed direct tiles from max/fullscreen, held mouse
+tiling, both tiled burner sides, maximized burner, maximize toggle and one-shot X
+retile. Only owned private-profile processes are delayed. Real Portafort desktop
+windows are untouched; this is virtual-output acceptance on Portafort.
+
+Native evidence: `src-tauri/target/kde-validation/tiles/`. The old browser run
+exposed a workspace-fullscreen expectation bug before its fullscreen tile cases;
+focused mocks separately reproduced delayed tile geometry loss. Both are fixed.
+No Windows source changed, and no installer was installed. Next: Windows Firefox
+capture/restore acceptance, remaining terminal/burner/chord cases, then package
+and real Plasma6/physical display/login/installer gates already listed above.

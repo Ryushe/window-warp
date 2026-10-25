@@ -22,6 +22,8 @@ if any(flag in sys.argv for flag in ["--resume-held", "--reassign-native", "--ra
     raise ValueError("Native gesture edge checks require --hold and the private compositor")
 if "--pointer" in sys.argv and "--pointer-denied" in sys.argv:
     raise ValueError("Pointer authorization and refusal require separate compositor sessions")
+if "--firefox-tiles" in sys.argv and "--firefox" not in sys.argv:
+    raise ValueError("Firefox tile acceptance requires --firefox")
 
 
 def kwin_loaded(name="window-warp-session"):
@@ -797,6 +799,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         if "--firefox" in sys.argv:
             # Run this option only in nested.sh's isolated compositor/session bus.
             assert os.environ.get("WAYLAND_DISPLAY") == "warp-test", "Firefox test requires the isolated compositor"
+            firefox_config = invoke("get_config")
             browser_profile = Path(temporary) / "firefox-profile"
             browser_profile.mkdir()
             preferences = {"browser.shell.checkDefaultBrowser": False, "browser.sessionstore.interval": 1000,
@@ -899,8 +902,137 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                 "expected": browser_capture["items"][0]["window"]["rect"],
                 "ownedWindows": [{"rect": w["rect"], "maximizedHorizontal": w["maximizedHorizontal"], "maximizedVertical": w["maximizedVertical"]} for w in after if w["pid"] == browser_fixture.pid]}
             report["checks"].append("identical titles in another Firefox profile do not steal the restore")
+            if "--firefox-tiles" in sys.argv:
+                from wayland_input import Input
+                saved_config = invoke("get_config")
+                tile_config = json.loads(json.dumps(saved_config))
+                tile_config["bindings"] = [dict(label=action,action=action,shortcut=f"Ctrl+Alt+Shift+F{i+1}",enabled=True,appMatch=browser_capture["items"][0]["window"]["appId"] if action == "focus-app" else "")
+                    for i,action in enumerate(["focus-app","toggle-maximize","tile-left","tile-right","tile-up","tile-down","push-right"])]
+                app_binding = dict(label="Browser pull",action="pull-app",shortcut="Ctrl+Alt+Shift+J",enabled=True,appMatch=browser_capture["items"][0]["window"]["appId"],mainMonitorAction="burner",burnerLayout="tile-left")
+                tile_config["bindings"].append(app_binding)
+                tile_config["settings"].update(mainMonitor=1,burnerMonitor=2,holdDelayMs=150,holdTileEnabled=True,holdMode="tile")
+                fixture_id = browser_capture["items"][0]["window"]["id"]
+                tile_profile = json.loads(json.dumps(browser_capture))
+                tile_profile.update(id="browser-tile-fixture",name="Browser tile fixture")
+                tile_profile["items"][0]["launch"]["newWindow"] = False
+                desired = tile_profile["items"][0]["window"]
+                desired.update(monitor=1,monitorName="",workArea=source_area,rect=dict(x=source_area["x"]+150,y=source_area["y"]+100,width=700,height=500))
+
+                def browser_window():
+                    return next(w for w in invoke("get_windows") if w["id"] == fixture_id and w["pid"] == browser_fixture.pid)
+
+                def wait_browser(predicate, description):
+                    deadline = time.monotonic()+5
+                    while time.monotonic()<deadline:
+                        current = browser_window()
+                        if predicate(current): return current
+                        time.sleep(0.05)
+                    raise AssertionError(f"{description}: {current}")
+
+                def configure_tiles():
+                    invoke("set_enabled", {"enabled":False})
+                    invoke("save_config", {"config":tile_config})
+                    invoke("set_enabled", {"enabled":True})
+
+                def prepare_browser(fullscreen):
+                    desired.update(maximizedHorizontal=not fullscreen,maximizedVertical=not fullscreen,fullscreen=fullscreen,minimized=False)
+                    invoke("save_workspaces", {"store":{"version":1,"profiles":[tile_profile]}})
+                    result = invoke("restore_workspace", {"id":tile_profile["id"]})
+                    assert result[0]["restored"] and not result[0]["launched"], result
+                    # Every match in this isolated desktop belongs to one of our
+                    # two profile processes; focus cycling cannot target a user app.
+                    matches = [w for w in invoke("get_windows") if w["appId"] == app_binding["appMatch"]]
+                    assert all(w["pid"] in [browser_fixture.pid,other_browser_fixture.pid] for w in matches)
+                    for _ in range(len(matches)+1):
+                        if browser_window()["active"]: break
+                        invoke_shortcut("focus-app")
+                    return wait_browser(lambda w:w["active"] and w["fullscreen"] == fullscreen and (fullscreen or (w["maximizedHorizontal"] and w["maximizedVertical"])),"prepare owned Firefox state")
+
+                def tile_rect(area, direction):
+                    result = area.copy()
+                    axis,size = ("y","height") if direction in ["tile-up","tile-down"] else ("x","width")
+                    half = result[size]//2
+                    if direction in ["tile-right","tile-down"]:
+                        result[axis] += half; result[size] -= half
+                    else: result[size] = half
+                    return result
+
+                def delayed_action(action):
+                    assert browser_fixture.poll() is None and os.getpgid(browser_fixture.pid) == browser_fixture.pid
+                    # Stop only the process group created above for this private
+                    # profile. KWin and Window Warp remain responsive. Always
+                    # resume it, even when dispatch raises or an assertion fails.
+                    os.killpg(browser_fixture.pid,signal.SIGSTOP)
+                    try:
+                        action()
+                        time.sleep(0.3)
+                    finally:
+                        os.killpg(browser_fixture.pid,signal.SIGCONT)
+
+                def assert_tile(expected, label):
+                    wait_browser(lambda w:not w["fullscreen"] and not w["maximizedHorizontal"] and not w["maximizedVertical"] and w["rect"] == expected,label)
+                    time.sleep(0.15)
+                    settled = browser_window()
+                    assert settled["rect"] == expected and not any(settled[k] for k in ["fullscreen","maximizedHorizontal","maximizedVertical"]), "late client configure replaced the tile or state"
+
+                try:
+                    configure_tiles()
+                    for fullscreen in [False,True]:
+                        for direction in ["tile-left","tile-right","tile-up","tile-down"]:
+                            original = prepare_browser(fullscreen)
+                            delayed_action(lambda:invoke_shortcut(direction))
+                            assert_tile(tile_rect(original["workArea"],direction),f"delayed Firefox {direction} from fullscreen={fullscreen}")
+                    report["checks"].append("native Firefox four-way tiling survives delayed maximize and fullscreen acknowledgments")
+                    prepare_browser(True)
+                    delayed_action(lambda:invoke_shortcut("toggle-maximize"))
+                    wait_browser(lambda w:not w["fullscreen"] and w["maximizedHorizontal"] and w["maximizedVertical"],"delayed fullscreen exit before maximize toggle")
+                    report["checks"].append("native Firefox maximize toggle waits for requested fullscreen exit")
+                    with Input() as keys:
+                        def app_chord():
+                            for code in [29,56,42,36]: keys.key(code,True)
+                        original = prepare_browser(False)
+                        keys.pointer(original["workArea"]["x"]+20,original["workArea"]["y"]+20)
+                        delayed_action(app_chord)
+                        keys.release()
+                        assert_tile(tile_rect(original["workArea"],"tile-left"),"delayed Firefox held mouse tile")
+                        report["checks"].append("native Firefox held mouse tile waits for delayed unmaximize")
+                        for layout in ["tile-left","tile-right"]:
+                            app_binding["burnerLayout"] = layout
+                            tile_config["settings"]["holdTileEnabled"] = False
+                            configure_tiles()
+                            original = prepare_browser(False)
+                            def tap():
+                                app_chord(); time.sleep(0.05); keys.release()
+                            delayed_action(tap)
+                            moved = wait_browser(lambda w:w["monitor"] != original["monitor"],"burner changes output")
+                            assert_tile(tile_rect(moved["workArea"],layout),"delayed Firefox tiled burner")
+                        report["checks"].append("native Firefox left/right burner tiles survive delayed unmaximize on another output")
+                        app_binding["burnerLayout"] = "fullscreen"
+                        configure_tiles()
+                        original = prepare_browser(True)
+                        delayed_action(tap)
+                        wait_browser(lambda w:w["monitor"] != original["monitor"] and not w["fullscreen"] and w["maximizedHorizontal"] and w["maximizedVertical"],"delayed fullscreen exit before maximized burner")
+                        report["checks"].append("native Firefox maximized burner waits for fullscreen exit on its destination output")
+                        original = prepare_browser(False)
+                        invoke_shortcut("push-right")
+                        moved = wait_browser(lambda w:w["monitor"] != original["monitor"],"push Firefox before retile")
+                        deadline = time.monotonic()+2
+                        while time.monotonic()<deadline:
+                            assigned = subprocess.check_output(["gdbus","call","--session","--dest","org.kde.kglobalaccel","--object-path","/kglobalaccel","--method","org.kde.KGlobalAccel.shortcut",json.dumps(["kwin","window-warp-retile-X","",""])],text=True)
+                            if "88" in assigned: break
+                            time.sleep(0.02)
+                        else: raise AssertionError("Firefox push did not reserve the retile key")
+                        def retile(): keys.key(45,True); keys.release()
+                        delayed_action(retile)
+                        assert_tile(tile_rect(moved["workArea"],"tile-left"),"delayed Firefox one-shot retile")
+                        report["checks"].append("native Firefox one-shot X retile survives delayed unmaximize after push")
+                finally:
+                    if browser_fixture.poll() is None: os.killpg(browser_fixture.pid,signal.SIGCONT)
+                    invoke("set_enabled", {"enabled":False})
+                    invoke("save_config", {"config":saved_config})
+                    invoke("save_workspaces", {"store":{"version":1,"profiles":[browser_capture]}})
             evaluate("location.reload(); return true;")
-            wait_for("return document.querySelectorAll('.binding').length === 5 && !document.querySelector('#toggle').disabled")
+            wait_for(f"return document.querySelectorAll('.binding').length === {len(firefox_config['bindings'])} && !document.querySelector('#toggle').disabled")
             click("#show-workspaces")
             wait_for("return document.querySelectorAll('#workspace-list article').length === 1")
             click('[data-action="edit"]')
