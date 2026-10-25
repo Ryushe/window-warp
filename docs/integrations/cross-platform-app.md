@@ -7,7 +7,7 @@
 - Base commit: `7b907778f0022d73fb3527b82c0ab7ecedf8124d`
 - Intended eventual target: `main`; promotion/merge has not been requested
 - Last updated: 2026-10-25
-- Latest immutable recovery checkpoint: `85cdb941e49edbec30d96109f461419ec51400fd`
+- Latest immutable recovery checkpoint: `4827d302eebad18ebdecbc3acb21f6db3630095d`
 - Feature implementation commits: `abfc95e` (desktop/workspace foundation), `ee7bee4` (Firefox profiles/tabs), `c09d79c` (terminal capture/editor/restore), `491a9d8` (KDE Firefox caption correction and complete 15-check native run), `5e6373d` (WSL distribution discovery and native directory restoration), `02d4e02` (reviewed shortcut reassignment and 12-check native KDE run), `b216f0c` (persistent pause and application control hotkeys, 15 native KDE checks), `d49e380` (14 native Windows application checks), `9794b75` (Windows tap/hold, activation deadlock correction, 18 Windows and 15 KDE native checks), `b63cb1d` (KDE native tap/hold, Wayland editor focus, 20 native KDE checks), `41fbc70` (KDE key reservation cleanup, 21 native KDE checks, held-key regression reproduced), `da23019` (held-key cancellation and deferred reassignment, verified script startup, 22 native KDE checks), `61233ff` (shared radial picker, 26 native KDE checks; initial 22 native Windows pass later superseded by rapid Escape regression), `4a92065` (reviewed INI migration and native import receipts), `9ccbaa7` (portable fixture line endings)
 - Canonical references: original root AHK files; `desktop/PARITY.md`
 
@@ -889,6 +889,15 @@ no native test is left running and no user-session runtime was activated.
 
 
 ## Packaged application and desktop-entry launch (2026-10-25)
+
+Implementation and passing test fixtures are recoverable at
+`4827d302eebad18ebdecbc3acb21f6db3630095d` on `codex/cross-platform-app`.
+The following dossier-only checkpoint updates this pointer without changing the
+verified source. Resume at legacy packaged-app target resolution and unsupported
+AHK match migration, then continue remaining native acceptance in `desktop/PARITY.md`.
+All build/native-test processes for this increment have exited; the ordinary
+Windows debug build was restored. Portafort remains unreachable on its recorded
+address; do not substitute another Tailscale peer without verified identity.
 
 Launch settings now distinguish executable, Linux desktop entry, and Windows
 packaged application targets. Existing JSON defaults to executable. Windows
