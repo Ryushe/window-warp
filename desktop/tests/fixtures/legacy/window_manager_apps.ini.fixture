@@ -1,72 +1,72 @@
-[Meta]
-count=10
-[App1]
-hotkey=#d
-disabledHotkey=
-match=ahk_exe Discord.exe
-label=Discord
-mainMonitorAction=burner
-burnerLayout=tile-left
-[App2]
-hotkey=#p
-disabledHotkey=
-match=ahk_exe Caido.exe
-label=Caido
-mainMonitorAction=focus-last
-burnerLayout=
-[App3]
-hotkey=#a
-disabledHotkey=
-match=ahk_exe Claude.exe
-label=Claude
-mainMonitorAction=burner
-burnerLayout=tile-right
-[App4]
-hotkey=#s
-disabledHotkey=
-match=ahk_exe firefox.exe
-label=Firefox
-mainMonitorAction=focus-last
-burnerLayout=
-[App5]
-hotkey=#t
-disabledHotkey=
-match=ahk_exe WindowsTerminal.exe
-label=Windows Terminal
-mainMonitorAction=burner
-burnerLayout=float
-[App6]
-hotkey=#^d
-disabledHotkey=
-match=ahk_exe studio64.exe
-label=studio64
-mainMonitorAction=burner
-burnerLayout=float
-[App7]
-hotkey=#^t
-disabledHotkey=
-match=ahk_exe Telegram.exe
-label=telegram
-mainMonitorAction=focus-last
-burnerLayout=
-[App8]
-hotkey=#e
-disabledHotkey=
-match=ahk_exe explorer.exe
-label=explorer
-mainMonitorAction=focus-last
-burnerLayout=
-[App9]
-hotkey=#f
-disabledHotkey=
-match=ahk_exe Code.exe
-label=code
-mainMonitorAction=focus-last
-burnerLayout=
-[App10]
-hotkey=#w
-disabledHotkey=
-match=ahk_exe ChatGPT.exe
-label=chatgpt
-mainMonitorAction=focus-last
-burnerLayout=
+[Meta]
+count=10
+[App1]
+hotkey=#d
+disabledHotkey=
+match=ahk_exe Discord.exe
+label=Discord
+mainMonitorAction=burner
+burnerLayout=tile-left
+[App2]
+hotkey=#p
+disabledHotkey=
+match=ahk_exe Caido.exe
+label=Caido
+mainMonitorAction=focus-last
+burnerLayout=
+[App3]
+hotkey=#a
+disabledHotkey=
+match=ahk_exe Claude.exe
+label=Claude
+mainMonitorAction=burner
+burnerLayout=tile-right
+[App4]
+hotkey=#s
+disabledHotkey=
+match=ahk_exe firefox.exe
+label=Firefox
+mainMonitorAction=focus-last
+burnerLayout=
+[App5]
+hotkey=#t
+disabledHotkey=
+match=ahk_exe WindowsTerminal.exe
+label=Windows Terminal
+mainMonitorAction=burner
+burnerLayout=float
+[App6]
+hotkey=#^d
+disabledHotkey=
+match=ahk_exe studio64.exe
+label=studio64
+mainMonitorAction=burner
+burnerLayout=float
+[App7]
+hotkey=#^t
+disabledHotkey=
+match=ahk_exe Telegram.exe
+label=telegram
+mainMonitorAction=focus-last
+burnerLayout=
+[App8]
+hotkey=#e
+disabledHotkey=
+match=ahk_exe explorer.exe
+label=explorer
+mainMonitorAction=focus-last
+burnerLayout=
+[App9]
+hotkey=#f
+disabledHotkey=
+match=ahk_exe Code.exe
+label=code
+mainMonitorAction=focus-last
+burnerLayout=
+[App10]
+hotkey=#w
+disabledHotkey=
+match=ahk_exe ChatGPT.exe
+label=chatgpt
+mainMonitorAction=focus-last
+burnerLayout=

@@ -647,3 +647,7 @@ without `--skip-escape`; then pointer centering/timed retile and the remaining
 PARITY requirements. Migration still reports center actions/unsupported matches
 and packaged launch as unresolved. No merge, push or user-session installation.
 All Hoster task build/GUI units are terminal. Memory is no longer a blocker.
+
+Fixture text line endings were normalized after the migration commit; conversion
+behavior is unchanged. The focused importer tests and staged whitespace check
+pass on the normalized fixtures.
