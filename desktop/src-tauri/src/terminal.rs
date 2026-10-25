@@ -202,7 +202,15 @@ pub fn enrich(items: &mut [WorkspaceItem]) {
         };
         item.launch.kind = crate::workspaces::LaunchKind::Executable;
         item.launch.program = match kind {
-            Kind::WindowsTerminal => "wt.exe".into(),
+            Kind::WindowsTerminal => {
+                // Packaged Terminal uses a stable alias across Store updates.
+                // Unpackaged/portable Terminal owns a different settings store.
+                if item.window.desktop_id.is_empty() && !item.window.path.is_empty() {
+                    item.window.path.clone()
+                } else {
+                    "wt.exe".into()
+                }
+            }
             Kind::Konsole => {
                 if item.window.path.is_empty() {
                     "konsole".into()
@@ -277,8 +285,16 @@ fn from_shell(program: &str, args: &[String]) -> Option<Terminal> {
     {
         return None;
     }
+    let shell = if ["powershell.exe", "pwsh.exe"].contains(&name.as_str()) {
+        args.first()
+            .filter(|arg| std::path::Path::new(arg).is_absolute() && basename(arg) == name)
+            .cloned()
+            .unwrap_or_else(|| name.clone())
+    } else {
+        name.clone()
+    };
     let mut result = Terminal {
-        shell: name.clone(),
+        shell,
         ..Default::default()
     };
     if name == "wsl.exe" {
@@ -331,7 +347,7 @@ impl Capture {
             .filter(|p| p.pid != window.pid && descendants.contains(&p.pid))
         {
             if let Some(mut spec) = from_shell(&p.name, &p.args) {
-                if title_shell.is_some_and(|shell| spec.shell != shell) {
+                if title_shell.is_some_and(|shell| basename(&spec.shell) != shell) {
                     continue;
                 }
                 if let Some(hint) = crate::wsl::launcher_hint(&p.name) {
@@ -343,7 +359,7 @@ impl Capture {
             }
         }
         if let Some(shell) = title_shell {
-            choices.retain(|s| s.shell == shell);
+            choices.retain(|s| basename(&s.shell) == shell);
             if choices.is_empty() {
                 return Ok(Terminal {
                     shell: shell.into(),
@@ -612,6 +628,67 @@ mod tests {
         assert!(from_shell("wsl.exe", &args).unwrap().wsl_distro.is_empty());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn portable_terminal_keeps_its_executable_but_packaged_terminal_keeps_stable_alias() {
+        let window: WindowInfo = serde_json::from_value(serde_json::json!({
+            "id":"1", "pid":u32::MAX, "title":"Windows PowerShell", "appId":"WindowsTerminal.exe", "desktopId":"", "path":"C:\\portable\\WindowsTerminal.exe",
+            "rect":{"x":0,"y":0,"width":800,"height":600}, "workArea":{"x":0,"y":0,"width":1920,"height":1080},
+            "monitor":1,"monitorName":"main","maximizedHorizontal":false,"maximizedVertical":false,"fullscreen":false,"minimized":false,"active":true
+        })).unwrap();
+        let mut packaged = window.clone();
+        packaged.id = "2".into();
+        packaged.path =
+            "C:\\Program Files\\WindowsApps\\Terminal_version\\WindowsTerminal.exe".into();
+        packaged.desktop_id = "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App".into();
+        let mut unknown = window.clone();
+        unknown.id = "3".into();
+        unknown.path.clear();
+        let mut workspace =
+            crate::workspaces::capture(vec![window.clone(), packaged, unknown], "Fixture".into());
+        enrich(&mut workspace.items);
+        assert_eq!(workspace.items[0].launch.program, window.path);
+        assert_eq!(workspace.items[1].launch.program, "wt.exe");
+        assert_eq!(workspace.items[2].launch.program, "wt.exe");
+    }
+    #[cfg(windows)]
+    #[test]
+    fn normal_powershell_titles_preserve_explicit_shell_paths_without_commands() {
+        use crate::process_info::Process;
+        for (name, caption) in [
+            ("pwsh.exe", "PowerShell 7"),
+            ("powershell.exe", "Windows PowerShell"),
+        ] {
+            let shell = format!("C:\\a custom shell directory\\{name}");
+            let window: WindowInfo = serde_json::from_value(serde_json::json!({
+                "id":"1", "pid":10, "title":caption, "appId":"WindowsTerminal.exe", "desktopId":"", "path":"WindowsTerminal.exe",
+                "rect":{"x":0,"y":0,"width":800,"height":600}, "workArea":{"x":0,"y":0,"width":1920,"height":1080},
+                "monitor":1,"monitorName":"main","maximizedHorizontal":false,"maximizedVertical":false,"fullscreen":false,"minimized":false,"active":true
+            })).unwrap();
+            let capture = Capture {
+                wsl: crate::wsl::Discovery::fixture(&[]),
+                processes: Ok(vec![Process {
+                    pid: 11,
+                    parent: 10,
+                    name: name.into(),
+                    args: vec![
+                        shell.clone(),
+                        "-Command".into(),
+                        "Write-Output captured-command".into(),
+                    ],
+                }]),
+            };
+            let saved = capture
+                .read(&window, std::slice::from_ref(&window))
+                .unwrap();
+            assert_eq!(saved.shell, shell);
+            assert!(saved.shell_args.is_empty());
+            assert!(saved.compatible(&Terminal {
+                shell: name.into(),
+                ..Default::default()
+            }));
+        }
+    }
     #[cfg(windows)]
     #[test]
     fn ambiguous_terminal_children_require_review_but_a_known_shell_title_resolves_them() {

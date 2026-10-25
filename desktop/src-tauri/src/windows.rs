@@ -1055,6 +1055,378 @@ mod tests {
         assert_ne!(owned.0[0].id, owned.0[1].id);
     }
 
+    // The portable-Terminal fixture must never terminate a Terminal process:
+    // Windows Terminal can host several windows in the same process.
+    struct OwnedPortableTerminal {
+        window: crate::workspaces::WindowInfo,
+        process: HANDLE,
+        created: u64,
+        property: Vec<u16>,
+    }
+
+    impl OwnedPortableTerminal {
+        unsafe fn creation(process: HANDLE) -> Result<u64, String> {
+            let mut times: [FILETIME; 4] = std::mem::zeroed();
+            if GetProcessTimes(
+                process,
+                &mut times[0],
+                &mut times[1],
+                &mut times[2],
+                &mut times[3],
+            ) == 0
+            {
+                return Err(error("Cannot verify fixture process creation"));
+            }
+            Ok((u64::from(times[0].dwHighDateTime) << 32) | u64::from(times[0].dwLowDateTime))
+        }
+
+        fn claim(window: crate::workspaces::WindowInfo, marker: &str) -> Result<Self, String> {
+            let hwnd = window.id.parse::<usize>().map_err(|e| e.to_string())? as HWND;
+            unsafe {
+                let process = OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                    0,
+                    window.pid,
+                );
+                if process.is_null() {
+                    return Err(error("Cannot retain fixture Terminal identity"));
+                }
+                let created = match Self::creation(process) {
+                    Ok(value) => value,
+                    Err(message) => {
+                        CloseHandle(process);
+                        return Err(message);
+                    }
+                };
+                let property: Vec<u16> = format!("WindowWarp.Native.{marker}\0")
+                    .encode_utf16()
+                    .collect();
+                let mut pid = 0;
+                GetWindowThreadProcessId(hwnd, &mut pid);
+                if pid != window.pid || SetPropW(hwnd, property.as_ptr(), 1usize as HANDLE) == 0 {
+                    CloseHandle(process);
+                    return Err(error("Cannot mark owned fixture Terminal window"));
+                }
+                Ok(Self {
+                    window,
+                    process,
+                    created,
+                    property,
+                })
+            }
+        }
+
+        fn current(&self) -> bool {
+            unsafe {
+                let hwnd = self.window.id.parse::<usize>().unwrap() as HWND;
+                let mut pid = 0;
+                GetWindowThreadProcessId(hwnd, &mut pid);
+                pid == self.window.pid
+                    && GetPropW(hwnd, self.property.as_ptr()) as usize == 1
+                    && WaitForSingleObject(self.process, 0) == WAIT_TIMEOUT
+                    && Self::creation(self.process).ok() == Some(self.created)
+            }
+        }
+
+        fn close(&self) -> Result<(), String> {
+            if !self.current() {
+                return Ok(());
+            }
+            unsafe {
+                if PostMessageW(
+                    self.window.id.parse::<usize>().unwrap() as HWND,
+                    WM_CLOSE,
+                    0,
+                    0,
+                ) == 0
+                {
+                    return Err(error("Cannot close owned portable Terminal window"));
+                }
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while self.current() {
+                if std::time::Instant::now() >= deadline {
+                    return Err(format!("Owned Terminal did not close: {}", self.window.id));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for OwnedPortableTerminal {
+        fn drop(&mut self) {
+            if let Err(message) = self.close() {
+                eprintln!("Fixture cleanup: {message}");
+            }
+            unsafe {
+                if self.current() {
+                    RemovePropW(
+                        self.window.id.parse::<usize>().unwrap() as HWND,
+                        self.property.as_ptr(),
+                    );
+                }
+                CloseHandle(self.process);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires isolated portable WARP_TEST_TERMINAL_BINARY and WARP_TEST_TERMINAL_PROFILE"]
+    fn native_powershell_profile_and_directory_restore() {
+        use crate::{terminal, workspaces};
+        use std::{
+            collections::HashSet,
+            path::{Path, PathBuf},
+            time::{Duration, Instant},
+        };
+        #[derive(serde::Deserialize)]
+        struct Receipt {
+            pid: u32,
+            directory: String,
+            profile: String,
+        }
+        let binary = PathBuf::from(
+            std::env::var("WARP_TEST_TERMINAL_BINARY")
+                .expect("Choose the isolated portable Terminal executable"),
+        );
+        assert!(binary.is_absolute() && binary.is_file());
+        let portable = binary.parent().unwrap();
+        assert!(
+            portable.join(".portable").is_file(),
+            "Requires isolated portable Terminal"
+        );
+        assert!(portable.join("settings/settings.json").is_file());
+        let profile_name = std::env::var("WARP_TEST_TERMINAL_PROFILE")
+            .expect("Choose an existing fixture profile");
+        assert!(!profile_name.trim().is_empty());
+        let settings: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(portable.join("settings/settings.json")).unwrap(),
+        )
+        .expect("The isolated fixture settings must be JSON");
+        let matching_profiles: Vec<_> = settings["profiles"]["list"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|profile| profile["name"].as_str() == Some(&profile_name))
+            .collect();
+        assert_eq!(
+            matching_profiles.len(),
+            1,
+            "Fixture profile name must identify one configured profile"
+        );
+        let expected_profile = matching_profiles[0]["guid"]
+            .as_str()
+            .expect("Fixture profile needs a GUID")
+            .to_owned();
+        let same_profile = |actual: &str| {
+            actual
+                .trim_matches(['{', '}'])
+                .eq_ignore_ascii_case(expected_profile.trim_matches(['{', '}']))
+        };
+        let mut shells = vec![PathBuf::from(std::env::var("SystemRoot").unwrap())
+            .join("System32/WindowsPowerShell/v1.0/powershell.exe")];
+        if let Ok(pwsh) = std::env::var("WARP_TEST_PWSH_PATH") {
+            shells.push(PathBuf::from(pwsh));
+        }
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/windows-validation")
+            .join(format!("terminal-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let quote = |value: &str| format!("'{}'", value.replace('\'', "''"));
+        let same_path = |left: &Path, right: &Path| {
+            std::fs::canonicalize(left).unwrap() == std::fs::canonicalize(right).unwrap()
+        };
+        for shell in shells {
+            assert!(
+                shell.is_absolute() && shell.is_file(),
+                "Explicit shell must exist"
+            );
+            let shell_name = shell.file_name().unwrap().to_str().unwrap().to_lowercase();
+            assert!(["powershell.exe", "pwsh.exe"].contains(&shell_name.as_str()));
+            let directory = root.join(format!("{shell_name} directory with spaces"));
+            std::fs::create_dir(&directory).unwrap();
+            let before: HashSet<_> = unsafe { snapshot_native(true).unwrap() }
+                .into_iter()
+                .map(|w| w.id)
+                .collect();
+            let startup = |marker: &str, receipt: &Path| {
+                vec![
+                "-NoLogo".into(), "-NoProfile".into(), "-NonInteractive".into(), "-NoExit".into(), "-Command".into(),
+                format!("& {{ [IO.File]::WriteAllText({}, (@{{pid=$PID;directory=$PWD.Path;profile=$env:WT_PROFILE_ID}} | ConvertTo-Json -Compress)); $Host.UI.RawUI.WindowTitle={} }} *> {}", quote(&receipt.to_string_lossy()), quote(marker), quote(&receipt.with_extension("log").to_string_lossy()))
+            ]
+            };
+            let fixture_title = |mut command: workspaces::LaunchSpec, marker: &str| {
+                command.args.splice(
+                    3..3,
+                    [
+                        "--title".into(),
+                        marker.into(),
+                        "--suppressApplicationTitle".into(),
+                    ],
+                );
+                command
+            };
+            let wait_owned = |marker: &str, receipt: &Path, command: &workspaces::LaunchSpec| {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                let mut owned: Option<OwnedPortableTerminal> = None;
+                loop {
+                    // The Terminal-owned UUID title exists independently of
+                    // shell startup. Claim it before validating any receipt so
+                    // failed startup/proof assertions still close this window.
+                    if owned.is_none() {
+                        if let Some(window) = unsafe { snapshot_native(true).unwrap() }
+                            .into_iter()
+                            .find(|w| {
+                                !before.contains(&w.id)
+                                    && w.title == marker
+                                    && terminal::kind(w) == Some(terminal::Kind::WindowsTerminal)
+                                    && std::fs::canonicalize(&w.path).ok()
+                                        == Some(std::fs::canonicalize(&binary).unwrap())
+                            })
+                        {
+                            owned = Some(OwnedPortableTerminal::claim(window, marker).unwrap());
+                        }
+                    }
+                    let (proof, receipt_status) = match std::fs::read_to_string(receipt) {
+                        Ok(text) => match serde_json::from_str::<Receipt>(&text) {
+                            Ok(value) => (Some(value), "valid receipt".to_owned()),
+                            Err(error) => (
+                                None,
+                                format!("receipt JSON invalid ({} bytes): {error}", text.len()),
+                            ),
+                        },
+                        Err(error) => (None, format!("receipt read failed: {error}")),
+                    };
+                    if let Some(window) = owned.as_ref().map(|guard| &guard.window) {
+                        if let Some(proof) = proof {
+                            let processes = crate::process_info::snapshot().unwrap();
+                            let child = processes
+                                .iter()
+                                .find(|p| p.pid == proof.pid)
+                                .expect("Fixture shell receipt PID must still exist");
+                            assert!(child.name.eq_ignore_ascii_case(&shell_name));
+                            assert!(
+                                child.args.iter().any(|arg| arg.contains(marker)
+                                    && arg.contains(&receipt.to_string_lossy().to_string())),
+                                "Shell argv must contain this exact fixture marker and receipt"
+                            );
+                            let mut ancestor = child.parent;
+                            for _ in 0..32 {
+                                if ancestor == window.pid {
+                                    break;
+                                }
+                                ancestor = processes
+                                    .iter()
+                                    .find(|p| p.pid == ancestor)
+                                    .map(|p| p.parent)
+                                    .unwrap_or(0);
+                            }
+                            assert_eq!(
+                                ancestor, window.pid,
+                                "Receipt shell must belong to the marked Terminal window process"
+                            );
+                            return (owned.take().unwrap(), proof);
+                        }
+                    }
+                    if Instant::now() >= deadline {
+                        for process in crate::process_info::snapshot().unwrap_or_default() {
+                            if process.name.eq_ignore_ascii_case(&shell_name)
+                                && process.args.iter().any(|arg| {
+                                    arg.contains(marker)
+                                        && arg.contains(&receipt.to_string_lossy().to_string())
+                                })
+                            {
+                                eprintln!("Fixture shell argv: {:?}", process.args);
+                            }
+                        }
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "Owned Terminal startup failed; marker={marker}, window_claimed={}, window_still_owned={}, receipt={}, status={receipt_status}, fixture_launch={}",
+                        owned.is_some(),
+                        owned.as_ref().is_some_and(|window| window.current()),
+                        receipt.display(),
+                        serde_json::to_string(command).unwrap()
+                    );
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            };
+            let marker = format!("Warp-PS-{}", uuid::Uuid::new_v4());
+            let receipt = directory.join("initial.json");
+            let initial = terminal::Terminal {
+                profile_name: profile_name.clone(),
+                shell: shell.to_string_lossy().into_owned(),
+                shell_args: startup(&marker, &receipt),
+                working_directory: directory.to_string_lossy().into_owned(),
+                ..Default::default()
+            };
+            let base = workspaces::LaunchSpec {
+                program: binary.to_string_lossy().into_owned(),
+                ..Default::default()
+            };
+            let command = fixture_title(initial.launch_command(&base).unwrap(), &marker);
+            workspaces::launch(&command).unwrap();
+            let (first, proof) = wait_owned(&marker, &receipt, &command);
+            assert!(same_path(Path::new(&proof.directory), &directory));
+            assert!(
+                same_profile(&proof.profile),
+                "Initial shell must actually use the configured fixture profile GUID"
+            );
+            let windows = unsafe { snapshot_native(true).unwrap() };
+            let mut captured =
+                workspaces::capture(windows.clone(), "Owned PowerShell fixture".into());
+            terminal::enrich(&mut captured.items);
+            // Enrichment needs every same-process window, but diagnostics and
+            // assertions retain only the window proven owned above.
+            captured.items.retain(|item| {
+                item.window.id == first.window.id && item.window.pid == first.window.pid
+            });
+            assert_eq!(captured.items.len(), 1);
+            let item = &captured.items[0];
+            assert!(item.capture_note.is_empty(), "{}", item.capture_note);
+            assert!(
+                Path::new(&item.launch.program).is_absolute()
+                    && same_path(Path::new(&item.launch.program), &binary),
+                "Captured launcher must resolve to the isolated portable Terminal before restoring: {}",
+                item.launch.program
+            );
+            let mut saved = item.terminal.clone().unwrap();
+            assert!(
+                same_path(Path::new(&saved.shell), &shell),
+                "Capture must preserve the explicit PowerShell executable path"
+            );
+            assert!(
+                saved.shell_args.is_empty(),
+                "Capture must not replay startup commands"
+            );
+            assert_eq!(saved.profile_name, profile_name);
+            assert!(same_path(Path::new(&saved.working_directory), &directory));
+            assert!(terminal::Capture::new().matches(&first.window, &windows, &saved));
+            let restored_marker = format!("Warp-PS-{}", uuid::Uuid::new_v4());
+            let restored_receipt = directory.join("restored.json");
+            saved.shell_args = startup(&restored_marker, &restored_receipt);
+            // Deliberately use the captured launcher unchanged: portable
+            // capture must not silently route restoration to the user's wt.exe.
+            let command = fixture_title(
+                saved.launch_command(&item.launch).unwrap(),
+                &restored_marker,
+            );
+            workspaces::launch(&command).unwrap();
+            let (second, proof) = wait_owned(&restored_marker, &restored_receipt, &command);
+            assert_ne!(first.window.id, second.window.id);
+            assert!(same_path(Path::new(&second.window.path), &binary));
+            assert!(same_path(Path::new(&proof.directory), &directory));
+            assert!(
+                same_profile(&proof.profile),
+                "Restored shell must actually use the configured fixture profile GUID"
+            );
+            second.close().unwrap();
+            first.close().unwrap();
+            eprintln!("Portable Terminal {shell_name}: capture, profile, directory, compatibility and new-window restore passed; {}", directory.display());
+        }
+    }
+
     #[test]
     fn recorded_punctuation_and_navigation_keys_parse_natively() {
         for key in [

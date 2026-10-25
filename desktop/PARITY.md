@@ -21,7 +21,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | Workspace capture/create/update, best-match update selection, rename/delete/reorder/browser | Partial | Implemented; Rust matching/persistence model and Node editor tests pass; KDE native capture/save/browser pass; Windows capture/review/save and closest-match update draft now pass natively |
 | Workspace launch/reuse, exclude already-consumed windows, wait for new windows, restore placement/state | Partial | KDE native two-window reuse, forced new launch, placement, per-axis maximize/fullscreen pass; Windows owned-window placement/maximize/minimize pass; Windows two-window reuse and separate-process launch now pass natively; physical display-change acceptance remains |
 | Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Partial | Native Windows Firefox158.0.1 and KDE Firefox158 capture/reuse/new-window, selected URL, explicit-profile isolation, floating geometry and editor pass; polling rejects resolved wrong profiles; default-started Firefox without profile arguments still has ambiguous title/app matching and needs separate acceptance |
-| Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native Ubuntu capture/directory restoration passes; legacy launchers, prompt fallback, and ambiguity have regression coverage; native PowerShell/custom-profile variants still required; refresh the terminal fixture's hard-coded five-binding editor assertion when running that path |
+| Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native Ubuntu capture/directory restoration passes; legacy launchers, prompt fallback, and ambiguity have regression coverage; Windows PowerShell and PowerShell7 custom portable-profile GUID, explicit executable, directory and new-window restoration pass; packaged cmd regression and refreshed18-check Konsole editor fixture pass; shared-process/multi-tab profile identity and concurrent terminal launch matching remain limited |
 | Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Partial | Executable launch passes native Windows/KDE fixtures; Calculator AUMID capture/activation/reuse and native KDE desktop-entry URL/document launch, working directory, reuse and missing-target errors pass; hosted UWP/packaged Win32 variants and D-Bus-activated desktop entries remain |
 | Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Partial | Review/import/save verified natively on Windows and KDE; disabled keys, terminal fields, Firefox tabs and geometry retained; legacy package paths resolve a single registered AUMID during unsaved review; missing/ambiguous families stay editable; title/class/exe/PID/HWND/active WinTitle rules now migrate to reviewed selectors; undefined groups/duplicate or unknown criteria remain visible for manual review; both center actions convert |
 | Single instance, tray, settings failures, session cleanup, installers | Partial | Windows native single instance, registration failures and process-exit key release pass; final tray/graceful-exit and installer checks remain |
@@ -777,3 +777,45 @@ became an owned window after release (`tests/windows/native.mjs`, cancelledFocus
 comparison). The final full run passes the unchanged assertion. Retain that
 receipt for repeatable focus-transition diagnosis if the assertion recurs during
 remaining chord/display tests; a product regression has not been established.
+
+
+## PowerShell and custom Terminal profiles - verified (2026-10-25)
+
+Capture preserves an unpackaged/portable Terminal executable instead of routing
+it through the regular wt.exe installation. Packaged Terminal keeps the stable
+wt.exe alias. Explicit absolute PowerShell/pwsh executable paths survive capture
+and normal shell-title matching, while commands running in those shells are not
+replayed. The changes preserve the existing editable launch model.
+
+The new isolated native test reproduced the wrong portable launcher before the
+fix. Windows PowerShell and PowerShell7 now pass capture of the custom profile,
+explicit shell path and directory, reuse compatibility, separate-window launch,
+and actual restored directory/profile GUID. It uses a Microsoft-signed portable
+Terminal1.24.12741.0 with its own settings. This is direct native capture/launch
+function acceptance, not full Windows editor acceptance. The fixture runs its
+own receipt commands with -NoProfile -NonInteractive, retains window ownership
+before receipt validation, and closes only proven-owned HWNDs.
+
+Final receipt: `src-tauri/target/windows-validation/terminal-876c1d4a-fec4-46f2-99db-f6bdefa71666/`;
+log `src-tauri/target/terminal-native-noninteractive.log`. Earlier interactive
+fixture startup stalled before its receipt command; noninteractive setup passes.
+No broader cause is claimed. `terminal-native-before.log` reproduces the actual
+portable-launcher defect. `terminal-packaged-native.log` passes packaged cmd
+capture/new-window regression. 68 Windows Rust tests pass, six opt-in ignored;
+129 Node tests pass; the normal Windows executable was rebuilt.
+
+Portafort's isolated Konsole run passes18 checks after replacing the obsolete
+five-binding editor assertion with the actual configuration count. Profile file,
+display name, directory, reuse/new window and editor screenshot are verified.
+Unit `portafort-warp-gui-20261025-terminal-variants` is inactive/exit0. Linux builder
+`hoster-warp-build-20261025-terminal-variants` passes62 Rust / one opt-in ignored,
+129 Node and rebuilds the executable/Debian bundle, inactive/exit0. Local evidence:
+`src-tauri/target/kde-validation/terminal-variants/`. Konsole runtime behavior is
+unchanged by the Windows capture fixes; its native run used the preceding binary.
+
+Remaining terminal limits: a shared Terminal process does not reliably expose
+which profile belongs to each window/tab; one-window startup arguments can refer
+to an earlier tab. Post-launch window polling also lacks fresh terminal identity
+filtering for concurrent unrelated launches. These remain visible here for the
+remaining capture/restore audit; this increment does not claim to resolve them.
+No user Terminal settings changed and no installer was installed.

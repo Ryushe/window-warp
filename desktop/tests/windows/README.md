@@ -114,3 +114,39 @@ The editor screenshot was inspected, all28 owned Firefox processes exited
 without forced termination, and the ordinary debug executable was restored.
 See PARITY.md for the earlier transient radial-focus assertion and remaining
 profile/display/installer coverage limits.
+
+## PowerShell and custom Terminal profiles
+
+The ignored Rust test `native_powershell_profile_and_directory_restore` requires
+an isolated [portable Windows Terminal installation](https://learn.microsoft.com/windows/terminal/distributions#windows-terminal-portable),
+with `.portable` beside `WindowsTerminal.exe` and a fixture profile in
+`settings/settings.json`. Use the official unpackaged ZIP, not a copy of the
+Store package. The test does not edit the regular Terminal settings.
+
+Set `WARP_TEST_TERMINAL_BINARY` to that absolute executable path and
+`WARP_TEST_TERMINAL_PROFILE` to the fixture profile's unique name. Optionally set
+`WARP_TEST_PWSH_PATH` to an absolute installed PowerShell 7 executable to test it
+alongside Windows PowerShell. Then run:
+
+```powershell
+$env:CARGO_INCREMENTAL='0'
+$env:CARGO_BUILD_JOBS='1'
+cargo test --manifest-path desktop/src-tauri/Cargo.toml --offline native_powershell_profile_and_directory_restore -- --ignored --nocapture --test-threads=1
+```
+
+The fixture uses `-NoProfile -NonInteractive`, unique window titles and its own startup commands
+to report shell PID, working directory and Terminal profile GUID. Captured
+commands must remain empty. Window identity is retained before receipt assertions,
+and cleanup closes only the marked HWND; it never terminates a shared Terminal
+process. Receipts remain under `src-tauri/target/windows-validation/terminal-*`.
+The test checks the launch functions and reuse compatibility directly; it does
+not claim full Windows editor acceptance for every Terminal variant or reliable
+active-profile discovery across multiple tabs sharing a process.
+
+
+Verified with Microsoft-signed portable Terminal1.24.12741.0 on2026-10-25:
+Windows PowerShell and PowerShell7 both pass actual profile-GUID and directory
+restoration. Receipt: `terminal-876c1d4a-fec4-46f2-99db-f6bdefa71666`.
+An earlier interactive setup stalled before its receipt command; automated setup
+uses `-NonInteractive` and retains startup/timeout diagnostics. The packaged cmd
+opt-in regression also passes. Windows Rust suite:68 pass, six opt-in ignored.

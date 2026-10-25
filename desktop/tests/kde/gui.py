@@ -1043,6 +1043,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             report["screenshot"] = str(output / "window-warp-firefox-kde.png")
         if "--terminal" in sys.argv[4:]:
             assert os.environ.get("WAYLAND_DISPLAY") == "warp-test", "Terminal tests require the isolated compositor"
+            terminal_config = invoke("get_config")
             terminal_dir = Path(temporary) / "terminal working directory"
             terminal_dir.mkdir()
             profile_dir = Path(environment["XDG_DATA_HOME"]) / "konsole"
@@ -1086,7 +1087,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             assert restored[0]["terminal"]["profileName"] == terminal["profileName"]
             report["checks"].extend(["Konsole shell/profile/working directory capture", "Konsole reuse", "Konsole new-window launch preserves profile and directory"])
             evaluate("location.reload(); return true;")
-            wait_for("return document.querySelectorAll('.binding').length === 5 && !document.querySelector('#toggle').disabled")
+            wait_for(f"return document.querySelectorAll('.binding').length === {len(terminal_config['bindings'])} && !document.querySelector('#toggle').disabled")
             click("#show-workspaces")
             wait_for("return document.querySelectorAll('#workspace-list article').length === 1")
             click('[data-action="edit"]')

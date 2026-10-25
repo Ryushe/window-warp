@@ -1500,3 +1500,70 @@ Verified Firefox implementation checkpoint:
 `9ab716dd78ff2b719113155f541c57ebf67ca21c` on `codex/cross-platform-app`.
 This follow-up records the immutable implementation SHA. Resume remaining terminal
 variants and PARITY.md gates; the feature remains incomplete and unmerged.
+
+
+## Terminal executable fidelity and native profile variants (2026-10-25)
+
+Owner/base/target unchanged: `codex/cross-platform-app` is the lowest applicable
+owner; main contains no desktop implementation. No descendant propagation.
+Capture previously replaced portable Terminal with wt.exe, selecting a different
+settings/profile namespace. It now preserves a nonempty executable path when no
+packaged identity exists; packaged Terminal keeps its version-independent alias.
+Explicit absolute PowerShell paths are retained from recognized shell argv0;
+normal title matching compares basenames. WSL normalization and captured-command
+omission remain unchanged. No schema/configuration/API identifiers changed.
+
+Parent owns production terminal.rs, native execution, KDE fixture count fix and
+integration docs. `/root/packaged_native` implemented the Windows native test;
+`/root/retile_review` reviewed production and fixture with no remaining actionable
+findings. Its cleanup finding was fixed: claim the exact new UUID/title/path HWND
+before shell receipt assertions. A retained process creation handle and HWND
+sentinel protect cleanup; only WM_CLOSE is used, never a shared-process kill.
+Actual initial/restored WT_PROFILE_ID is compared to the custom profile GUID in
+isolated settings, so argument preservation alone cannot produce a pass.
+
+Authoritative evidence:
+- Red: `desktop/src-tauri/target/terminal-native-before.log`, assertion that the
+  captured launcher must remain the isolated executable observed wt.exe.
+- Green: `terminal-native-noninteractive.log` in the same target directory,
+  both Windows PowerShell and explicit PowerShell7 pass capture, profile GUID,
+  working directory, shell path, empty captured commands, reuse compatibility,
+  and distinct restored HWND. Receipts beneath `target/windows-validation/`
+  `terminal-876c1d4a-fec4-46f2-99db-f6bdefa71666/`. Test directly invokes native
+  capture/launch functions; not a complete Windows UI restore/editor receipt.
+- Packaged cmd native regression passes: `terminal-packaged-native.log`.
+- Windows Rust68 pass/six opt-in ignored: `terminal-windows-rust.log`;
+  Node129 pass: `terminal-node.log`; normal Windows executable rebuilt in
+  `terminal-windows-build.log`. Later fixture-only edits do not change that binary.
+- Intermediate interactive fixture startup stalled before writing its receipt;
+  owned HWND was claimed and cleaned. Exact delivered argv was correct. Adding
+  -NonInteractive to fixture startup passes; no stronger root-cause claim.
+  Diagnostic/failure logs (`terminal-native-final.log`, `terminal-native-argv.log`,
+  `terminal-native-output.log`) remain in target. No failing setup is counted green.
+- Konsole18 native app checks pass on Portafort in a separate two-output
+  Plasma5.27 compositor; profile file/display name, directory, reuse, new window,
+  editor and screenshot verified. Unit `portafort-warp-gui-20261025-terminal-variants`
+  inactive/exit0. Fix replaces hard-coded5 editor bindings with actual config.
+  Runtime Konsole path is unchanged; native run uses preceding Firefox binary.
+- Linux builder `hoster-warp-build-20261025-terminal-variants`: inactive/exit0,
+  62 Rust pass/one ignored,129 Node pass, executable and Debian bundle rebuilt.
+  Local build and GUI receipts: `desktop/src-tauri/target/kde-validation/terminal-variants/`.
+- Cleanup sidecar: two unregistered live scopes retained, none stopped. All child
+  packets terminal; normal Windows/Portafort application sessions not activated.
+
+Test dependency provenance: official Microsoft Terminal1.24.12741.0 unpackaged
+x64 ZIP, SHA256 `7aaa8321064c45d5af79205db13deb87f146f644bd8abdfae29f0155d7ce744e`;
+executable Authenticode valid/Microsoft Corporation. Isolated .portable/settings
+live under `desktop/src-tauri/target/terminal-portable-1.24.12741.0/`; the ZIP is
+cached under target/research/terminal. Official portable-mode documentation:
+https://learn.microsoft.com/windows/terminal/distributions#windows-terminal-portable
+Sanitized fetch receipts/digests stay in target/research/terminal. Nothing was
+installed and normal Terminal settings were not edited.
+
+Deferred terminal evidence: shared-PID/multi-tab active-profile identity, full
+Windows Terminal editor/restore interaction for custom variants, and concurrently
+opened terminal candidates (polling currently lacks fresh terminal metadata).
+Keep these in PARITY.md; do not label arbitrary terminal-profile capture complete.
+Next: remaining burner/chord and packaged/D-Bus variants, final packaging/runtime
+acceptance, real Plasma6 and physical display/login gates. Full goal stays active.
+No branch merge, push or installer installation occurred.
