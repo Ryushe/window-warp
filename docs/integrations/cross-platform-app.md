@@ -2310,3 +2310,22 @@ reviewed native companion, Rust integration, packaging and final evidence above.
 This follow-up changes only the dossier to record the immutable implementation
 SHA. Resume the open PARITY gates from this feature branch; the full-port goal
 remains active. No merge, push, installer execution or normal-session activation.
+
+### X11 deferred by user — current scope Windows and KDE Wayland
+
+The user explicitly deferred adding X11 on 2026-10-25 and asked whether the
+Windows and Wayland versions work and are ported. X11 research/test preparation
+is stopped. The uncommitted GUI adaptation was removed and its two new helper
+files preserved only under ignored `desktop/src-tauri/target/x11-gestures/deferred/`.
+No X11 production backend was added. Earlier next-step instructions to implement
+X11 are superseded; it is not a gate for the current Windows/Wayland milestone.
+
+Both native versions have working builds and substantial live acceptance; full
+feature parity remains unproven. Core window actions, tap/hold/radial, editor,
+INI import, workspaces and supported Firefox/terminal paths are implemented.
+Remaining implementation limitations include ambiguous multi-tab/shared-process
+terminal identity and some packaged app/matching variants. Remaining acceptance
+includes physical mixed-DPI/portrait/removal, ordinary login/startup, installer
+execution/uninstall, default Firefox startup and live lock/inhibitor cases.
+KDE Wayland app gestures require the matching native KWin companion package.
+Continue those Windows/Wayland requirements before revisiting X11.

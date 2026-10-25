@@ -5,6 +5,10 @@ This checklist is a completion gate, not a reduction of scope. A feature is only
 verified when its behavior, persistence, editor, and applicable platform paths
 have been exercised. Bundles are rebuilt at the checkpoints below; installer execution and full parity remain pending.
 
+Current milestone: Windows and KDE Wayland. On 2026-10-25 the user explicitly
+deferred X11 support. Historical X11 follow-ups below are deferred and do not
+block this milestone; all Windows/Wayland feature and acceptance gaps remain.
+
 | Requirement / authoritative source | State | Evidence needed |
 | --- | --- | --- |
 | Monitor push, wrap, relative placement, maximized state, history pull (`window_manager.ahk`) | Partial | Windows maximized push/history pull passes; KDE two-output and real one-output tests verify direct maximized pull and restoring maximization after tiling; Windows and KDE pause/configuration reload retain history; Windows two-display push/history now passes; portrait/mixed-DPI and monitor removal remain |
