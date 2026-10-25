@@ -2,6 +2,7 @@
 mod app_actions;
 mod config;
 mod firefox;
+mod firefox_profile_lock;
 mod geometry;
 mod gesture;
 #[cfg(target_os = "linux")]

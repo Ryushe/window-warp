@@ -24,6 +24,8 @@ if "--pointer" in sys.argv and "--pointer-denied" in sys.argv:
     raise ValueError("Pointer authorization and refusal require separate compositor sessions")
 if "--firefox-tiles" in sys.argv and "--firefox" not in sys.argv:
     raise ValueError("Firefox tile acceptance requires --firefox")
+if "--firefox-no-profile-args" in sys.argv and "--firefox" not in sys.argv:
+    raise ValueError("Firefox profile-lock acceptance requires --firefox")
 if "--overlap" in sys.argv and "--firefox-tiles" not in sys.argv:
     raise ValueError("Overlapping shortcut acceptance requires --firefox-tiles")
 if "--terminal-concurrent" in sys.argv and "--terminal" not in sys.argv:
@@ -646,6 +648,9 @@ def test_dbus_desktop_entry(environment, template, report):
 with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (output / "gui.log").open("w") as log:
     environment = os.environ.copy()
     environment.update({"TAURI_WEBVIEW_AUTOMATION": "true", "TAURI_AUTOMATION": "true", "GDK_BACKEND": "wayland", "XDG_CONFIG_HOME": temporary + "/config", "XDG_DATA_HOME": temporary + "/data", "XDG_CACHE_HOME": temporary + "/cache"})
+    if "--firefox-no-profile-args" in sys.argv:
+        environment["HOME"] = temporary + "/home"
+        Path(environment["HOME"]).mkdir()
     if "--desktop-entry" in sys.argv:
         # Only this disposable desktop session can discover the fixture entry.
         applications = Path(environment["XDG_DATA_HOME"]) / "applications"
@@ -1405,7 +1410,21 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                 page.write_text(f"<!doctype html><title>Warp {label} Firefox fixture</title><p>{label} owned fixture</p>")
                 urls.append(page.as_uri())
             browser_env = environment | {"MOZ_ENABLE_WAYLAND": "1"}
-            browser_fixture = subprocess.Popen(["firefox", "--new-instance", "--profile", str(browser_profile), urls[0]], env=browser_env, stdout=log, stderr=log, start_new_session=True)
+            no_profile_args = "--firefox-no-profile-args" in sys.argv
+            other_profile = Path(temporary) / "other-firefox-profile"
+            if no_profile_args:
+                other_profile.mkdir()
+                (other_profile / "user.js").write_text((browser_profile / "user.js").read_text())
+                registry = Path(environment["HOME"]) / ".mozilla/firefox"
+                registry.mkdir(parents=True)
+                (registry / "profiles.ini").write_text(
+                    f"[Profile0]\nName=Owned first\nIsRelative=0\nPath={browser_profile}\n"
+                    f"[Profile1]\nName=Owned other\nIsRelative=0\nPath={other_profile}\n")
+            # Mozilla's restart environment selects the profile without putting
+            # its identity in process argv. Keep these variables off the app and
+            # subsequent remote-control launches.
+            initial_env = browser_env | ({"XRE_PROFILE_PATH":str(browser_profile), "XRE_PROFILE_LOCAL_PATH":str(browser_profile)} if no_profile_args else {})
+            browser_fixture = subprocess.Popen(["firefox", "--new-instance", *([] if no_profile_args else ["--profile", str(browser_profile)]), urls[0]], env=initial_env, stdout=log, stderr=log, start_new_session=True)
             first_loaded = False
             for _ in range(60):
                 first_loaded = any(w["pid"] == browser_fixture.pid and "Warp First Firefox fixture" in w["title"] for w in invoke("get_windows"))
@@ -1414,6 +1433,29 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                 time.sleep(0.5)
             assert first_loaded, "First owned Firefox page did not finish loading"
             subprocess.run(["firefox", "--profile", str(browser_profile), "--new-tab", urls[1]], env=browser_env, stdout=log, stderr=log, check=True, timeout=15)
+            if no_profile_args:
+                other_env = browser_env | {"XRE_PROFILE_PATH":str(other_profile), "XRE_PROFILE_LOCAL_PATH":str(other_profile)}
+                other_browser_fixture = subprocess.Popen(["firefox", "--new-instance", urls[1]], env=other_env, stdout=log, stderr=log, start_new_session=True)
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    if any(w["pid"] == other_browser_fixture.pid and "Warp Second Firefox fixture" in w["title"] for w in invoke("get_windows")) and (other_profile / "sessionstore-backups/recovery.jsonlz4").exists():
+                        break
+                    assert other_browser_fixture.poll() is None, "Owned other-profile Firefox exited"
+                    time.sleep(0.2)
+                else:
+                    diagnostic = {"error":"Concurrent no-argv Firefox profile did not write its session",
+                        "pid":other_browser_fixture.pid, "windows":invoke("get_windows"),
+                        "argv":Path(f"/proc/{other_browser_fixture.pid}/cmdline").read_bytes().decode().split("\0"),
+                        "files":[str(p.relative_to(other_profile)) for p in other_profile.glob("*")],
+                        "sessionFiles":[p.name for p in (other_profile / "sessionstore-backups").glob("*")]}
+                    (output / "firefox-no-profile-args-startup.json").write_text(json.dumps(diagnostic, indent=2))
+                    raise AssertionError(diagnostic)
+                receipt = []
+                for process, profile in [(browser_fixture,browser_profile), (other_browser_fixture,other_profile)]:
+                    argv = Path(f"/proc/{process.pid}/cmdline").read_bytes().rstrip(b"\0").split(b"\0")
+                    assert not any(arg.lower() in [b"--profile",b"-profile",b"-p"] or str(profile).encode() in arg for arg in argv), argv
+                    receipt.append({"pid":process.pid,"profile":str(profile),"argv":[arg.decode() for arg in argv]})
+                (output / "firefox-no-profile-args.json").write_text(json.dumps(receipt, indent=2))
             browser_capture = None
             for _ in range(90):
                 draft = invoke("capture_workspace", {"name": "Firefox fixture"})["profile"]
@@ -1434,6 +1476,8 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             assert browser["profilePath"] == str(browser_profile)
             assert {tab["url"] for tab in browser["tabs"]} == set(urls)
             assert browser["tabs"][browser["activeTab"] - 1]["title"] in browser_capture["items"][0]["window"]["title"]
+            if no_profile_args:
+                report["checks"].append("live profile-lock ownership captures the correct Firefox session despite concurrent identical titles and no profile arguments")
             invoke("save_workspaces", {"store": {"version": 1, "profiles": [browser_capture]}})
             result = invoke("restore_workspace", {"id": browser_capture["id"]})
             assert result[0]["restored"] and not result[0]["launched"], result
@@ -1465,10 +1509,10 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             assert restored_browser["tabs"][restored_browser["activeTab"] - 1]["url"] == expected_active_url, observations
             report["checks"].extend(["real Firefox compressed session/profile/tab capture", "reuse existing Firefox profile window", "new Firefox window restores both URLs and selected tab"])
             # A second profile with identical titles must not be borrowed.
-            other_profile = Path(temporary) / "other-firefox-profile"
-            other_profile.mkdir()
-            (other_profile / "user.js").write_text((browser_profile / "user.js").read_text())
-            other_browser_fixture = subprocess.Popen(["firefox", "--new-instance", "--profile", str(other_profile), browser["tabs"][browser["activeTab"] - 1]["url"]], env=browser_env, stdout=log, stderr=log, start_new_session=True)
+            if not no_profile_args:
+                other_profile.mkdir()
+                (other_profile / "user.js").write_text((browser_profile / "user.js").read_text())
+                other_browser_fixture = subprocess.Popen(["firefox", "--new-instance", "--profile", str(other_profile), browser["tabs"][browser["activeTab"] - 1]["url"]], env=browser_env, stdout=log, stderr=log, start_new_session=True)
             other_windows = []
             for _ in range(60):
                 other_windows = [w for w in invoke("get_windows") if w["pid"] == other_browser_fixture.pid]
@@ -1481,6 +1525,10 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             browser_capture["items"][0]["window"].update({"maximizedHorizontal": False, "maximizedVertical": False, "fullscreen": False})
             source_area = browser_capture["items"][0]["window"]["workArea"]
             browser_capture["items"][0]["window"]["rect"].update({"x": source_area["x"] + 150, "y": source_area["y"] + 100, "width": 700, "height": 500})
+            if no_profile_args:
+                # A stale saved window id must not override proven profile
+                # ownership even when the wrong profile has the same title.
+                browser_capture["items"][0]["window"]["id"] = other_windows[0]["id"]
             invoke("save_workspaces", {"store": {"version": 1, "profiles": [browser_capture]}})
             result = invoke("restore_workspace", {"id": browser_capture["id"]})
             assert result[0]["restored"] and not result[0]["launched"], result
@@ -1494,6 +1542,9 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                 "expected": browser_capture["items"][0]["window"]["rect"],
                 "ownedWindows": [{"rect": w["rect"], "maximizedHorizontal": w["maximizedHorizontal"], "maximizedVertical": w["maximizedVertical"]} for w in after if w["pid"] == browser_fixture.pid]}
             report["checks"].append("identical titles in another Firefox profile do not steal the restore")
+            if no_profile_args:
+                report["checks"].append("no-argv Firefox profile ownership rejects a concurrent same-title window even with a stale saved window id")
+                browser_capture["items"][0]["window"]["id"] = next(w["id"] for w in after if w["pid"] == browser_fixture.pid and w["rect"] == browser_capture["items"][0]["window"]["rect"])
             if "--firefox-tiles" in sys.argv:
                 from wayland_input import Input
                 saved_config = invoke("get_config")

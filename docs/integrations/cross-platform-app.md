@@ -2050,3 +2050,142 @@ KDE pointer edge-resistance fix and final native validation above. Staged
 diff/check passed and the worktree was clean immediately after commit. This
 dossier-only follow-up records its immutable SHA. No merge, push, installation,
 or normal-session activation occurred.
+
+
+## Active continuation: Plasma6 expanded input/Firefox and default profile identity
+
+Previous turn was progress: pointer implementation13af0ee, dossier42df9ee,
+default/strong6and Portafort39-check runs,6denial27 and X11 regression passed.
+Current branch remains the owning feature codex/cross-platform-app; no merge,
+push, normal install or activation requested.
+
+Expanded baseline units hoster-warp-gui-20261025-plasma6-input-edges and
+hoster-warp-gui-20261025-plasma6-firefox-overlap both failed/exit1 because the
+minimal disposable image lacks gdbus. This is a fixture dependency failure,
+not a result for the remaining product assertions. Dockerfile.plasma6 now
+explicitly includes libglib2.0-bin. Image unit
+hoster-warp-image-20261025-plasma6-gdbus remains active at last observation,
+fetching Debian packages; do not restart it due a slow download. Current binary
+is still a4010c1f5bc286d67527ab13b0c572fb94f60c698cd9feb78ce4de82427e1ef2.
+
+Short spec for concurrent Firefox work: capture and restore must resolve a
+Firefox launched without explicit profile arguments using unique live profile
+lock ownership, not profiles.ini default selection or a title guess. Reuse one
+resolver for enrichment and matching. Linux queries POSIX lock ownership with
+F_GETLK; Windows queries RestartManager resource owners only. Never acquire,
+remove, unlock or shut down a browser lock/process. Match the actual window
+process; stale files, inaccessible locks and ambiguous live owners remain
+unknown with existing review behavior. Do not cache unknown startup identity
+indefinitely. Preserve explicit arguments, privacy, and existing session capture.
+
+Owner packaged_native: firefox.rs, focused profile-lock module/wiring and tests,
+Windows native fixture if needed. Parent owns shared KDE gui.py, native Linux
+build/acceptance, docs and integration. No Linux rebuild or binary replacement
+while parent baseline runs are active. Require fresh independent review and
+native concurrent wrong/default-profile evidence before claiming completion.
+Retile_review is separately researching KDE physical key lifetimes from primary
+sources; no semantic-release timer workaround or requirement waiver authorized.
+Hoster entry reaper inspected2/retained2/stopped0 (unregistered live scopes),
+needs-attention; no manual remediation.
+
+
+Continuation status update:
+- Windows Firefox resolver is frozen and independently reviewed, including
+ RestartManager lifecycle and owner PID/start-time evidence. Unit suite79pass,
+ 6ignored; native13checks pass with clean28-process ownership cleanup in
+ target/windows-validation/WARP-NATIVE-eca3b6a4-5b93-4f3f-a41d-386372cdbd73/.
+ Earlier two native attempts hit the fixture's covered-title-bar guard during
+ preparatory background movement. The scoped fixture now validates owned
+ floating Firefox HWND/PID birth and uses NOACTIVATE|NOZORDER only for setup;
+ final real competing-profile activation and active-title assertions remain.
+ Fresh independent re-review found no actionable scoped findings.
+- Native profile selection uses Mozilla XRE restart environment, with observed
+ absence of profile flags in both browser argv. Do not call this ordinary
+ profiles.ini default startup acceptance. Warp alone discovers an isolated
+ registry with a conflicting default; profiles and pages are owned temporary
+ fixtures. Known wrong-profile matches are rejected; unavailable evidence still
+ retains existing heuristics and same-profile identical windows remain ambiguous.
+- Final normal Windows debug and exact-source NSIS builds pass. New NSIS size
+ 2353283, SHA256532b88253705b8069d2c88ff59a8f78accfd9c34bcfa1df3207c7e42d836b813;
+ release EXE SHA256807d995ffc647c8d2f05bf45750e1eeb81b38234f093038a666bf931345eeb57.
+ Logs target/firefox-lock-windows-{rust,native-final,build,release}.log. No install.
+- First Linux build failed at an inferred comparison cast in F_GETLK. Explicit
+ libc::c_short corrected it; hoster-warp-build-20261025-firefox-lock-cast exited0,
+ 129Node/74Rust pass,1ignored; release recompilation41.73s and Deb built.
+ Current Linux executable eb3eb31289926b45700957ed248bc5f6ff4a83f6fe30c6579859f06036d08886,
+ verified equal on Hoster and Portafort. Build receipt firefox-lock-build.log.
+- New KDE --firefox-no-profile-args uses isolated HOME/profiles.ini and two
+ XRE-selected profile processes with identical active titles and absent profile
+ arguments. Native initial startup attempt failed before identity assertions;
+ diagnostic rerun reached the intended OLD-binary failure: capture reports
+ unmatched ambiguous session with empty profile/tabs. Unit
+ portafort-warp-gui-20261025-firefox-lock-startup failed/exit1; receipts retrieved
+ to target/kde-validation/firefox-lock-before/. This is product red evidence.
+ Corrected-binary portafort-warp-gui-20261025-firefox-lock-fixed is active at last
+ observation; do not claim its pass yet. Baseline runtime preserved on Hoster as
+ ROOT/window-warp-before-firefox-lock, SHAa4010c1f... .
+- WSL Win32 interop stopped accepting the Python bridge (Exec format error).
+ Direct WSL ssh hoster now works using the same key; use it without ProxyCommand.
+ No remote workload was restarted due the transport failure. Required route
+ remains WSL -> Hoster -> Portafort.
+
+KDE physical-key companion capability proof (not production integration):
+- retile_review built only ignored target/kwin-companion-spike against exact
+ Debian kwin-dev4:6.3.6-1, CMake KWin6.3.6 EXACT/Qt6.8.2/KWin::kwin. Separate
+ SDK image sha256:a4a3a839eb429a1fb7bb1df342c6866071c069205b9190d75e6c977faf6272f8
+ derives pinned old3bd7c2e... image; main image tag/runtime untouched by spike.
+- hoster-warp-companion-live-20261025 exited0; runtime /Plugins LoadPlugin and
+ UnloadPlugin worked. Pre-filter keyStateChanged gives independent lifetime:
+ KGlobalAccel semantic K-up0.9807s versus actual K-up1.7302s, reverse order also
+ passes. Exactly8 configured K/L events, unrelated/repeat/disarmed input absent.
+ Wrong token denied, owner-loss disarms, focus unchanged, plugin/script unloaded
+ before compositor exit, container absent. Local receipt.json/README.md and C++
+ source in target/kwin-companion-spike; source currently ignored, preserve it.
+- This proves a real input-pipeline capability with injected native events, not
+ hardware acceptance or finished app integration. Plugin is an internal ABI and
+ needs each KWin release rebuild. Plasma5 requires matching source/generated
+ headers;6has distro SDK. Qt plugin discovery/runtime install, production owner
+ authentication, chord-only export (no unrelated typing), activation/up ordering,
+ pause/lock/app-death cleanup, and gesture-controller integration remain work.
+ The private spike Arm accepts first caller and must not be shipped as-is.
+
+
+Firefox native checkpoint finalization:
+- portafort-warp-gui-20261025-firefox-lock-fixed is inactive/exit0,27checks.
+ Exact no-argv profile/tab capture, same-title isolation including stale saved
+ wrong-window id, reuse/new-window and tray lifecycle all pass. Retrieved
+ target/kde-validation/firefox-lock-fixed/tile-browser/gui-firefox-lock-fixed/.
+- Fresh Debian artifact retrieved, size5021298,
+ SHA25658fd184c9fbb02b8f992eaa5cd4c1621f2d0652064c3047922da534eb9d0c1c4.
+- hoster-warp-image-20261025-plasma6-gdbus completed inactive/exit0. New image
+ sha256:434ca661d472adef8da33cf288b4d84ebf71b96a039c0e4687a0c3cade9accd4.
+ Expanded units hoster-warp-gui-20261025-plasma6-input-edges-ready and
+ hoster-warp-gui-20261025-plasma6-firefox-overlap-ready are ACTIVE at last check,
+ both using current eb3eb312... app. Poll these handles; do not launch duplicates.
+- Final independent reviewer closed Linux cast and background Windows fixture
+ changes, no scoped findings. PARITY, README and KDE fixture docs updated.
+
+
+Final expanded6results supersede all active states above:
+- hoster-warp-gui-20261025-plasma6-input-edges-ready inactive/exit0,47checks.
+ Timed retile semantics, retained history/maximize/focus-last, held input pause/
+ resume/reassignment, radial and import/lifecycle pass.
+- hoster-warp-gui-20261025-plasma6-firefox-overlap-ready failed/exit1. K37 then
+ L38 with physical K held leaves Firefox maximized instead of left tile; exact
+ case/timing saved in firefox-overlap.json and overlap-shortcut-signals.log.
+ No speculative timer repair or waived requirement. Native companion timeline
+ gives direct explanation and a tested capability for the next implementation.
+- hoster-warp-gui-20261025-plasma6-firefox-lock-tiles inactive/exit0,42checks:
+ same-title no-argv profile identity, restore, delayed four-way/max/fullscreen/
+ mouse/burner/retile and tray cleanup pass. This does not supersede overlap red.
+ All receipts retrieved under target/kde-validation/plasma6-<suffix>/; all
+ described remote units now terminal. No task-owned workload needs a restart.
+
+Next concrete work: integrate the proven native KWin key-lifetime companion
+with narrowly scoped chord events, authenticated app ownership, generation/
+activation-vs-up ordering and pause/lock/death cleanup; build/test5.27 via WSL ->
+Hoster -> Portafort and6.3.6, then rerun both overlap orders. Preserve prototype
+source/SDK receipts in target/kwin-companion-spike before any cache cleanup.
+Keep all other identity/physical-display/login/installer completion gates active.
+Reviewed Firefox implementation, Windows/Linux artifacts and full native receipts
+are ready for a recoverable feature-branch checkpoint. No merge/push/installation.

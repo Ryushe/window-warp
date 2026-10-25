@@ -10,7 +10,8 @@ import {randomUUID} from "node:crypto";
 import {testFirefox} from "./firefox.mjs";
 
 if (process.platform !== "win32") throw new Error("This fixture requires Windows");
-const firefoxOnly = process.argv.includes("--firefox-only");
+const firefoxProfileLock = process.argv.includes("--firefox-profile-lock");
+const firefoxOnly = process.argv.includes("--firefox-only") || firefoxProfileLock;
 const runFirefox = firefoxOnly || process.argv.includes("--firefox");
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const marker = "WARP-NATIVE-" + randomUUID();
@@ -72,7 +73,8 @@ let fixture, native;
 let report = {passed:false, checks, skipped};
 const appLog = fs.openSync(path.join(output,"app.log"), "w");
 try {
-    app = spawn(binary, [], {cwd:output, windowsHide:true, stdio:["ignore",appLog,appLog]});
+    const appEnvironment = firefoxProfileLock ? {...process.env, APPDATA:path.join(output,"firefox-discovery")} : process.env;
+    app = spawn(binary, [], {cwd:output, env:appEnvironment, windowsHide:true, stdio:["ignore",appLog,appLog]});
     const target = await until(async () => {
         try { return (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t => t.type === "page" && /^https?:\/\/tauri\.localhost\/(?:index.html)?$/.test(t.url)); }
         catch { if (app.exitCode !== null) throw new Error("Fixture app exited before its WebView was ready"); return null; }
@@ -890,7 +892,7 @@ try {
         skipped.push("General native checks omitted by --firefox-only");
     }
     if (runFirefox) {
-        await testFirefox({output,marker,native,invoke,evaluate,wait,click,screenshot,until,checks,report});
+        await testFirefox({output,marker,native,invoke,evaluate,wait,click,screenshot,until,checks,report,profileLock:firefoxProfileLock});
     }
     // Exercise the real native tray callback/menu route before failure-only
     // process cleanup below. This does not click Explorer's notification area.

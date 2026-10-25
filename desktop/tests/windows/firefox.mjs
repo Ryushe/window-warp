@@ -8,7 +8,7 @@ const samePath = (left,right) => path.resolve(left).toLowerCase() === path.resol
 const urlKey = value => new URL(value).protocol === "file:" ? path.resolve(fileURLToPath(value)).toLowerCase() : value;
 const sameRect = (left,right) => ["x","y","width","height"].every(key=>left[key]===right[key]);
 
-export async function testFirefox({output,marker,native,invoke,evaluate,wait,click,screenshot,until,checks,report}) {
+export async function testFirefox({output,marker,native,invoke,evaluate,wait,click,screenshot,until,checks,report,profileLock=false}) {
     const program = process.env.WARP_FIREFOX_BINARY || String.raw`C:\Program Files\Mozilla Firefox\firefox.exe`;
     assert.ok(fs.existsSync(program), "--firefox requires an installed Firefox executable (or WARP_FIREFOX_BINARY)");
     const profiles = ["firefox main profile","firefox other profile"].map(name=>path.join(output,name));
@@ -25,6 +25,14 @@ export async function testFirefox({output,marker,native,invoke,evaluate,wait,cli
     for (const profile of profiles) {
         fs.mkdirSync(profile); // A preexisting or locked profile is never borrowed.
         fs.writeFileSync(path.join(profile,"user.js"),Object.entries(preferences).map(([key,value])=>`user_pref(${JSON.stringify(key)}, ${JSON.stringify(value)});`).join("\n"));
+    }
+    if (profileLock) {
+        // Only Warp's discovery reads this isolated registry. Firefox chooses
+        // its owned directories through Mozilla's restart environment instead.
+        const registry = path.join(output,"firefox-discovery","Mozilla","Firefox");
+        fs.mkdirSync(registry,{recursive:true});
+        fs.writeFileSync(path.join(registry,"profiles.ini"),profiles.map((profile,index)=>
+            `[Profile${index}]\nName=Owned${index}\nIsRelative=0\nPath=${profile}\nDefault=${index}\n`).join("\n"));
     }
     pages.forEach((page,index)=>fs.writeFileSync(page,`<!doctype html><meta charset="utf-8"><title>${marker} Firefox ${index+1}</title><p>Owned local Firefox fixture ${index+1}</p>`));
     const previousStore = await invoke("get_workspaces");
@@ -67,7 +75,7 @@ export async function testFirefox({output,marker,native,invoke,evaluate,wait,cli
     };
     try {
         await invoke("set_enabled",{enabled:false});
-        await native("firefox_begin",{root:output,program,profiles,pages}); prepared = true;
+        await native("firefox_begin",{root:output,program,profiles,pages,environmentProfile:profileLock}); prepared = true;
         await native("firefox_launch",{profile:0,page:0});
         await until(async()=>{
             await native("firefox_refresh");
@@ -76,6 +84,12 @@ export async function testFirefox({output,marker,native,invoke,evaluate,wait,cli
         await native("firefox_launch",{profile:0,page:1,mode:"tab"});
         await native("firefox_refresh");
         const captured = await until(()=>capture(profiles[0]),p=>p.items.length===1 && p.items[0].browser?.tabs.length===2,"initial Firefox tabs loaded",90000);
+        if (profileLock) {
+            const proof = await native("firefox_refresh");
+            assert.equal(proof.find(w=>w.id===captured.items[0].window.id)?.profileArgument,false,
+                "The actual owned window process must have no profile argument");
+            checks.push("native Firefox restart-environment startup captures its live lock-owned profile without profile argv, despite a different registry default");
+        }
         selectedUrl = captured.items[0].browser.tabs[captured.items[0].browser.activeTab-1].url;
         assert.ok(completeTabs(captured.items[0]), "Capture must preserve both URLs and the live selected tab");
         const item = captured.items[0];
@@ -122,10 +136,16 @@ export async function testFirefox({output,marker,native,invoke,evaluate,wait,cli
             && p.items[0].browser.tabs.length===2
             && urlKey(p.items[0].browser.tabs[p.items[0].browser.activeTab-1]?.url || "about:blank")===urlKey(selectedUrl),"identical-title second profile session",90000);
         const other = otherCapture.items[0].window;
+        if (profileLock) {
+            const proof = await native("firefox_refresh");
+            assert.equal(proof.find(w=>w.id===other.id)?.profileArgument,false,
+                "The competing owned process must also have no profile argument");
+            checks.push("native Firefox captures two concurrent no-profile-argv processes with identical titles using their separate live locks");
+        }
         assert.equal(other.title,item.window.title,"The competing profile must have the identical active-tab title");
         const away = {...requested,x:area.x+80,y:area.y+80,width:requested.width-40,height:requested.height-40};
         for (const window of await windows(profiles[0])) {
-            await native("place",{window:Number(window.id),rect:away});
+            await native("firefox_place_background",{window:Number(window.id),rect:away});
         }
         await native("place",{window:Number(other.id),rect:{...away,x:area.x+120,y:area.y+100}});
         const otherBefore = (await until(()=>windows(profiles[1]),ws=>ws.length===1 && ws[0].title===item.window.title,"competing profile selected title"))[0];

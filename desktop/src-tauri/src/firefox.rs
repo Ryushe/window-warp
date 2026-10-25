@@ -253,6 +253,30 @@ fn profile_from_args(args: &[String], profiles: &[Profile]) -> Option<Profile> {
     }
     None
 }
+
+fn process_profile(pid: u32, profiles: &[Profile]) -> Option<Profile> {
+    crate::process_info::arguments(pid)
+        .ok()
+        .and_then(|args| profile_from_args(&args, profiles))
+        .or_else(|| {
+            locked_profile(profiles, |path| {
+                crate::firefox_profile_lock::owned_by(path, pid)
+            })
+        })
+}
+
+fn locked_profile(profiles: &[Profile], mut owns: impl FnMut(&Path) -> bool) -> Option<Profile> {
+    let mut found: Option<&Profile> = None;
+    for profile in profiles {
+        if owns(&profile.path) {
+            if found.is_some_and(|previous| !same_path(&previous.path, &profile.path)) {
+                return None;
+            }
+            found = Some(profile);
+        }
+    }
+    found.cloned()
+}
 fn title(text: &str) -> String {
     let mut text = text.trim();
     for suffix in [
@@ -348,11 +372,7 @@ pub fn enrich(items: &mut [WorkspaceItem]) {
     for item in items.iter_mut().filter(|i| is_firefox(&i.window)) {
         let explicit = process_profiles
             .entry(item.window.pid)
-            .or_insert_with(|| {
-                crate::process_info::arguments(item.window.pid)
-                    .ok()
-                    .and_then(|args| profile_from_args(&args, &profiles))
-            })
+            .or_insert_with(|| process_profile(item.window.pid, &profiles))
             .clone();
         let candidates = explicit
             .clone()
@@ -491,7 +511,8 @@ impl Browser {
     }
 }
 
-/// Resolve once per process during restore; tab polling does not reread sessions.
+/// Cache resolved profiles during restore; retry unavailable startup evidence.
+/// Tab polling never rereads sessions.
 #[derive(Default)]
 pub struct Matcher {
     profiles: Option<Vec<Profile>>,
@@ -503,12 +524,13 @@ impl Matcher {
             return Some(true);
         }
         let profiles = self.profiles.get_or_insert_with(profiles);
-        let current = self.processes.entry(window.pid).or_insert_with(|| {
-            crate::process_info::arguments(window.pid)
-                .ok()
-                .and_then(|a| profile_from_args(&a, profiles))
-        });
+        let current = self
+            .processes
+            .get(&window.pid)
+            .and_then(Clone::clone)
+            .or_else(|| process_profile(window.pid, profiles));
         if let Some(profile) = current {
+            self.processes.insert(window.pid, Some(profile.clone()));
             if !saved.profile_path.is_empty() {
                 return Some(same_path(&profile.path, Path::new(&saved.profile_path)));
             }
@@ -518,8 +540,8 @@ impl Matcher {
     }
 
     pub fn matches(&mut self, window: &WindowInfo, saved: &Browser) -> bool {
-        // Default-started Firefox often has no profile argument. Preserve the
-        // title heuristic for reuse; identical titles cannot prove identity.
+        // Unavailable lock/argument evidence retains the review-compatible title
+        // heuristic; identical titles alone still cannot prove profile identity.
         self.profile_match(window, saved)
             .unwrap_or_else(|| score(window, saved) == 120)
     }
@@ -535,6 +557,81 @@ impl Matcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn profile_lock_identity_requires_a_unique_owner_not_a_default_or_title() {
+        let profiles = parse_profiles(
+            "[Profile0]\nName=Default\nPath=default\nDefault=1\n[Profile1]\nName=Other\nPath=other\n",
+            Path::new("/profiles"),
+        );
+        let current = locked_profile(&profiles, |path| path == profiles[1].path).unwrap();
+        assert_eq!(current.name, "Other");
+        assert!(
+            locked_profile(&profiles, |_| false).is_none(),
+            "Stale files and denied queries provide no owner proof"
+        );
+        assert!(
+            locked_profile(&profiles, |_| true).is_none(),
+            "Two different profiles for one PID remain ambiguous"
+        );
+        assert!(
+            locked_profile(&[profiles[0].clone(), profiles[0].clone()], |_| true).is_some(),
+            "Repeated discovery of the same directory is not two identities"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restart_manager_profile_identity_retries_missing_startup_lock() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root =
+            std::env::temp_dir().join(format!("warp-firefox-owner-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let known = Profile {
+            path: root.clone(),
+            name: "Owned".into(),
+        };
+        let mut matcher = Matcher {
+            profiles: Some(vec![known.clone()]),
+            ..Default::default()
+        };
+        let window = matcher_window(std::process::id(), "Same — Mozilla Firefox");
+        let saved = Browser {
+            profile_path: root.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        assert_eq!(matcher.profile_match(&window, &saved), None);
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .share_mode(0)
+            .open(root.join("parent.lock"))
+            .unwrap();
+        assert!(crate::firefox_profile_lock::owned_by(
+            &root,
+            std::process::id()
+        ));
+        assert!(!crate::firefox_profile_lock::owned_by(&root, u32::MAX));
+        assert_eq!(
+            matcher.profile_match(&window, &saved),
+            Some(true),
+            "A previous unknown must not hide a newly acquired profile lock"
+        );
+        let other = Browser {
+            profile_path: root.join("other").to_string_lossy().into_owned(),
+            ..saved
+        };
+        assert!(!matcher.matches(&window, &other));
+        assert!(!matcher.matches_new_window(&window, &other));
+        drop(file);
+        assert!(!crate::firefox_profile_lock::owned_by(
+            &root,
+            std::process::id()
+        ));
+        fs::remove_file(root.join("parent.lock")).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
+
     #[test]
     fn kde_duplicate_caption_suffix_does_not_hide_firefox_tab_identity() {
         assert_eq!(title("Warp Second — Mozilla Firefox <2>"), "warp second");

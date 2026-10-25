@@ -360,3 +360,35 @@ The current native X11 opt-in also passes on private Xvfb. Receipts are under
 
 These results cover core app pointer/gesture/workspace/terminal/tray behavior,
 not all Plasma6 Firefox, overlap, physical display, or login/installer cases.
+
+
+### Firefox without profile arguments
+
+Add `--firefox --firefox-no-profile-args` to a private native GUI run. It gives
+only the fixture app an isolated HOME/profile registry and launches two owned
+Firefox profiles through Mozilla's XRE restart environment, without profile
+arguments. Their active titles overlap. The fixture verifies the actual argv,
+profile/tab capture, reuse/new-window behavior, and rejection of a wrong-profile
+window despite a stale saved ID. This tests no-argv ownership, not ordinary
+profiles.ini default selection. Existing explicit-profile tests remain unchanged.
+
+The old binary fails the capture assertion with ambiguous empty profile/tabs;
+Portafort corrected unit `portafort-warp-gui-20261025-firefox-lock-fixed` passes27
+checks with `--tray`. Receipts: `src-tauri/target/kde-validation/firefox-lock-fixed/`.
+The initial startup-only failure and subsequent valid old-binary failure remain
+separate receipts. Do not count a fixture startup failure as product evidence.
+
+Plasma6's expanded fixtures also require gdbus, now explicitly supplied by
+libglib2.0-bin in Dockerfile.plasma6; rebuild an older image before those checks.
+
+
+The repaired Plasma6 image subsequently passed47checks with
+`--hold --pointer --retile --resume-held --reassign-native --radial --import --tray`
+and42checks with
+`--hold --pointer --firefox --firefox-no-profile-args --firefox-tiles --tray`.
+Units: `hoster-warp-gui-20261025-plasma6-input-edges-ready` and
+`hoster-warp-gui-20261025-plasma6-firefox-lock-tiles`.
+The separate `plasma6-firefox-overlap-ready` run still fails independent held
+chords, reproducing5.27's semantic-release limitation. Retain its failure receipt
+and validate that requirement after native companion integration; do not infer
+an overlap pass from the successful non-overlap suite.

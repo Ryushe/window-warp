@@ -293,6 +293,7 @@ class FirefoxScope:
         kernel.GetSystemTimeAsFileTime(c.byref(now))
         self.started = filetime(now)
         self.processes = {}
+        self.environment_profile = bool(request.get("environmentProfile", False))
         self.children = []
         self.log = (self.root / "firefox.log").open("ab")
 
@@ -340,7 +341,8 @@ class FirefoxScope:
                                 capture_output=True, timeout=6, creationflags=0x08000000)
         if result.returncode or len(result.stdout) > 4_000_000:
             raise RuntimeError("Cannot verify Firefox process/profile ownership through CIM")
-        for row in json.loads(result.stdout.decode("utf-8-sig")):
+        rows = json.loads(result.stdout.decode("utf-8-sig"))
+        for row in rows:
             pid = int(row["ProcessId"])
             if pid in self.baseline or not row.get("CommandLine"):
                 continue
@@ -352,6 +354,11 @@ class FirefoxScope:
                         self.remember(pid, str(profile), "exact-profile")
                     break
         self.track_children()
+        for row in rows:
+            record = self.processes.get(int(row["ProcessId"]))
+            if record and row.get("CommandLine"):
+                argv = command_arguments(row["CommandLine"])
+                record["profile_argument"] = any(value.lower() in ("-profile", "--profile", "-p") for value in argv[1:])
         return self.windows()
 
     def launch(self, request):
@@ -361,11 +368,17 @@ class FirefoxScope:
         if mode not in ("initial", "tab"):
             raise RuntimeError("Unknown Firefox launch mode")
         argv = [self.program, "--profile", str(profile)]
+        environment = os.environ.copy()
+        environment.pop("XRE_PROFILE_PATH", None)
+        environment.pop("XRE_PROFILE_LOCAL_PATH", None)
         if mode == "initial":
+            if self.environment_profile:
+                argv = [self.program]
+                environment.update(XRE_PROFILE_PATH=str(profile), XRE_PROFILE_LOCAL_PATH=str(profile))
             argv.extend(["--new-instance", page.as_uri()])
         else:
             argv.extend(["--new-tab", page.as_uri()])
-        child = subprocess.Popen(argv, cwd=self.root, stdin=subprocess.DEVNULL,
+        child = subprocess.Popen(argv, cwd=self.root, env=environment, stdin=subprocess.DEVNULL,
                                  stdout=self.log, stderr=self.log, creationflags=0x08000000)
         self.children.append(child)
         # This PID came directly from our explicit spawn; real browser roots
@@ -405,7 +418,8 @@ class FirefoxScope:
                 continue
             _, record = self.checked(hwnd)
             result.append(dict(id=str(hwnd), pid=pid.value, profile=record["profile"],
-                               created=str(record["born"]), proof=record["proof"]))
+                               created=str(record["born"]), proof=record["proof"],
+                               profileArgument=record.get("profile_argument")))
         return result
 
     def cleanup(self):
@@ -693,6 +707,16 @@ try:
                     raise RuntimeError("Firefox fixture has not been initialized")
                 firefox_scope.track_children()
                 result = firefox_scope.windows()
+            elif command == "firefox_place_background":
+                if firefox_scope is None:
+                    raise RuntimeError("Firefox fixture has not been initialized")
+                hwnd = int(request["window"])
+                firefox_scope.checked(hwnd)
+                if user.IsIconic(hwnd) or user.IsZoomed(hwnd):
+                    raise RuntimeError("Background placement requires an owned floating Firefox window")
+                rect = request["rect"]
+                if not user.SetWindowPos(hwnd, None, rect["x"], rect["y"], rect["width"], rect["height"], 0x14):
+                    raise c.WinError(c.get_last_error())
             elif command == "firefox_cleanup":
                 if firefox_scope is None:
                     result = {"tracked": 0, "terminated": [], "errors": []}

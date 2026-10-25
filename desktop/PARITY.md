@@ -8,19 +8,19 @@ have been exercised. Bundles are rebuilt at the checkpoints below; installer exe
 | Requirement / authoritative source | State | Evidence needed |
 | --- | --- | --- |
 | Monitor push, wrap, relative placement, maximized state, history pull (`window_manager.ahk`) | Partial | Windows maximized push/history pull passes; KDE two-output and real one-output tests verify direct maximized pull and restoring maximization after tiling; Windows and KDE pause/configuration reload retain history; Windows two-display push/history now passes; portrait/mixed-DPI and monitor removal remain |
-| Push and center pointer; pull centers primary; 1-second X/C retiling | Partial | Native Windows and KDE retile chords, one-use consumption, expiry, renewal and pause cancellation pass; Windows one-display wrap/centering and KDE two-output centering pass; KDE permission refusal and X11 movement pass; Windows two-display push/centering/retile now passes; Plasma6 exact centering now passes default/maximum normal edge resistance and permission refusal; mixed-DPI and Plasma6 retile edge cases remain |
+| Push and center pointer; pull centers primary; 1-second X/C retiling | Partial | Native Windows and KDE retile chords, one-use consumption, expiry, renewal and pause cancellation pass; Windows one-display wrap/centering and KDE two-output centering pass; KDE permission refusal and X11 movement pass; Windows two-display push/centering/retile now passes; Plasma6 exact centering now passes default/maximum normal edge resistance and permission refusal; Plasma6 native retile expiry/renewal/consumption/pause checks now pass; mixed-DPI remains |
 | Four-way tiling; portrait mouse-aware tile choice | Partial | Four-way implemented; 18 live KDE checks cover vertical tiling; Windows mouse hold tiles natively and portrait/midpoint geometry has regression coverage; KDE native hold verifies key-down pointer choice; physical portrait acceptance remains |
-| Maximize/restore toggle (original “fullscreen”); graceful close | Partial | Saved floating geometry survives maximized moves and history pull on Windows and KDE; KDE rapid double-toggle and same-script maximize/burner ordering pass, including real Portafort 5.27.11; Windows close honors an application's veto; KDE registration reload retains caches and shortcut/workspace actions share the persistent geometry queue; delayed Firefox tiling/fullscreen transitions pass; real Plasma 6 acceptance remains |
-| App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Tiled burner round trip live KDE verified; Windows native pull and all four one-monitor burner fallbacks pass; KDE all burner layouts pass with delayed Firefox, including floating/maximized round trips; Windows all layouts and return pulls pass on two physical monitors; live Plasma 6 and mixed-DPI layouts remain |
-| App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE and Windows focus-last/minimized checks pass, including previous-focus retention across pause/configuration reload; Windows pull/focus restore minimized floating geometry; compound title/class/executable/PID matching, full-path focus and tap/radial consistency pass; real Plasma 6 acceptance remains |
-| Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE native key delivery verifies tap, hold, repeats, pause cancellation and disabled hold; resume before key release and reassignment while held now pass; Windows distinct overlapping chords pass; tested Plasma 5.27 ends the first shortcut when another activates, so independent overlapping holds fail; Plasma6 basic tap/hold/repeat/pause/disabled-hold pass, with overlap/resume/reassignment edge checks remaining |
+| Maximize/restore toggle (original “fullscreen”); graceful close | Partial | Saved floating geometry survives maximized moves and history pull on Windows and KDE; KDE rapid double-toggle and same-script maximize/burner ordering pass, including real Portafort 5.27.11; Windows close honors an application's veto; KDE registration reload retains caches and shortcut/workspace actions share the persistent geometry queue; delayed Firefox tiling/fullscreen transitions pass on Plasma5.27 and6.3.6; physical display variants remain |
+| App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Tiled burner round trip live KDE verified; Windows native pull and all four one-monitor burner fallbacks pass; KDE all burner layouts pass with delayed Firefox, including floating/maximized round trips; Windows all layouts and return pulls pass on two physical monitors; Plasma6 delayed Firefox burner/return-pull layouts now pass; mixed-DPI layouts remain |
+| App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE and Windows focus-last/minimized checks pass, including previous-focus retention across pause/configuration reload; Windows pull/focus restore minimized floating geometry; compound title/class/executable/PID matching, full-path focus and tap/radial consistency pass; Plasma6 focus-last retention now passes, with broader app identity/minimized variants still open |
+| Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE native key delivery verifies tap, hold, repeats, pause cancellation and disabled hold; resume before key release and reassignment while held now pass; Windows distinct overlapping chords pass; tested Plasma5.27 and6.3.6 both end the first shortcut when another activates, so independent overlapping holds fail; Plasma6 tap/hold/repeat/pause/disabled-hold/resume/reassignment checks pass; native companion capability is proven separately but not integrated |
 | Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows and KDE native selection/dead-zone/Escape/pause checks pass; focus loss cancels before release, including Windows Alt+Escape; shared eight-slot layout/order tested; Plasma6 native selection/dead-zone/Escape/focus-loss/pause now pass; physical portrait/mixed-DPI remain |
 | Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed reassignment tested; native KDE current-app capture and physical-key reassignment pass; Windows native current-app capture, key recording, reassignment and persistence pass |
 | Global pause/resume hotkey stays available while paused; editor/workspace/update hotkeys | Partial | Implemented with separate pause registration; native KDE KGlobalAccel action dispatch passes; Windows OS key delivery, lifecycle and registration-failure recovery pass; KDE native pause/app-pull key delivery passes; editor/workspace key delivery remains direct-dispatch coverage |
 | Settings persistence and startup registration | Partial | Windows Run entry and KDE autostart toggles pass; actual login/startup launches remain pending |
 | Workspace capture/create/update, best-match update selection, rename/delete/reorder/browser | Partial | Implemented; Rust matching/persistence model and Node editor tests pass; KDE native capture/save/browser pass; Windows capture/review/save and closest-match update draft now pass natively |
 | Workspace launch/reuse, exclude already-consumed windows, wait for new windows, restore placement/state | Partial | KDE native two-window reuse, forced new launch, placement, per-axis maximize/fullscreen pass; Windows owned-window placement/maximize/minimize pass; Windows two-window reuse and separate-process launch now pass natively; physical display-change acceptance remains |
-| Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Partial | Native Windows Firefox158.0.1 and KDE Firefox158 capture/reuse/new-window, selected URL, explicit-profile isolation, floating geometry and editor pass; polling rejects resolved wrong profiles; default-started Firefox without profile arguments still has ambiguous title/app matching and needs separate acceptance |
+| Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Partial | Native Windows Firefox158.0.1 and KDE Firefox158 capture/reuse/new-window, selected URL, explicit-profile isolation, floating geometry and editor pass; polling rejects resolved wrong profiles; live profile-lock ownership now resolves Firefox without profile arguments on Windows and Linux; concurrent same-title profile capture/reuse passes using Mozilla restart-environment startup; ordinary default-selection startup, inaccessible lock evidence and same-profile identical sessions remain separate cases |
 | Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native Ubuntu capture/directory restoration passes; legacy launchers, prompt fallback, and ambiguity have regression coverage; Windows PowerShell and PowerShell7 custom portable-profile GUID, explicit executable, directory and new-window restoration pass; packaged cmd regression and refreshed18-check Konsole editor fixture pass; fresh post-launch identity filtering rejects a concurrent incompatible terminal on Windows/Konsole; selected profile files, shell aliases and exact wrapper launches pass; shared-process/multi-tab and identical or unknown concurrent identity remain limited |
 | Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Partial | Executable launch passes native Windows/KDE fixtures; Calculator AUMID capture/activation/reuse and native KDE desktop-entry URL/document launch, working directory, reuse and missing-target errors pass; native D-Bus service autostart, Activate/Open URI delivery, forced new window, reuse and rejected activation now pass; hosted UWP/packaged Win32 variants remain |
 | Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Partial | Review/import/save verified natively on Windows and KDE; disabled keys, terminal fields, Firefox tabs and geometry retained; legacy package paths resolve a single registered AUMID during unsaved review; missing/ambiguous families stay editable; title/class/exe/PID/HWND/active WinTitle rules now migrate to reviewed selectors; undefined groups/duplicate or unknown criteria remain visible for manual review; both center actions convert |
@@ -1021,3 +1021,77 @@ Next: native Plasma6 Firefox/delayed-window/overlap and remaining input edge
 checks; retain all physical display, app identity, login/startup, installation,
 and other incomplete requirements. Actual corner-barrier geometry remains
 unverified; arbitrary barrier/layout extremes can still return bounded failure.
+
+
+### 2026-10-25 Firefox identity without profile arguments
+
+Capture and workspace restore now share profile resolution from explicit argv,
+then unique live ownership of a discovered profile lock. Linux uses read-only
+F_GETLK against .parentlock. Windows queries Restart Manager, verifies one live
+PID with its creation time, and closes its query session and process handle.
+Neither path acquires/removes/unlocks a browser lock or stops a browser. Stale
+files and ambiguous ownership are not identity proof. Restore retries previously
+unknown startup evidence; positive results are cached only for that restore.
+Existing fallback behavior remains when evidence cannot be read.
+
+Portafort's old binary reproduced empty profile/tabs and an ambiguity review note
+with two registered profiles, identical titles and no profile arguments.
+`portafort-warp-gui-20261025-firefox-lock-startup` failed at the intended capture
+assertion. Corrected `portafort-warp-gui-20261025-firefox-lock-fixed` passed27
+checks, including exact profile/tab capture, reuse, new-window restoration and
+rejecting the other profile even when the saved window ID points at it.
+The route was WSL -> Hoster -> Portafort. Receipts:
+`src-tauri/target/kde-validation/firefox-lock-{before,fixed}/`.
+
+Windows native13checks pass with clean owned-process cleanup:
+`src-tauri/target/windows-validation/WARP-NATIVE-eca3b6a4-5b93-4f3f-a41d-386372cdbd73/`.
+The test proves both real browser owners lack profile arguments, captures both
+same-title profiles despite a conflicting registry default, and checks reuse,
+new-window tabs/placement, wrong-profile rejection and the editor. Both platforms
+use Mozilla XRE restart-environment selection for this no-argv case; ordinary
+profiles.ini default startup is still separate coverage, not claimed here.
+
+Windows79Rust pass/6ignored, Linux74Rust pass/1ignored,129Node pass. Initial
+Linux compile failed at an inferred libc cast; the explicit short type fixed it.
+Final normal Windows debug, NSIS and Linux/Deb builds pass. Current Linux binary:
+`eb3eb31289926b45700957ed248bc5f6ff4a83f6fe30c6579859f06036d08886`.
+Debian package SHA256:
+`58fd184c9fbb02b8f992eaa5cd4c1621f2d0652064c3047922da534eb9d0c1c4`.
+NSIS SHA256:
+`532b88253705b8069d2c88ff59a8f78accfd9c34bcfa1df3207c7e42d836b813`.
+No package installed. Independent review found no remaining scoped findings.
+
+Expanded Plasma6 input/Firefox tests initially stopped on missing gdbus. The
+runtime Dockerfile now declares libglib2.0-bin; rebuilt image
+`sha256:434ca661d472adef8da33cf288b4d84ebf71b96a039c0e4687a0c3cade9accd4`
+is ready. Units ending plasma6-input-edges-ready and plasma6-firefox-overlap-ready
+are active at this checkpoint; record their actual results before acceptance.
+
+A separate isolated KWin6.3.6 companion prototype proves independent physical
+K/L release via keyStateChanged, runtime load/unload, configured-key filtering,
+owner-loss disarm, token rejection and unchanged focus. It reproduces the same
+premature KGlobalAccel release as5.27. This is capability evidence only: production
+integration, authenticated lifecycle, packaging for each KWin ABI and5.27 support
+remain required. Source/receipt under target/kwin-companion-spike must be
+preserved; it is not shipped or enabled in the normal desktop. All incomplete
+parity rows remain active.
+
+
+Expanded Plasma6 results supersede the running status above:
+`hoster-warp-gui-20261025-plasma6-input-edges-ready` exited0 with47checks,
+including timed X/C retiling, expiry/renewal/one-use release, stalled-window key
+release, pause precedence, history/maximize/focus-last retention, held-input
+pause/resume/reassignment, radial cancellation and reviewed UTF-16 import.
+`hoster-warp-gui-20261025-plasma6-firefox-lock-tiles` exited0 with42checks:
+no-argv concurrent-profile identity, capture/reuse/new-window restore, delayed
+maximize/fullscreen four-way and mouse tiling, all burner layouts/round trips,
+one-shot retile and tray cleanup. Receipts use those suffixes under
+src-tauri/target/kde-validation/.
+
+`hoster-warp-gui-20261025-plasma6-firefox-overlap-ready` failed/exit1 at the first
+overlap assertion: first K remained physically held, but the window stayed
+maximized instead of settling left. The isolated companion timeline separately
+proves the early KGlobalAccel release on6.3.6. Full overlapping-chord acceptance
+remains failed on both5.27 and6.3.6 until the app uses real key lifetimes. The
+successful42-check non-overlap run does not supersede or waive that failure.
+All units recorded in this continuation are now terminal.
