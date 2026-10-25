@@ -774,3 +774,93 @@ No merge, push, installation or activation. Original AHK remains unchanged.
 Recoverable pointer implementation checkpoint: `9f1ab8e09fc59410daa3bcf0de21bed6e2d83b64`
 on `codex/cross-platform-app`. This dossier-only follow-up records its immutable SHA.
 Resume with timed X/C retiling; all native pointer test units are terminal.
+
+## Timed X/C retiling — implementation and native acceptance
+
+Ported the one-second post-push retile contract from `RememberLastPushAction`,
+`HandleRetileHotkey` and `EnableRetileHotkeys`. Exact X/C and Super+X/C select
+left/right on the last pushed window's current output, even after focus changes.
+Identity is checked by window ID and PID. One use, expiry or pause clears the
+selection; a later push replaces the target and refreshes the deadline. Pause
+keys retain precedence. Existing shortcuts resume normally after consumption.
+There is no idle key polling or permanently reserved plain typing key.
+
+The shared worker owns timing and cancellation. KDE installs a temporary KWin
+script for unused keys, cleans its KGlobalAccel reservations, and routes existing
+Super+X/C bindings through the pending selection before their normal action.
+App-pull gesture bindings also consult retile before starting a hold. The
+authenticated bridge passes target identity and original push time so script
+startup does not extend the deadline. Startup cleanup reclaims the temporary script.
+
+Windows rejected RegisterHotKey for Super+X and Super+C with error 1409. Its
+temporary native keyboard hook handles only these four exact chords while a
+retile is pending. A consumed Windows-key chord masks standalone Start-menu
+activation; other modifiers pass through. The hook has its own message thread,
+is removed on use/expiry/pause, and retains no keyboard history. Process exit
+cancels selection without waiting on a worker that may need the UI message loop;
+normal pause and tray quit wait for key cleanup.
+
+Source inspection also corrected an earlier parity gap: AHK's
+`GetAdjacentMonitor` wraps a single monitor to itself. Both new backends now
+preserve that behavior, including history, centering and timed retiling. The
+old one-monitor early return/error was removed; the Node regression now checks
+unchanged placement plus retile arming rather than treating the push as a no-op.
+
+Validation:
+- 57 Node tests, JavaScript syntax, Rust formatting and Python syntax pass.
+- Windows Rust: 51 pass, three opt-in native tests ignored in the ordinary run.
+  `WARP_TEST_RETILE=1 cargo test --manifest-path desktop/src-tauri/Cargo.toml native_windows_retile_capture_and_release -- --ignored`
+  separately passes. It uses an owned edit window, checks all four physical
+  chords, prevents reserved Windows menus, removes the hook and verifies typing.
+- Full native Windows receipt
+  `desktop/src-tauri/target/windows-validation/WARP-NATIVE-0faae945-a181-464b-a6ce-f4fe58958af9/`
+  passes 30 checks. Push-to-retile covers changed focus, all chords, one use,
+  expiry, consecutive-push renewal, pause/resume and single-monitor wrap/centering.
+  Physical multi-monitor geometry is the only explicit skip. The normal debug
+  build restored successfully. Earlier 25-check regression receipt `994030f5`
+  predates the one-monitor wrap correction; use the full UUID receipt above.
+- Linux final build `hoster-warp-build-20261025-retile-wrap` is inactive/exit 0,
+  with 48 Rust tests (one X11 opt-in ignored), executable and Debian package.
+- Native KDE `hoster-warp-gui-20261025-retile-final` is inactive/exit 0 with 38
+  checks using `--hold --pointer --retile --resume-held --reassign-native --radial --import`.
+  It adds real Super+X/C, modified-key exclusion, existing-key fallback and pause
+  precedence to focus/expiry/renewal/cleanup checks. Reports/logs/screenshots are
+  saved locally in `desktop/src-tauri/target/kde-validation/retile/` and remotely
+  in `~/.cache/window-warp-01a16f69/src-tauri/target/kde-container-retile-final/`.
+  All build and native test units are terminal. Portafort remains untested for
+  this increment; KDE runs used the private Hoster container, not the host seat.
+
+Full parity remains incomplete. Next implement/verify packaged Windows and Linux
+desktop-entry launch and finish unsupported legacy match migration, then the
+remaining platform cases in `desktop/PARITY.md`. Physical displays, live Plasma 6,
+Windows Firefox, terminal variants, login launches, tray/installer acceptance and
+independent final release review remain required. No merge, push, installation
+or user-session activation; original AHK files are unchanged.
+
+### Retile increment review and delayed-reply regression
+
+Independent native reviewer `/root/retile_review` inspected the increment and
+native receipts and independently reran 57 Node tests. It found one P2: consumed
+KDE typing keys were cleared only after window I/O, so a delayed control reply
+could retain X/C reservations until the five-second timeout. This is an increment
+review, not final release approval. The parent owns implementation and native tests.
+
+The proposed correction clears native capture before window I/O and then checks
+the generation, preserving a newer push's target. The new private KDE fault
+fixture keeps the control action registered but withholds its reply; it checks
+key reservation release and actual ordinary C input in the owned Qt window while
+the request is pending. Its original control script is restored in `finally`.
+The standalone KWin regression fixture now records ArmRetile notifications and
+passes in `hoster-warp-live-20261025-retile` (inactive/exit 0).
+
+The pre-fix binary reproduces the finding in
+`hoster-warp-gui-20261025-retile-delay-before` (failed/exit 1): X remains reserved
+as `[88]` after the three-second cleanup deadline while window I/O waits. This
+checkpoint preserves that implementation and the reproducer so the red receipt
+is recoverable from branch history; it is not release-ready. The working tree's
+four-line cleanup-order correction is being tested separately. The reviewer
+rechecked the correction and test and reported no further findings.
+
+Corrected Windows native run is
+`WARP-NATIVE-6c823d34-8ae8-4c2b-b715-295a376939a3`. Its final result and the corrected
+Linux build/native acceptance still need recording. Poll existing runs first.

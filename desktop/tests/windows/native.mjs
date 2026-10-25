@@ -460,7 +460,7 @@ try {
     checks.push("second instance exits and preserves the existing app and settings");
     const pointerConfig = await invoke("get_config");
     const monitorAreas = await invoke("get_import_monitors");
-    if (monitorAreas.length > 1) {
+    {
         await invoke("set_enabled",{enabled:false});
         const centered = structuredClone(pointerConfig);
         centered.bindings = ["push-left-center","push-right-center","pull"].map((action,i)=>({label:action,action,shortcut:`Ctrl+Alt+Shift+F${13+i}`,enabled:true,appMatch:""}));
@@ -473,16 +473,44 @@ try {
         const primaryArea = monitorAreas.find(r=>r.x<=0 && r.x+r.width>0 && r.y<=0 && r.y+r.height>0) || monitorAreas.find(r=>r.x===0) || monitorAreas[0];
         for (const key of [13,14]) {
             await press(key);
-            const moved = await until(readOwned,w=>w.monitor !== before.monitor,"centered push reaches another monitor");
+            const moved = await until(readOwned,w=>monitorAreas.length===1 || w.monitor !== before.monitor,"centered push wraps to its destination monitor");
             assert.deepEqual(await native("pointer_position"),centerOf(moved.workArea));
             await press(15);
             await until(readOwned,w=>w.monitor===before.monitor && w.rect.x===before.rect.x && w.rect.width===before.rect.width,"history pull restores owned window");
             assert.deepEqual(await native("pointer_position"),centerOf(primaryArea));
         }
+        checks.push("native centered push in both directions and history pull use the destination and primary pointer centers");
+        for (const [key,meta] of [[88,false],[67,false],[88,true],[67,true]]) {
+            await placeOwned(); await press(13); await sleep(80);
+            const pushed = await readOwned();
+            await native("plain_press",{key,meta,window:fixture.windows[1]});
+            const r = pushed.workArea, half = Math.floor(r.width/2);
+            const expected = key===88 ? {...r,width:half} : {...r,x:r.x+half,width:r.width-half};
+            await until(readOwned,w=>w.active && Object.entries(expected).every(([k,v])=>w.rect[k]===v),"retile acts on the pushed window after focus changes");
+            await native("plain_press",{key:key===88?67:88});
+            assert.deepEqual((await readOwned()).rect,expected,"a consumed push must not tile twice");
+        }
+        checks.push("native X/C and Super+X/C retile the pushed window after focus changes and consume each push once");
+        await placeOwned(); await press(13);
+        const expired = (await readOwned()).rect;
+        await sleep(1150); await native("plain_press",{key:88});
+        assert.deepEqual((await readOwned()).rect,expired);
+        checks.push("native Windows retile expires after one second");
+        await placeOwned(); await press(13); await sleep(550); await press(14); await sleep(550);
+        await native("plain_press",{key:67});
+        const renewed = (await readOwned()).workArea, half = Math.floor(renewed.width/2);
+        await until(readOwned,w=>w.rect.x===renewed.x+half && w.rect.width===renewed.width-half,"second push refreshes retile deadline");
+        checks.push("native consecutive pushes refresh the Windows retile deadline");
+        await placeOwned(); await press(13);
+        const paused = (await readOwned()).rect;
+        await invoke("set_enabled",{enabled:false}); await invoke("set_enabled",{enabled:true});
+        await native("plain_press",{key:88});
+        assert.deepEqual((await readOwned()).rect,paused);
+        checks.push("native Windows pause cancels retile and resume does not revive it");
         await invoke("set_enabled",{enabled:false});
         await invoke("save_config",{config:pointerConfig});
-        checks.push("native centered push in both directions and history pull use the destination and primary pointer centers");
-    } else skipped.push("Centered monitor push requires a second connected Windows monitor");
+    }
+    if (monitorAreas.length < 2) skipped.push("Physical Windows multi-monitor push geometry requires a second display; one-monitor wrap and retile are verified");
     report.passed = true;
 } catch (error) {
     report.error = String(error.stack || error);

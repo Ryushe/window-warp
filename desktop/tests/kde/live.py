@@ -25,7 +25,13 @@ if "--radial" in sys.argv:
 if len(sys.argv) > 1 and sys.argv[1] in ["--other", "--workspace", "--workspace-single", "--hold"]:
     app.setApplicationName("WindowWarpOtherSmoke")
     app.setDesktopFileName("com.windowwarp.hold-smoke" if sys.argv[1] == "--hold" else "com.windowwarp.other-smoke")
-    other_window = QWidget()
+    class InputWindow(QWidget):
+        def keyPressEvent(self, event):
+            if os.environ.get("WARP_INPUT_LOG"):
+                with Path(os.environ["WARP_INPUT_LOG"]).open("a") as output:
+                    output.write(json.dumps({"key":event.key(),"text":event.text()})+"\n")
+            super().keyPressEvent(event)
+    other_window = InputWindow()
     other_window.setWindowTitle("WARP-TEST-C")
     other_window.resize(400, 300)
     other_window.show()
@@ -82,6 +88,9 @@ class PointerReceiver(QObject):
     @pyqtSlot(str, str)
     def CenterPointer(self, token, point):
         result.setdefault("pointerRequests", []).append(json.loads(point))
+    @pyqtSlot(str, str, str)
+    def ArmRetile(self, token, window, pushed_at):
+        result.setdefault("retileRequests", []).append({"window":json.loads(window),"pushedAt":int(pushed_at)})
 
 pointer_receiver = PointerReceiver()
 assert bus.registerObject("/Control", pointer_receiver, QDBusConnection.ExportAllSlots)

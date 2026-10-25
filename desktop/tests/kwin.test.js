@@ -160,12 +160,13 @@ test("app matching is exact, cycles instances, and restores a minimized app", ()
     assert.equal(f.workspace.activeWindow, f.window);
     assert.equal(f.shortcuts.get("Window Warp: Firefox").key, "Meta+F");
 });
-test("one-monitor push is a no-op", () => {
+test("one-monitor push wraps in place and still arms retiling", () => {
     const f = fixture([push]);
     f.workspace.screens = [f.left];
     const before = clone(f.window.frameGeometry);
     f.trigger("Push");
     assert.deepEqual(clone(f.window.frameGeometry), before);
+    assert.equal(f.calls.filter(c=>c[3]==="ArmRetile").length,1);
 });
 
 test("Plasma 5 uses screen indexes and restores a pushed window", () => {
@@ -267,4 +268,23 @@ for (const legacy of [false,true]) test(`pointer centers only on requested push 
     assert.equal(centers().length,3);
     f.warp.run(binding,undefined,{x:-1800,y:200}); // hold tile does not move pointer
     assert.equal(centers().length,3);
+});
+
+for (const legacy of [false,true]) test(`push arms retile for the moved identity and an existing key falls back only when unconsumed on Plasma ${legacy ? 5 : 6}`, () => {
+    const f = fixture([push,{label:"Existing",shortcut:"Super+C",action:"tile-up"}],legacy);
+    f.window.pid = 73;
+    f.trigger("Push");
+    const arm = f.calls.find(c=>c[3]==="ArmRetile");
+    assert.deepEqual(JSON.parse(arm[5]),{id:"a",pid:73});
+    assert.ok(Math.abs(Number(arm[6])-Date.now()) < 1000);
+    const before = clone(f.window.frameGeometry);
+    f.trigger("Existing");
+    const consumed = f.calls.at(-1);
+    assert.equal(consumed[3],"Retile");
+    assert.equal(consumed[5],"Super+C");
+    consumed.at(-1)(true);
+    assert.deepEqual(clone(f.window.frameGeometry),before);
+    f.trigger("Existing");
+    f.calls.at(-1).at(-1)(false);
+    assert.equal(f.window.frameGeometry.height,960);
 });

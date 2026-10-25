@@ -206,7 +206,7 @@ try:
                         raise RuntimeError("Tap requires fixture-held modifiers and a fresh key")
                     send_keys([key])
                     send_keys([key], release=True)
-            elif command in ("focus", "press", "hold_start", "place"):
+            elif command in ("focus", "press", "plain_press", "hold_start", "place"):
                 hwnd = int(request.get("window", windows[0]))
                 owned(hwnd)
                 user.ShowWindow(hwnd, 9)
@@ -259,13 +259,18 @@ try:
                             last_pointer = (point.x,point.y)
                 if user.GetForegroundWindow() != hwnd:
                     raise RuntimeError(f"Owned fixture could not take focus for {command}; no keys sent (requested={hwnd}, foreground={user.GetForegroundWindow()})")
-                if command in ("press", "hold_start"):
+                if command in ("press", "plain_press", "hold_start"):
                     if any(user.GetAsyncKeyState(key) & 0x8000 for key in (0x10, 0x11, 0x12, 0x5B, 0x5C)):
                         raise RuntimeError("A modifier is already held; no keys sent")
-                    keys = [0x11, 0x12, 0x10, request["key"]]
+                    if command == "plain_press":
+                        if request["key"] not in (88,67):
+                            raise RuntimeError("Only X/C are supported by the retile fixture")
+                        keys = ([0x5B] if request.get("meta",False) else []) + [request["key"]]
+                    else:
+                        keys = [0x11, 0x12, 0x10, request["key"]]
                     held_keys = keys.copy()
                     send_keys(keys)
-                    if command == "press":
+                    if command in ("press", "plain_press"):
                         send_keys(list(reversed(keys)), release=True)
                         held_keys = []
             else:

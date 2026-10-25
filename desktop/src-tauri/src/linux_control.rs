@@ -28,6 +28,25 @@ struct Endpoint {
 }
 #[zbus::interface(name = "com.windowwarp.Control")]
 impl Endpoint {
+    fn arm_retile(&self, token: &str, window: &str, pushed_at: &str) {
+        if token != self.token {
+            return;
+        }
+        let Ok(target) = serde_json::from_str::<crate::retile::Target>(window) else {
+            return;
+        };
+        let Ok(pushed_at) = pushed_at.parse::<i64>() else {
+            return;
+        };
+        let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+            return;
+        };
+        let age = (now.as_millis() as i64).saturating_sub(pushed_at).max(0) as u64;
+        crate::retile::arm(target, Duration::from_millis(1000u64.saturating_sub(age)));
+    }
+    fn retile(&self, token: &str, key: &str) -> bool {
+        token == self.token && crate::retile::fire(key)
+    }
     fn center_pointer(&self, token: &str, point: &str) {
         if token != self.token {
             return;

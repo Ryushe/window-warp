@@ -118,6 +118,11 @@
             window.minimized = placement.minimized;
             reply(job, rect(requested));
             return;
+        } else if (command.kind === "retile") {
+            var output = Warp.outputFor(window, Warp.screens());
+            if (!output) throw new Error("The window's monitor disconnected.");
+            Warp.focus(window);
+            Warp.tile(window, output, command.direction);
         } else if (command.kind === "focus") Warp.focus(window);
         else throw new Error("Unknown window command.");
         reply(job, true);

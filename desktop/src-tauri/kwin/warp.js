@@ -177,7 +177,7 @@ var Warp = (function () {
             tile(window, all[current], binding.action);
             return;
         }
-        if (all.length < 2 || !window.moveableAcrossScreens) return;
+        if (!window.moveableAcrossScreens) return;
         var next = (current + (binding.action.indexOf("push-left") === 0 ? all.length-1 : 1)) % all.length;
         var original = copy(window.frameGeometry);
         if (history.length >= 100) history.shift();
@@ -186,6 +186,8 @@ var Warp = (function () {
         // KWin retains maximize/fullscreen state when sending to another output.
         // For floating windows, apply the same relative placement as Windows.
         window.frameGeometry = relative(original, source, area(all[next]));
+        callDBus(WARP_APP.service, "/Control", "com.windowwarp.Control", "ArmRetile", WARP_APP.token,
+            JSON.stringify({id:String(window.internalId), pid:Number(window.pid || 0)}), String(Date.now()));
         if (binding.action === "push-left-center" || binding.action === "push-right-center") centerPointer(all[next]);
     }
     WARP_CONFIG.bindings.forEach(function (binding, index) {
@@ -206,6 +208,9 @@ var Warp = (function () {
                     var pointer = workspace.cursorPos;
                     callDBus(WARP_APP.service, "/Control", "com.windowwarp.Control", "GesturePointer", WARP_APP.token, holdId,
                         JSON.stringify({x: Math.round(pointer.x), y: Math.round(pointer.y)}));
+                } else if ((binding.shortcut === "Super+X" || binding.shortcut === "Super+C") && binding.action !== "toggle-pause") {
+                    callDBus(WARP_APP.service, "/Control", "com.windowwarp.Control", "Retile", WARP_APP.token, binding.shortcut,
+                        function(consumed) { if (!consumed) run(binding); });
                 } else run(binding);
             } catch (error) { print("Window Warp: " + String(error)); }
         })) throw new Error("Could not register " + shortcut);

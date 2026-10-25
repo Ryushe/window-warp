@@ -221,3 +221,16 @@ The installed Debian/RPM desktop entry declares
 `X-KDE-Wayland-Interfaces=org_kde_kwin_fake_input` and an absolute executable path.
 A standalone development executable needs a matching desktop entry to center the
 pointer on Wayland. Never disable KWin's permission checks on the user's desktop.
+
+### Timed retile acceptance
+
+Add `--retile` with `--hold` to verify native X/C and Super+X/C delivery after a
+push. The fixture checks changed focus, one-use consumption, an existing Super+C
+binding, Ctrl+X exclusion, expiry, consecutive-push renewal, pause/resume and an
+explicitly configured pause key taking precedence. It checks actual KGlobalAccel
+reservation cleanup after use and expiry. All targets belong to the fixture.
+
+The combined `--hold --pointer --retile --resume-held --reassign-native --radial --import`
+run passes 38 checks on Plasma 5.27. Receipt:
+`src-tauri/target/kde-validation/retile/`, remote service
+`hoster-warp-gui-20261025-retile-final` (exit 0). Plasma 6 remains a native acceptance gap.

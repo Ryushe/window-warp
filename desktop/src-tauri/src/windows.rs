@@ -583,9 +583,6 @@ unsafe fn execute(binding: &Binding, settings: &Settings) -> Result<(), String> 
     if action.starts_with("tile-") {
         return place(hwnd, tile_rect(area, action), false);
     }
-    if all.len() < 2 {
-        return Err("Connect a second monitor to push windows.".into());
-    }
     let next = if action == "push-left" || action == "push-left-center" {
         (index + all.len() - 1) % all.len()
     } else {
@@ -605,6 +602,13 @@ unsafe fn execute(binding: &Binding, settings: &Settings) -> Result<(), String> 
         rect: old,
         maximized,
     });
+    crate::retile::arm(
+        crate::retile::Target {
+            id: (hwnd as usize).to_string(),
+            pid,
+        },
+        std::time::Duration::from_secs(1),
+    );
     if action.ends_with("-center") {
         center_pointer(all[next].1)?;
     }
@@ -643,6 +647,40 @@ fn unregister_tracked(
         Ok(())
     } else {
         Err(errors.join("; "))
+    }
+}
+
+#[path = "windows_retile.rs"]
+mod retile_hooks;
+pub use retile_hooks::RetileHooks;
+pub fn retile_window(
+    _: &AppHandle,
+    target: &crate::retile::Target,
+    left: bool,
+) -> Result<(), String> {
+    let hwnd = target
+        .id
+        .parse::<usize>()
+        .map_err(|_| "Invalid pushed window identity.")? as HWND;
+    unsafe {
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if IsWindow(hwnd) == 0 || pid != target.pid {
+            return Err("The pushed window closed before it could be tiled.".into());
+        }
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) as usize;
+        let all = monitors()?;
+        let area = all
+            .iter()
+            .find(|(id, _)| *id == monitor)
+            .ok_or("The window's monitor disconnected.")?
+            .1;
+        focus(hwnd)?;
+        place(
+            hwnd,
+            tile_rect(area, if left { "tile-left" } else { "tile-right" }),
+            false,
+        )
     }
 }
 
@@ -695,6 +733,9 @@ pub fn enable(app: &AppHandle, config: &Config) -> Result<(), String> {
             .global_shortcut()
             .on_shortcut(shortcut, move |app, _, event| {
                 if event.state == ShortcutState::Pressed {
+                    if crate::retile::fire(&binding.shortcut) {
+                        return;
+                    }
                     if crate::app_actions::is_control(&binding.action) {
                         crate::app_actions::dispatch(app, &binding.action);
                     } else if binding.action == "pull-app" {

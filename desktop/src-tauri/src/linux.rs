@@ -205,6 +205,34 @@ pub fn enable(app: &AppHandle, config: &Config) -> Result<(), String> {
     crate::linux_gestures::start(app, config)
 }
 
+#[derive(Default)]
+pub struct RetileHooks;
+impl RetileHooks {
+    pub fn install(&mut self, app: &AppHandle, keys: &[String]) -> Result<(), String> {
+        let source = format!(
+            "var endpoint = {}; var keys = {}; keys.forEach(function(key) {{
+                if (!registerShortcut('window-warp-retile-' + key.replace('+','-'), 'Window Warp: retile ' + key, key.replace('Super','Meta'), function() {{
+                    callDBus(endpoint.service, '/Control', 'com.windowwarp.Control', 'Retile', endpoint.token, key);
+                }})) throw new Error('Could not register retile ' + key);
+            }});",
+            crate::linux_control::descriptor(app)?, serde_json::to_string(keys).map_err(|e| e.to_string())?
+        );
+        load_script(app, "window-warp-retile-session", "kwin-retile.js", &source)
+    }
+    pub fn clear(&mut self, _: &AppHandle) -> Result<(), String> {
+        unload_script("window-warp-retile-session")
+    }
+}
+pub fn retile_window(
+    app: &AppHandle,
+    target: &crate::retile::Target,
+    left: bool,
+) -> Result<(), String> {
+    crate::linux_control::request(app, serde_json::json!({
+        "kind":"retile", "window":target, "direction":if left { "tile-left" } else { "tile-right" }
+    })).map(|_| ())
+}
+
 pub(crate) fn enable_window_actions(app: &AppHandle, config: &Config) -> Result<(), String> {
     let mut active = config.clone();
     active.bindings.retain(|b| b.action != "toggle-pause");
@@ -224,6 +252,7 @@ pub(crate) fn disable_window_actions() -> Result<(), String> {
 
 pub fn shutdown(app: &AppHandle) {
     let _ = crate::linux_gestures::stop();
+    let _ = unload_script("window-warp-retile-session");
     let _ = unload_script("window-warp-pause-session");
     crate::linux_control::shutdown(app);
 }
@@ -303,6 +332,7 @@ pub fn load_script(
     Ok(())
 }
 pub fn disable(_: &AppHandle) -> Result<(), String> {
+    unload_script("window-warp-retile-session")?;
     if crate::linux_gestures::pause()? {
         return Ok(());
     }
@@ -342,6 +372,7 @@ fn owns_shortcut(script: &str, id: &str) -> bool {
         return id == script;
     }
     match script {
+        "window-warp-retile-session" => id.starts_with("window-warp-retile-"),
         "window-warp-pause-session" => id.starts_with("window-warp-toggle-pause-"),
         "window-warp-control-session" => id == "window-warp-control-dispatch",
         SCRIPT_NAME => [

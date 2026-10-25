@@ -551,9 +551,17 @@ fn run(app: &AppHandle, receiver: mpsc::Receiver<Event>) {
                 Event::Key { id, pressed, at } => {
                     if let Some(slot) = state.slots.get_mut(&id) {
                         if pressed {
+                            let retiled = crate::retile::fire(&slot.spec.binding.shortcut);
                             let p = slot.pending.get_or_insert_with(|| {
-                                Pending::new(&slot.spec.settings, at, state.desired.is_none())
+                                Pending::new(
+                                    &slot.spec.settings,
+                                    at,
+                                    state.desired.is_none() || retiled,
+                                )
                             });
+                            if retiled {
+                                p.cancelled = true;
+                            }
                             if !p.native_pressed {
                                 p.native_pressed = true;
                                 p.started = at;

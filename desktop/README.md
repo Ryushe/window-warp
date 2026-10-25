@@ -8,6 +8,9 @@ A standalone Tauri 2 application for Windows and **KDE Plasma 5.27 and 6**, with
 - Editable global shortcuts with validation, duplicate detection, and reviewed reassignment.
 - A pause/resume shortcut retained while paused, plus current-app editor and workspace control shortcuts.
 - Push the focused window between monitors, ordered left to right, wrapping at the ends.
+- After a push, press **X** to tile left or **C** to tile right within one second.
+  **Super/Win+X/C** also works. This targets the pushed window even if focus changes;
+  one use, expiry or pausing clears it. A single monitor wraps in place.
 - Pull a pushed window back using a bounded in-memory history.
 - Left/right half tiling using monitor work areas.
 - Focus/cycle existing app windows by executable name (Windows) or resource class/desktop ID (KDE).
@@ -52,12 +55,13 @@ Build outputs are under `src-tauri/target/release/`; installers are under its `b
 
 Use a Plasma 5.27 or 6 session (Wayland or X11) and Qt's qdbus executable. Supported executable names are `qdbus6`, `qdbus-qt6`, `/usr/lib/qt6/bin/qdbus`, and `qdbus`. Package names differ by distribution; for example `qdbus` for Plasma 5, or `qdbus-qt6` / `qt6-tools` for Plasma 6. The app detects the script-object path and the script adapts to each version's window, desktop, and output APIs.
 
-The application loads session-only KWin scripts via the session D-Bus service. KWin registers the shortcuts and performs window operations, so native Wayland windows do not depend on X11 automation. Pause unloads window actions and unheld app-gesture hooks. A cancelled held hook stays installed solely until release, so resuming cannot restart it from autorepeat. The pause/resume binding and workspace command bridge remain available. Quit removes the owned hooks; startup also reclaims hooks left by a crash. The three shared scripts can be manually unloaded with your qdbus executable:
+The application loads session-only KWin scripts via the session D-Bus service. KWin registers the shortcuts and performs window operations, so native Wayland windows do not depend on X11 automation. Pause unloads window actions and unheld app-gesture hooks. A cancelled held hook stays installed solely until release, so resuming cannot restart it from autorepeat. The pause/resume binding and workspace command bridge remain available. Quit removes the owned hooks; startup also reclaims hooks left by a crash. The shared scripts can be manually unloaded with your qdbus executable:
 
 ```sh
 qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript window-warp-session
 qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript window-warp-pause-session
 qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript window-warp-control-session
+qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript window-warp-retile-session
 ```
 
 When KWin reuses a script D-Bus ID, the app uses the scripting startup entry point, which also reconciles configured KWin plugins. Each new script must acknowledge startup before activation succeeds.
@@ -68,7 +72,7 @@ For app identifiers, use the exact resource class or desktop file ID. KWin's win
 
 ## Scope and verification
 
-The full feature port is in progress; [PARITY.md](PARITY.md) tracks the source-derived requirements and verification gaps. Reviewed INI import is available; pointer centering and timed retiling remain pending. The radial picker is implemented on both platforms and passes native Windows/KDE release-selection checks; rapid Escape cancellation on Windows is still unreliable. Tap/hold tiling is implemented on Windows and KDE; see the checklist for native coverage and remaining gesture cases. Terminal capture and new-window restoration have passed native cmd, WSL, and Konsole fixtures; additional profile variants remain to be verified. Workspace capture/reuse/launch, per-axis maximization/fullscreen, and Firefox tab restoration have passed native KDE tests. Startup registration passes native Windows and KDE toggle tests; actual login launches still need validation. Live Windows Firefox, mixed-DPI displays, desktop-imposed minimum sizes, and elevated Windows applications also need coverage. Existing Windows preview installers predate these ongoing changes.
+The full feature port is in progress; [PARITY.md](PARITY.md) tracks the source-derived requirements and verification gaps. Reviewed INI import, pointer centering and timed X/C retiling are implemented. The radial picker passes native Windows/KDE selection, Escape and focus-loss cancellation checks. Tap/hold tiling is implemented on Windows and KDE; see the checklist for native coverage and remaining gesture cases. Terminal capture and new-window restoration have passed native cmd, WSL, and Konsole fixtures; additional profile variants remain to be verified. Workspace capture/reuse/launch, per-axis maximization/fullscreen, and Firefox tab restoration have passed native KDE tests. Startup registration passes native Windows and KDE toggle tests; actual login launches still need validation. Live Windows Firefox, mixed-DPI displays, desktop-imposed minimum sizes, and elevated Windows applications also need coverage. Existing Windows preview installers predate these ongoing changes.
 
 ```sh
 npm test

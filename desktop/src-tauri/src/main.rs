@@ -18,6 +18,7 @@ mod platform;
 mod platform;
 mod process_info;
 mod radial;
+mod retile;
 mod startup;
 mod terminal;
 mod workspaces;
@@ -145,9 +146,16 @@ fn change_enabled(app: &AppHandle, enabled: bool, current: &mut bool) -> Result<
     if enabled {
         let config = get_config(app.clone())?;
         platform::configure_pause(app, &config)?;
-        platform::enable(app, &config)?;
+        retile::start(app, &config)?;
+        if let Err(error) = platform::enable(app, &config) {
+            let _ = retile::stop();
+            return Err(error);
+        }
     } else {
-        platform::disable(&app)?;
+        let retile = retile::stop();
+        let native = platform::disable(&app);
+        retile?;
+        native?;
     }
     *current = enabled;
     let _ = app.emit("warp-enabled", enabled);
@@ -401,7 +409,7 @@ fn main() {
         .expect("Could not start Window Warp")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
-                let _ = platform::disable(app);
+                retile::exiting();
                 platform::shutdown(app);
             }
         });

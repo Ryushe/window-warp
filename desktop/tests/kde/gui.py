@@ -18,7 +18,7 @@ driver_binary = str(Path(sys.argv[2]).resolve())
 output = Path(sys.argv[3]).resolve()
 output.mkdir(parents=True, exist_ok=True)
 session = None
-if any(flag in sys.argv for flag in ["--resume-held", "--reassign-native", "--radial", "--pointer", "--pointer-denied"]) and "--hold" not in sys.argv:
+if any(flag in sys.argv for flag in ["--resume-held", "--reassign-native", "--radial", "--pointer", "--pointer-denied", "--retile"]) and "--hold" not in sys.argv:
     raise ValueError("Native gesture edge checks require --hold and the private compositor")
 if "--pointer" in sys.argv and "--pointer-denied" in sys.argv:
     raise ValueError("Pointer authorization and refusal require separate compositor sessions")
@@ -28,7 +28,7 @@ def kwin_loaded(name="window-warp-session"):
     return subprocess.check_output(["qdbus", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.isScriptLoaded", name], text=True).strip() == "true"
 
 
-if any(kwin_loaded(name) for name in ["window-warp-session", "window-warp-pause-session", "window-warp-control-session"]) or subprocess.run(["pgrep", "-x", "window-warp"], stdout=subprocess.DEVNULL).returncode == 0:
+if any(kwin_loaded(name) for name in ["window-warp-session", "window-warp-pause-session", "window-warp-control-session", "window-warp-retile-session"]) or subprocess.run(["pgrep", "-x", "window-warp"], stdout=subprocess.DEVNULL).returncode == 0:
     raise RuntimeError("Window Warp is already active; refusing to interfere with it")
 
 with socket.socket() as reserved:
@@ -267,7 +267,8 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             from wayland_input import Input
             # App pulls deliberately select a matching window. Give this check
             # its own app identity so previous workspace fixtures cannot win.
-            hold_fixture = subprocess.Popen([sys.executable, fixture_script, "--hold"], env=fixture_env, stdout=log, stderr=log)
+            hold_input = output / "hold-input.jsonl"
+            hold_fixture = subprocess.Popen([sys.executable, fixture_script, "--hold"], env=fixture_env | {"WARP_INPUT_LOG":str(hold_input)}, stdout=log, stderr=log)
             for _ in range(30):
                 hold_windows = [w for w in invoke("get_windows") if w["pid"] == hold_fixture.pid]
                 if len(hold_windows) == 1:
@@ -376,6 +377,133 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                     assert read_pointer() == center
                     report["checks"].append("native KDE left/right centered push and history pull move pointer to the correct monitor")
                     invoke("set_enabled", {"enabled":False})
+                    invoke("save_config", {"config":saved_config})
+                    invoke("set_enabled", {"enabled":True})
+
+                if "--retile" in sys.argv:
+                    invoke("set_enabled", {"enabled":False})
+                    saved_config = invoke("get_config")
+                    retile_config = json.loads(json.dumps(saved_config))
+                    for index, action in enumerate(["push-right","push-left"]):
+                        retile_config["bindings"].append({"label":action,"action":action,"shortcut":f"Ctrl+Alt+Shift+F{8+index}","enabled":True,"appMatch":""})
+                    retile_config["bindings"].append({"label":"Existing Super C","action":"tile-up","shortcut":"Super+C","enabled":True,"appMatch":""})
+                    invoke("save_config", {"config":retile_config})
+                    invoke("set_enabled", {"enabled":True})
+
+                    def retile_keys_assigned():
+                        return subprocess.check_output(["gdbus","call","--session","--dest","org.kde.kglobalaccel","--object-path","/kglobalaccel","--method","org.kde.KGlobalAccel.shortcut",json.dumps(["kwin","window-warp-retile-X","",""])],text=True)
+
+                    def wait_retile(assigned):
+                        deadline = time.monotonic()+3
+                        while time.monotonic() < deadline:
+                            value = retile_keys_assigned()
+                            if ("88" in value) == assigned:
+                                return
+                            time.sleep(0.02)
+                        raise AssertionError(f"Retile key reservation expected {assigned}: {value}")
+
+                    def push_ready(key=66):
+                        chord(key); keys.release()
+                        wait_retile(True)
+                        return owned()
+
+                    def press_retile(key, meta=False):
+                        if meta: keys.key(125,True)
+                        keys.key(key,True); keys.release()
+
+                    reset_window()
+                    moved = push_ready()
+                    destination = moved["workArea"]
+                    left = dict(destination,width=destination["width"]//2)
+                    right = dict(destination,x=destination["x"]+destination["width"]//2,width=destination["width"]-destination["width"]//2)
+                    invoke_shortcut("open-workspaces")
+                    wait_window(lambda w:not w["active"],"change focus after push")
+                    press_retile(45)  # X
+                    wait_window(lambda w:w["active"] and w["rect"] == left,"X tiles the last pushed window after focus changes")
+                    wait_retile(False)
+                    press_retile(46)  # C cannot consume the same push twice.
+                    assert owned()["rect"] == left
+                    report["checks"].append("native KDE X retiles the pushed window after focus changes and consumes the temporary keys once")
+
+                    reset_window(); push_ready()
+                    press_retile(46,True)  # Existing Super+C binding is overridden for this push.
+                    wait_window(lambda w:w["rect"] == right,"Super+C retiles right instead of its usual binding")
+                    wait_retile(False)
+                    press_retile(46,True)
+                    wait_window(lambda w:w["rect"] == dict(destination,height=destination["height"]//2),"existing Super+C binding resumes after consumption")
+                    report["checks"].append("native KDE Super+C temporarily overrides an existing binding and restores its normal action")
+
+                    reset_window(); moved = push_ready()
+                    keys.key(29,True); keys.key(45,True); keys.release()  # Ctrl+X is ordinary input.
+                    assert owned()["rect"] == moved["rect"]
+                    press_retile(45,True)
+                    wait_window(lambda w:w["rect"] == left,"Super+X tiles left after an unrelated modified key")
+                    wait_retile(False)
+                    report["checks"].append("native KDE Super+X tiles left and Ctrl+X does not consume a pending retile")
+
+                    reset_window(); moved = push_ready()
+                    time.sleep(1.1)
+                    wait_retile(False)
+                    press_retile(45)
+                    assert owned()["rect"] == moved["rect"]
+                    report["checks"].append("native KDE retile expires and releases plain typing keys after one second")
+
+                    reset_window(); push_ready()
+                    time.sleep(0.55)
+                    moved = push_ready(67)
+                    time.sleep(0.55)
+                    press_retile(46)
+                    work = moved["workArea"]
+                    expected = dict(work,x=work["x"]+work["width"]//2,width=work["width"]-work["width"]//2)
+                    wait_window(lambda w:w["rect"] == expected,"second push refreshes the one-second retile deadline")
+                    wait_retile(False)
+                    report["checks"].append("native KDE consecutive pushes replace the pending retile and refresh its deadline")
+
+                    reset_window(); push_ready()
+                    # Fault injection stays in this private compositor. Keep the
+                    # control action registered but withhold its reply, so window
+                    # I/O waits for the normal production timeout without blocking
+                    # KWin or its input loop. Restore the original script afterward.
+                    control_source, = Path(temporary).glob("data/**/kwin-control.js")
+                    stalled_source = Path(temporary) / "stalled-control.js"
+                    stalled_source.write_text("registerShortcut('window-warp-control-dispatch','Window Warp: delayed fixture','',function() {});")
+                    def replace_control(source):
+                        subprocess.run(["qdbus","org.kde.KWin","/Scripting","org.kde.kwin.Scripting.unloadScript","window-warp-control-session"],check=True,stdout=log,stderr=log)
+                        subprocess.run(["qdbus","org.kde.KWin","/Scripting","org.kde.kwin.Scripting.loadScript",str(source),"window-warp-control-session"],check=True,stdout=log,stderr=log)
+                        subprocess.run(["qdbus","org.kde.KWin","/Scripting","org.kde.kwin.Scripting.start"],check=True,stdout=log,stderr=log)
+                    try:
+                        replace_control(stalled_source)
+                        hold_input.write_text("")
+                        press_retile(45)
+                        wait_retile(False)  # Must complete before the five-second reply timeout.
+                        press_retile(46)
+                        deadline = time.monotonic()+1
+                        while time.monotonic()<deadline and not any(json.loads(line)["text"].lower()=="c" for line in hold_input.read_text().splitlines()):
+                            time.sleep(0.02)
+                        assert any(json.loads(line)["text"].lower()=="c" for line in hold_input.read_text().splitlines()), "ordinary typing must resume while window I/O is still waiting"
+                        wait_for("return document.querySelector('#message').textContent.includes('KWin did not complete')",timeout=8)
+                        report["checks"].append("native KDE releases consumed retile keys before a stalled window reply and ordinary typing resumes during the wait")
+                    finally:
+                        replace_control(control_source)
+
+                    reset_window(); moved = push_ready()
+                    invoke("set_enabled", {"enabled":False})
+                    wait_retile(False)
+                    invoke("set_enabled", {"enabled":True})
+                    press_retile(45)
+                    assert owned()["rect"] == moved["rect"]
+                    report["checks"].append("native KDE pause cancels pending retile and resume does not revive it")
+                    invoke("set_enabled", {"enabled":False})
+                    for binding in retile_config["bindings"]:
+                        if binding["action"] == "toggle-pause": binding["shortcut"] = "Super+X"
+                    invoke("save_config", {"config":retile_config})
+                    invoke("set_enabled", {"enabled":True})
+                    reset_window(); moved = push_ready()
+                    press_retile(45,True)
+                    wait_for("return document.querySelector('#status').textContent.includes('Paused')")
+                    wait_retile(False)
+                    assert owned()["rect"] == moved["rect"]
+                    report["checks"].append("native KDE an explicitly configured pause key takes precedence over pending retile")
                     invoke("save_config", {"config":saved_config})
                     invoke("set_enabled", {"enabled":True})
 
@@ -849,7 +977,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         if fixture:
             fixture.terminate()
             fixture.wait(timeout=10)
-        for name in ["window-warp-session", "window-warp-pause-session", "window-warp-control-session"]:
+        for name in ["window-warp-session", "window-warp-pause-session", "window-warp-control-session", "window-warp-retile-session"]:
             if kwin_loaded(name):
                 subprocess.run(["qdbus", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", name], check=True)
         # Kill only the process group created by this test's driver.
