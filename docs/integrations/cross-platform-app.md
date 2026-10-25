@@ -1660,3 +1660,9 @@ coverage uses equal-sized outputs; overlap uses two chords targeting one owned
 browser and geometry sampling at50ms plus IPC latency. These do not establish
 mixed-DPI behavior or absence of unobserved sub-sample transitions. Final JS/
 Python syntax and git diff --check passed. Parent retains all integration ownership.
+
+Verified acceptance checkpoint:
+`aa26262704217a75805a8554373348f22e99e491` on `codex/cross-platform-app`.
+This follow-up records the immutable checkpoint. Resume native Plasma6 gesture
+acceptance and true tray/graceful exit before treating the refreshed preview
+packages as release-ready. Full PARITY.md scope remains active and unmerged.
