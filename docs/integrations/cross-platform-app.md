@@ -861,6 +861,22 @@ is recoverable from branch history; it is not release-ready. The working tree's
 four-line cleanup-order correction is being tested separately. The reviewer
 rechecked the correction and test and reported no further findings.
 
-Corrected Windows native run is
-`WARP-NATIVE-6c823d34-8ae8-4c2b-b715-295a376939a3`. Its final result and the corrected
-Linux build/native acceptance still need recording. Poll existing runs first.
+Pre-fix recovery commit: `316ad5d0ddb544bdaa6679801c3521f81b942dd1` on
+`codex/cross-platform-app`. The working tree differs by clearing capture before
+window I/O; this is the pending corrective commit.
+
+Corrected Windows native run
+`WARP-NATIVE-6c823d34-8ae8-4c2b-b715-295a376939a3` passes all 30 checks with the same
+physical second-display skip, and the ordinary debug build restored successfully.
+The corrected Linux build `hoster-warp-build-20261025-retile-cleanup` is inactive/
+exit 0, with 48 Rust tests and the executable/Debian package rebuilt. Native
+`hoster-warp-gui-20261025-retile-cleanup` is inactive/exit 0 with all 39 checks,
+including ordinary C typing while the retile window request awaits its timeout.
+The earlier failure is therefore reproduced and corrected against the same
+fixture, with the earlier source reachable at `316ad5d0ddb544bdaa6679801c3521f81b942dd1`.
+Final artifacts: `desktop/src-tauri/target/kde-validation/retile-cleanup/`;
+pre-fix journal: `desktop/src-tauri/target/kde-validation/retile-delay-before/journal.log`.
+The independent reviewer reported no further findings on the correction/test.
+All retile build/test units are terminal. The release-wide independent review is
+still outstanding; this review covered only this increment. Next: packaged app/
+desktop-entry launch and unsupported legacy match migration, then all PARITY gaps.

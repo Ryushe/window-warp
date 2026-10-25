@@ -198,6 +198,10 @@ fn run(app: &AppHandle, receiver: mpsc::Receiver<Event>, keys: Vec<String>) -> R
         match received {
             Ok(Event::Refresh) | Err(mpsc::RecvTimeoutError::Timeout) => {}
             Ok(Event::Fire(target, left, generation)) => {
+                // A consumed chord must stop capturing typing before window I/O
+                // can block on the compositor or another control request.
+                hooks.clear(app)?;
+                installed = false;
                 let current = SESSION
                     .lock()
                     .map_err(|e| e.to_string())?

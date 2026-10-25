@@ -72,7 +72,7 @@ workspace. The latest import run has 23 passing checks and one explicit skip:
 
 Rapid Escape and native focus-loss cancellation now pass, including five immediate
 Escape taps. The diagnostic skip option was removed. The current full run
-`WARP-NATIVE-0faae945-a181-464b-a6ce-f4fe58958af9` passes 30 checks; its only skip
+`WARP-NATIVE-6c823d34-8ae8-4c2b-b715-295a376939a3` passes 30 checks; its only skip
 is physical multi-monitor geometry. It verifies one-monitor wrapping and the
 complete push-to-retile lifecycle. The ordinary debug build was restored.
 

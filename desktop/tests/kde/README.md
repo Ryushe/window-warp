@@ -231,6 +231,8 @@ explicitly configured pause key taking precedence. It checks actual KGlobalAccel
 reservation cleanup after use and expiry. All targets belong to the fixture.
 
 The combined `--hold --pointer --retile --resume-held --reassign-native --radial --import`
-run passes 38 checks on Plasma 5.27. Receipt:
-`src-tauri/target/kde-validation/retile/`, remote service
-`hoster-warp-gui-20261025-retile-final` (exit 0). Plasma 6 remains a native acceptance gap.
+run passes 39 checks on Plasma 5.27, including a withheld control reply proving
+that ordinary typing resumes before window I/O finishes. The fault injection
+replaces and restores only the private compositor's control script. Receipt:
+`src-tauri/target/kde-validation/retile-cleanup/`, remote service
+`hoster-warp-gui-20261025-retile-cleanup` (exit 0). Plasma 6 remains a native acceptance gap.
