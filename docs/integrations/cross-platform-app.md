@@ -1418,3 +1418,8 @@ in PARITY.md for correction when that path is exercised, without unrelated edits
 Next: Windows Firefox native capture/restore with owned temporary profiles,
 followed by remaining terminal variants, burner/chord cases and final package/
 Plasma6/physical-display/login gates. Keep the full feature-port goal active.
+
+Verified delayed-client implementation checkpoint:
+`99418f684119389c71825f58a292ce8bc429d5e7` on `codex/cross-platform-app`.
+This follow-up only records the immutable checkpoint. Resume Windows Firefox
+native acceptance using owned temporary profiles; preserve all PARITY.md gates.
