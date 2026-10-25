@@ -1,0 +1,9 @@
+{
+    "KPlugin": {
+        "Name": "Window Warp physical shortcut lifetime",
+        "Description": "Tracks only configured Window Warp shortcut cycles",
+        "License": "GPL-2.0-or-later",
+        "EnabledByDefault": false
+    },
+    "X-WindowWarp-KWinVersion": "@WARP_KWIN_VERSION@"
+}

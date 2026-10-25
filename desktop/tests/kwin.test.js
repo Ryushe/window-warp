@@ -397,7 +397,7 @@ for(const kind of ["app-pull","pull-selected"]) test(`control ${kind} replies on
     completion(null); assert.deepEqual(replies.at(-1),{result:true});
 });
 
-test("native hold binding captures its pointer and defers action to press/release handling", () => {
+test("native hold registration cannot dispatch an uncorrelated script gesture", () => {
     const binding = {label:"App",shortcut:"Ctrl+Alt+J",action:"pull-app",appMatch:"firefox"};
     const f = fixture([binding],false,undefined,["owned-generation-0"]);
     f.workspace.cursorPos = {x:-1800,y:200};
@@ -405,19 +405,20 @@ test("native hold binding captures its pointer and defers action to press/releas
     f.trigger("App");
     assert.deepEqual(clone(f.window.frameGeometry),original);
     assert.equal(f.shortcuts.get("Window Warp: App").id,"window-warp-hold-0-Ctrl+Alt+J");
-    assert.deepEqual(f.calls[0].slice(0,6),["fixture","/Control","com.windowwarp.Control","GesturePointer","test","owned-generation-0"]);
+    assert.deepEqual(f.calls,[]);
     f.workspace.cursorPos.x = 500;
-    assert.deepEqual(JSON.parse(f.calls[0][6]),{x:-1800,y:200,previous:{id:"a",pid:0},generation:"generation-1"});
+    f.trigger("App");
+    assert.deepEqual(f.calls,[]);
     const resumed = fixture([binding],false,undefined,["next-generation-0"]);
     assert.equal(resumed.shortcuts.get("Window Warp: App").id,f.shortcuts.get("Window Warp: App").id);
     resumed.workspace.cursorPos = {x:1,y:2};
     resumed.trigger("App");
-    assert.equal(resumed.calls[0][5],"next-generation-0");
+    assert.deepEqual(resumed.calls,[]);
     const independent = fixture([binding],false,undefined,["private-callback"],["window-warp-gesture-1234"]);
     assert.equal(independent.shortcuts.get("Window Warp: App").id,"window-warp-gesture-1234");
     independent.workspace.cursorPos = {x:3,y:4};
     independent.trigger("App");
-    assert.equal(independent.calls[0][5],"private-callback");
+    assert.deepEqual(independent.calls,[]);
 });
 
 for (const legacy of [false,true]) test(`held app pull tiles on main using portrait pointer halves on Plasma ${legacy ? 5 : 6}`, () => {

@@ -68,6 +68,10 @@ The second chord releases before its hold deadline and must not become a tile.
 Both key orders run in the same controller; `firefox-overlap.json` records the
 injected timing and observed geometry. Firefox resumes and keys release on exit.
 
+Add `--companion-loss` with `--hold` to unload the native companion during a
+pending hold in the private compositor. The actual app must cancel the gesture,
+pause its window actions, and recover on explicit enable with a fresh key press.
+
 The Firefox option records `firefox-restore-observations.json` with the last ten
 distinct capture states for its owned browser window. It waits for URL and active
 tab identity rather than assuming a two-tab count means navigation has finished.
@@ -81,6 +85,26 @@ Mozilla's [command-line reference](https://github.com/mozilla-firefox/firefox/bl
 ## Reproducible Linux build environment
 
 `Dockerfile` creates an Ubuntu 24.04 builder; `build.sh` runs Node tests, Rust release tests, a Linux executable build, and Debian packaging. Mount only this source directory at `/work`, run as UID/GID 1000, and constrain container resources as appropriate for the build host. No privileged container or Docker socket mount is required.
+
+Debian packaging requires `WARP_COMPANION_STAGE`, a CMake `DESTDIR` containing
+the installed `windowwarp_companion.so`, and `WARP_KWIN_PACKAGE_VERSION`, the
+exact `dpkg-query -W -f='${Version}' kwin-common` result from its SDK environment.
+The companion must be built against the target distribution's KWin version.
+`build.sh` includes the staged module and its accompanying files in the package
+and declares that exact KWin dependency. Rebuild the companion/package when the
+distribution updates KWin; one native module is not portable between arbitrary
+KWin releases. For an executable-only development build, use
+`npm run build -- --no-bundle`; this does not install the companion.
+After validating that release executable, `bash tests/kde/build.sh --bundle-only`
+packages the same binary and supplied companion stage without rebuilding it.
+
+`Dockerfile.kwin5-sdk` prepares the exact Ubuntu 24.04 KWin 5.27.11 SDK used by
+Portafort, including distribution source and generated private headers that
+`kwin-dev` does not install. It configures KWin but does not build or replace the
+compositor. `Dockerfile.kwin6-sdk` adds the matching installed development package
+to the image from `Dockerfile.plasma6`; its `KWIN_RUNTIME_IMAGE` build argument
+can select a pinned runtime image. Both images are build/test tools, never
+installers for the user's desktop.
 
 ## Verified environment
 
@@ -392,3 +416,19 @@ The separate `plasma6-firefox-overlap-ready` run still fails independent held
 chords, reproducing5.27's semantic-release limitation. Retain its failure receipt
 and validate that requirement after native companion integration; do not infer
 an overlap pass from the successful non-overlap suite.
+
+### Native companion acceptance
+
+The production companion supersedes that script-only overlap failure. Final
+KWin 5.27.11 on Portafort (WSL → Hoster → Portafort) and supplemental KWin 6.3.6
+each pass 31 native protocol checks, 48 actual-app edge checks, and 43 Firefox
+checks including both overlapping chord orders. These use private live nested
+compositors, buses and plugin roots. They do not prove physical keyboard/display
+or ordinary login behavior.
+
+The edge command uses `--hold --pointer --retile --resume-held --reassign-native
+--companion-loss --radial --import --tray`; the Firefox command uses
+`--hold --pointer --firefox --firefox-tiles --overlap --tray`.
+Final receipts are under `src-tauri/target/kde-validation/companion{5,6}-final-{edges,overlap}/`.
+See [the parity checklist](../../PARITY.md) for exact module/package hashes,
+unit names, preserved failing receipts and remaining completion gates.

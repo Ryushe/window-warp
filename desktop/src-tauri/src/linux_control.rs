@@ -13,6 +13,8 @@ const SERVICE: &str = "com.windowwarp.Control";
 const PATH: &str = "/Control";
 pub const SCRIPT: &str = "window-warp-control-session";
 const ACTION: &str = "window-warp-control-dispatch";
+pub const COMPANION_SERVICE: &str = "com.windowwarp.Companion";
+const COMPANION_PATH: &str = "/WindowWarpCompanion";
 
 #[derive(Debug, PartialEq)]
 enum ReplyOutcome {
@@ -53,6 +55,7 @@ struct Endpoint {
     token: String,
     mailbox: Arc<Mutex<Mailbox>>,
     dispatch: mpsc::Sender<Dispatch>,
+    physical_owner: Arc<Mutex<Option<String>>>,
 }
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -110,8 +113,36 @@ fn complete(
         }
     }
 }
-#[zbus::interface(name = "com.windowwarp.Control")]
+// These handlers only enqueue/acknowledge work; none calls D-Bus synchronously.
+// Native callbacks from one companion connection therefore retain their order.
+#[zbus::interface(name = "com.windowwarp.Control", spawn = false)]
 impl Endpoint {
+    fn physical_key(
+        &self,
+        token: &str,
+        generation: &str,
+        id: &str,
+        phase: &str,
+        cycle: u64,
+        capture: &str,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+    ) {
+        if token != self.token
+            || !self
+                .mailbox
+                .lock()
+                .ok()
+                .is_some_and(|m| m.generation.as_deref() == Some(generation))
+            || !self.physical_owner.lock().ok().is_some_and(|owner| {
+                owner.as_ref().is_some_and(|owner| {
+                    Some(owner.as_str()) == header.sender().map(|s| s.as_str())
+                })
+            })
+        {
+            return;
+        }
+        crate::linux_gestures::physical_key(generation, id, phase, cycle, capture);
+    }
     fn input_generation(&self, token: &str) -> String {
         if token != self.token {
             return "null".into();
@@ -282,6 +313,7 @@ pub struct Control {
     mailbox: Arc<Mutex<Mailbox>>,
     dispatch: mpsc::Sender<Dispatch>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    physical_owner: Arc<Mutex<Option<String>>>,
 }
 #[derive(Default)]
 pub struct ControlState(pub Mutex<Option<Arc<Control>>>);
@@ -380,6 +412,7 @@ impl Control {
     fn create(app: &AppHandle) -> Result<Self, String> {
         let mailbox = Arc::new(Mutex::new(Mailbox::default()));
         let token = uuid::Uuid::new_v4().to_string();
+        let physical_owner = Arc::new(Mutex::new(None));
         let (dispatch, receiver) = mpsc::channel();
         let connection = zbus::blocking::connection::Builder::session()
             .map_err(|e| e.to_string())?
@@ -392,6 +425,7 @@ impl Control {
                     token: token.clone(),
                     mailbox: mailbox.clone(),
                     dispatch: dispatch.clone(),
+                    physical_owner: physical_owner.clone(),
                 },
             )
             .map_err(|e| e.to_string())?
@@ -425,7 +459,111 @@ impl Control {
             mailbox,
             dispatch,
             worker: Mutex::new(Some(worker)),
+            physical_owner,
         })
+    }
+    fn configure_physical(&self, bindings: Value) -> Result<(), String> {
+        let empty = bindings.as_array().is_none_or(Vec::is_empty);
+        let previous = {
+            let mut owner = self.physical_owner.lock().map_err(|e| e.to_string())?;
+            // Detach locally even if owner lookup or the remote call fails.
+            // A later cleanup must not authenticate or retry a stale owner.
+            if empty {
+                owner.take()
+            } else {
+                owner.clone()
+            }
+        };
+        if empty && previous.is_none() {
+            return Ok(());
+        }
+        let bus = zbus::blocking::Proxy::new(
+            &self.connection,
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+        )
+        .map_err(|e| e.to_string())?;
+        let owner: String = if let Some(owner) = previous.filter(|_| empty) {
+            owner
+        } else {
+            match bus.call("GetNameOwner", &(COMPANION_SERVICE,)) {
+                Ok(owner) => owner,
+                Err(_) => {
+                    let plugins = zbus::blocking::Proxy::new(
+                        &self.connection,
+                        "org.kde.KWin",
+                        "/Plugins",
+                        "org.kde.KWin.Plugins",
+                    )
+                    .map_err(|e| e.to_string())?;
+                    // An explicit enable may recover a loaded module which
+                    // detached after callback failure. Never unload on pause.
+                    let loaded: Vec<String> =
+                        plugins.get_property("LoadedPlugins").map_err(|e| {
+                            format!("Cannot inspect the KWin companion installation: {e}")
+                        })?;
+                    if loaded.iter().any(|name| name == "windowwarp_companion") {
+                        plugins
+                            .call::<_, _, ()>("UnloadPlugin", &("windowwarp_companion",))
+                            .map_err(|e| {
+                                format!("Cannot reset the inactive Window Warp companion: {e}")
+                            })?;
+                    }
+                    plugins.call::<_, _, bool>("LoadPlugin", &("windowwarp_companion",))
+                        .map_err(|e| format!("KDE app shortcuts require the Window Warp companion for this KWin version. Could not load it: {e}"))?;
+                    bus.call("GetNameOwner", &(COMPANION_SERVICE,))
+                        .map_err(|e| format!("The Window Warp physical-key companion is unavailable. Install the package matching this KWin version: {e}"))?
+                }
+            }
+        };
+        let kwin_owner: String = bus
+            .call("GetNameOwner", &("org.kde.KWin",))
+            .map_err(|e| format!("Cannot identify the running KWin compositor: {e}"))?;
+        if owner != kwin_owner {
+            return Err("The physical-key companion is not owned by the running KWin compositor. Shortcuts were not enabled.".into());
+        }
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            owner.as_str(),
+            COMPANION_PATH,
+            COMPANION_SERVICE,
+        )
+        .map_err(|e| e.to_string())?;
+        if !empty {
+            let info: String = proxy
+                .call("Info", &())
+                .map_err(|e| format!("Cannot read the Window Warp companion version: {e}"))?;
+            let info: Value = serde_json::from_str(&info)
+                .map_err(|e| format!("Invalid Window Warp companion version: {e}"))?;
+            if info["protocol"].as_u64() != Some(1) {
+                return Err("The Window Warp physical-key companion has an incompatible protocol. Install the matching companion package.".into());
+            }
+        }
+        let generation = self
+            .mailbox
+            .lock()
+            .map_err(|e| e.to_string())?
+            .generation
+            .clone()
+            .unwrap_or_default();
+        *self.physical_owner.lock().map_err(|e| e.to_string())? = (!empty).then(|| owner.clone());
+        let result = proxy
+            .call::<_, _, ()>(
+                "Configure",
+                &(
+                    self.token.as_str(),
+                    generation.as_str(),
+                    bindings.to_string().as_str(),
+                ),
+            )
+            .map_err(|e| {
+                format!("Could not configure the Window Warp physical-key companion: {e}")
+            });
+        if result.is_err() {
+            *self.physical_owner.lock().map_err(|e| e.to_string())? = None;
+        }
+        result
     }
     fn request_scoped(
         &self,
@@ -510,8 +648,42 @@ pub fn configure_session(app: &AppHandle, enabled: bool) -> Result<(), String> {
         .lock()
         .map_err(|e| e.to_string())?
         .generation = generation.clone();
-    control.request(json!({"kind":"input-session","generation":generation}))?;
-    Ok(())
+    let physical = if !enabled {
+        control.configure_physical(json!([]))
+    } else {
+        Ok(())
+    };
+    let session = control
+        .request(json!({"kind":"input-session","generation":generation}))
+        .map(|_| ());
+    let errors: Vec<_> = [physical, session]
+        .into_iter()
+        .filter_map(Result::err)
+        .collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+pub fn configure_physical(app: &AppHandle, bindings: Value) -> Result<(), String> {
+    control(app)?.configure_physical(bindings)
+}
+
+pub fn generation_active(app: &AppHandle, generation: &str) -> bool {
+    app.state::<ControlState>()
+        .0
+        .lock()
+        .ok()
+        .and_then(|state| state.as_ref().cloned())
+        .is_some_and(|control| {
+            control
+                .mailbox
+                .lock()
+                .ok()
+                .is_some_and(|m| m.generation.as_deref() == Some(generation))
+        })
 }
 pub fn input_request(
     app: &AppHandle,

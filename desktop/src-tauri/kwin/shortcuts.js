@@ -15,15 +15,16 @@
         var holdId = typeof WARP_HOLD_IDS !== "undefined" && WARP_HOLD_IDS[index];
         if (holdId) id = typeof WARP_HOLD_NATIVE_IDS !== "undefined" ? WARP_HOLD_NATIVE_IDS[index] : "window-warp-hold-" + index + "-" + binding.shortcut;
         if (!registerShortcut(id, "Window Warp: " + binding.label, shortcut, function () {
+            // The native companion observes accepted activation and captures
+            // its physical key cycle before asynchronous script dispatch. The
+            // script only registers this shortcut; it must not emit a second,
+            // uncorrelated pointer sample or act on programmatic invocation.
+            if (holdId) return;
             try {
                 var current = modern ? workspace.activeWindow : workspace.activeClient;
                 var target = current && !current.deleted ? {id:String(current.internalId), pid:Number(current.pid || 0)} : null;
                 var capturedAt = Date.now();
-                if (holdId) {
-                    var pointer = workspace.cursorPos;
-                    callDBus(WARP_APP.service, "/Control", "com.windowwarp.Control", "GesturePointer", WARP_APP.token, holdId,
-                        JSON.stringify({x:Math.round(pointer.x), y:Math.round(pointer.y), previous:target, generation:WARP_APP.generation}));
-                } else if (["toggle-pause", "open-editor", "open-workspaces", "update-workspace"].indexOf(binding.action) >= 0) {
+                if (["toggle-pause", "open-editor", "open-workspaces", "update-workspace"].indexOf(binding.action) >= 0) {
                     callDBus(WARP_APP.service, "/Control", "com.windowwarp.Control", "Action", WARP_APP.token, binding.action);
                 } else {
                     var forward = function() {

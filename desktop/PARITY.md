@@ -13,7 +13,7 @@ have been exercised. Bundles are rebuilt at the checkpoints below; installer exe
 | Maximize/restore toggle (original “fullscreen”); graceful close | Partial | Saved floating geometry survives maximized moves and history pull on Windows and KDE; KDE rapid double-toggle and same-script maximize/burner ordering pass, including real Portafort 5.27.11; Windows close honors an application's veto; KDE registration reload retains caches and shortcut/workspace actions share the persistent geometry queue; delayed Firefox tiling/fullscreen transitions pass on Plasma5.27 and6.3.6; physical display variants remain |
 | App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Tiled burner round trip live KDE verified; Windows native pull and all four one-monitor burner fallbacks pass; KDE all burner layouts pass with delayed Firefox, including floating/maximized round trips; Windows all layouts and return pulls pass on two physical monitors; Plasma6 delayed Firefox burner/return-pull layouts now pass; mixed-DPI layouts remain |
 | App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE and Windows focus-last/minimized checks pass, including previous-focus retention across pause/configuration reload; Windows pull/focus restore minimized floating geometry; compound title/class/executable/PID matching, full-path focus and tap/radial consistency pass; Plasma6 focus-last retention now passes, with broader app identity/minimized variants still open |
-| Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE native key delivery verifies tap, hold, repeats, pause cancellation and disabled hold; resume before key release and reassignment while held now pass; Windows distinct overlapping chords pass; tested Plasma5.27 and6.3.6 both end the first shortcut when another activates, so independent overlapping holds fail; Plasma6 tap/hold/repeat/pause/disabled-hold/resume/reassignment checks pass; native companion capability is proven separately but not integrated |
+| Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE native key delivery verifies tap, hold, repeats, pause cancellation and disabled hold; resume before key release and reassignment while held now pass; Windows distinct overlapping chords pass; native companion now provides independent physical cycles on Plasma5.27 and6.3.6; final43-check app runs pass both overlap orders and48-check edge runs pass pause/resume/reassignment and provider-loss recovery on both; X11 gestures and physical keyboard acceptance remain |
 | Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows and KDE native selection/dead-zone/Escape/pause checks pass; focus loss cancels before release, including Windows Alt+Escape; shared eight-slot layout/order tested; Plasma6 native selection/dead-zone/Escape/focus-loss/pause now pass; physical portrait/mixed-DPI remain |
 | Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed reassignment tested; native KDE current-app capture and physical-key reassignment pass; Windows native current-app capture, key recording, reassignment and persistence pass |
 | Global pause/resume hotkey stays available while paused; editor/workspace/update hotkeys | Partial | Implemented with separate pause registration; native KDE KGlobalAccel action dispatch passes; Windows OS key delivery, lifecycle and registration-failure recovery pass; KDE native pause/app-pull key delivery passes; editor/workspace key delivery remains direct-dispatch coverage |
@@ -30,8 +30,9 @@ have been exercised. Bundles are rebuilt at the checkpoints below; installer exe
 
 Portafort's Plasma 5.27 KGlobalAccel component exposes both
 `globalShortcutPressed` and `globalShortcutReleased` on the session bus (verified
-by live introspection). This provides an event-driven basis for hold detection;
-the JavaScript shortcut callback alone is insufficient. KDE's workspace exposes
+by live introspection). Those signals end a shortcut when another activates, so they are not physical
+release evidence. The native companion now supplies independent key cycles
+while preserving KWin shortcut acceptance; see the latest increment below. KDE's workspace exposes
 read-only cursor position, so pointer warping requires a compositor-supported
 integration beyond assigning `workspace.cursorPos`.
 
@@ -1095,3 +1096,85 @@ proves the early KGlobalAccel release on6.3.6. Full overlapping-chord acceptance
 remains failed on both5.27 and6.3.6 until the app uses real key lifetimes. The
 successful42-check non-overlap run does not supersede or waive that failure.
 All units recorded in this continuation are now terminal.
+
+### Native physical-cycle integration — in progress
+
+The next companion probe establishes a synchronous join between an accepted
+KGlobalAccel activation and its physical key event. The local Component signal
+runs inside KWin's key processing. A trailing direct connection on the same
+input device clears the candidate after KWin returns; a programmatic activation
+after that boundary is rejected. The private Plasma6 dispatch-boundary probe
+also confirms KWin's modal window selector suppresses the shortcut. This avoids
+pairing unrelated asynchronous press and pointer callbacks by arrival order.
+
+The exact Ubuntu `4:5.27.11-0ubuntu3` SDK compiles/links the probe against
+Portafort's KWin5 ABI. Via WSL → Hoster → Portafort, the private native probe
+verifies a distinct session bus, the compositor's actual PID/executable and its
+plugin path, then discovers a newly copied module, loads it and unloads it.
+`portafort-warp-sdk5-discovery-20261025` exits0; the private compositor exits.
+The module SHA256 is
+`d8fa2f509f4d7e61cfee5cbc51dd09647201dd1d401c57eafd3c61d8dae0dd7f`.
+Receipts: `src-tauri/target/kwin-companion-5-sdk/discovery.json`,
+`portafort-identity.txt`, `sdk-identity.txt` and the build logs. An earlier probe
+used the wrong bus because its remote runner was stale; it never loaded the
+module and is excluded from discovery evidence.
+
+Production integration now passes the final acceptance below. Earlier failures
+are retained as regression evidence. Native module compatibility must be checked
+per KWin version. This integration is Wayland-specific; X11 gestures remain required.
+
+### Independent KDE physical gestures — validated increment
+
+The app consumes authenticated, ordered native cycles, with pointer and previous
+window captured during actual KWin activation. It advances one potentially
+blocking action at a time, draining releases before another hold decision.
+Rapid same-key cycles stay separate. Native guards survive pause/reassignment
+until base-up; a narrow filter suppresses only repeats of admitted held bases.
+Fresh and unrelated input retain KDE's handling. Release follows the seat scan
+code because libinput can report the final release from a different keyboard.
+
+The initial integration fixed overlap but regressed held-key reassignment.
+`hoster-warp-gui-20261025-companion6-reassign` failed the existing behavior
+assertion; evidence remains under `target/kde-validation/companion6-reassign-before/`.
+The repeat guard fixes that regression without asynchronous guard queries.
+The fixture's old one-retained-script assertion now expects zero registrations;
+all held-key behavior assertions remain, with guards owned by the native module.
+
+Final acceptance, all exit 0:
+
+- 31 native protocol checks on both KWin 5.27.11 and 6.3.6: overlap, exact captures,
+  pre-held keys, modifier release, pause/reassignment, modal/programmatic rejection,
+  device loss, callback failures, owner loss and unload. Cross-keyboard coverage
+  reproduces libinput's backend stream; it is not physical hardware acceptance.
+- 48 actual-app edge checks on each version: retile expiry/consumption, native
+  reassignment, held resume, radial behavior, import, tray and companion loss/reload.
+- 43 actual-app Firefox checks on each version: both overlap orders while Firefox
+  delays acknowledgment 1.4s; the short second tap never becomes a hold tile.
+- Windows: 83 Rust pass/6 ignored; Linux: 81 Rust pass/1 ignored; 129 Node pass.
+
+Final units are `hoster-warp-gui-20261025-companion6-final-{edges,overlap}` and
+`portafort-warp-gui-20261025-companion5-final-{edges,overlap}`. Portafort testing
+used WSL → Hoster → Portafort, private buses/compositors/plugin roots and copied
+cap-free KWin executables. Receipts: `target/kde-validation/companion{5,6}-final-{edges,overlap}/`.
+Native receipts: `target/kwin-companion-production8/receipt.json` and
+`target/kwin-companion-5-sdk/native-production-3/result.json`.
+
+Tested app SHA256: `1833c187d0ad3f221833ac93c3975c8311dd7e7e1b150988941fbdc6d57823f6`.
+Final5 module: `f4a91a60eb8a7715f74fbadd0569989f4c5aa073ebbdfd23eb326f05d9bc2107`.
+Final6 module: `e5b6c1f8beb5dd38be8b6838ece48399aae64b4b29060ea6836c790cab985fa5`.
+
+Debian build `hoster-warp-package-20261025-companion5` exited0. Package SHA256
+`c44b423b81cb1261133d3566299ffe38e5c67c53607bd74a1d632aa692458327`
+(5,154,020 bytes) includes the exact5 module, corresponding source and GPL text,
+excludes the test plugin, and requires `kwin-common (= 4:5.27.11-0ubuntu3)`.
+Packaged executable SHA256:
+`54a031f914660d1a11839af6511d925ab547651b9cbf67aee6ed9b9299d4b3de`.
+Exactly3 bytes differ from the tested app: Tauri's documented UNK→DEB bundle
+marker. All other bytes match. Packaged module/source hashes match the final
+build/tree; inspection is under `target/companion-integration/`.
+No package was installed, and no normal compositor was restarted or modified.
+
+The whole port remains incomplete: X11 gestures, live lock/inhibitor acceptance,
+physical mixed-DPI/portrait/removal, actual login/startup, installer execution/
+uninstall, ordinary Firefox default startup, ambiguous identities and remaining
+Windows packaged-app variants are still open. All partial rows retain their scope.

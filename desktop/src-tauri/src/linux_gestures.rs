@@ -1,12 +1,12 @@
-//! KGlobalAccel owns key state on Wayland. Its signals provide press/release;
-//! the KWin callback supplies the pointer before asynchronous dispatch can move it.
+//! The KWin companion joins actual shortcut activation with physical key lifetime.
 use crate::{
     config::{Binding, Config, Settings},
-    gesture::{Action, Press},
+    gesture::Action,
+    linux_physical::{qt_shortcut, Cycle},
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc, Mutex,
@@ -27,21 +27,23 @@ struct Capture {
     x: i32,
     y: i32,
     previous: Option<crate::retile::Target>,
-    generation: String,
+    at: u64,
 }
 enum Event {
-    Key {
+    Physical {
         id: String,
-        pressed: bool,
-        at: Instant,
-    },
-    Pointer {
-        id: String,
-        capture: Capture,
+        generation: String,
+        cycle: u64,
+        phase: Phase,
     },
     Configure(Option<Config>, mpsc::SyncSender<Result<(), String>>),
     Failed(String),
     Stop,
+}
+enum Phase {
+    Down(Capture),
+    Up,
+    Cancel,
 }
 struct Running {
     sender: mpsc::Sender<Event>,
@@ -52,20 +54,28 @@ struct Running {
 }
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 
-/// Called only by the authenticated local KWin endpoint, not the editor.
-pub fn pointer(id: &str, payload: &str) {
-    let Ok(capture) = serde_json::from_str::<Capture>(payload) else {
-        return;
+/// Called only by the authenticated, ordered companion endpoint.
+pub fn physical_key(generation: &str, id: &str, phase: &str, cycle: u64, payload: &str) {
+    let phase = match phase {
+        "down" if payload.len() <= 4096 => serde_json::from_str::<Capture>(payload)
+            .ok()
+            .map(Phase::Down),
+        "up" => Some(Phase::Up),
+        "cancel" => Some(Phase::Cancel),
+        _ => None,
     };
     if let Ok(running) = RUNNING.lock() {
         if let Some(running) = running.as_ref() {
-            let _ = running.sender.send(Event::Pointer {
-                id: id.into(),
-                capture,
-            });
+            let event = match phase {
+                Some(phase) if cycle > 0 => Event::Physical { id:id.into(), generation:generation.into(), cycle, phase },
+                _ => Event::Failed("The KDE physical-key companion sent an invalid event. Install the matching companion package.".into()),
+            };
+            let _ = running.sender.send(event);
         }
     }
 }
+// Old scripts cannot establish a physical cycle during registration replacement.
+pub fn pointer(_: &str, _: &str) {}
 
 pub fn stop() -> Result<(), String> {
     let running = RUNNING.lock().map_err(|e| e.to_string())?.take();
@@ -159,11 +169,15 @@ fn new_running(app: &AppHandle) -> Result<Running, String> {
         .map_err(|e| e.to_string())?;
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
-        .sender("org.kde.kglobalaccel")
+        .sender("org.freedesktop.DBus")
         .map_err(|e| e.to_string())?
-        .path("/component/kwin")
+        .path("/org/freedesktop/DBus")
         .map_err(|e| e.to_string())?
-        .interface("org.kde.kglobalaccel.Component")
+        .interface("org.freedesktop.DBus")
+        .map_err(|e| e.to_string())?
+        .member("NameOwnerChanged")
+        .map_err(|e| e.to_string())?
+        .arg(0, crate::linux_control::COMPANION_SERVICE)
         .map_err(|e| e.to_string())?
         .build();
     let messages = zbus::blocking::MessageIterator::for_match_rule(rule, &connection, Some(256))
@@ -192,21 +206,9 @@ fn new_running(app: &AppHandle) -> Result<Running, String> {
                         return;
                     }
                 };
-                let pressed = match message.header().member().map(|m| m.as_str()) {
-                    Some("globalShortcutPressed") => true,
-                    Some("globalShortcutReleased") => false,
-                    _ => continue,
-                };
-                match message.body().deserialize::<(String, String, i64)>() {
-                    Ok((component, native_id, _)) if component == "kwin" => {
-                        if !owns_script(&native_id) {
-                            continue;
-                        }
-                        let _ = events.send(Event::Key {
-                            id: native_id,
-                            pressed,
-                            at: Instant::now(),
-                        });
+                match message.body().deserialize::<(String, String, String)>() {
+                    Ok((service, old_owner, _)) if service == crate::linux_control::COMPANION_SERVICE && !old_owner.is_empty() => {
+                        let _ = events.send(Event::Failed("The KDE physical-key companion stopped. Shortcuts were paused; enable them again after restoring the matching companion.".into()));
                     }
                     Ok(_) => {}
                     Err(error) => {
@@ -247,90 +249,50 @@ struct Desired {
 }
 struct Slot {
     spec: Desired,
-    callback: String,
-    pending: Option<Pending>,
+    pending: BTreeMap<u64, Pending>,
+    // Callbacks use one native connection and ordered endpoint dispatch. A down
+    // with a retired cycle ID is a duplicate, never a new physical press.
+    last_cycle: u64,
 }
 struct Pending {
-    press: Press,
-    started: Instant,
-    native_pressed: bool,
-    released: bool,
-    point: Option<Point>,
-    previous: Option<crate::retile::Target>,
-    generation: Option<String>,
-    held: bool,
-    cancelled: bool,
+    cycle: Cycle<Capture>,
     picker: Option<crate::radial::Picker>,
+    picker_next: Option<Instant>,
 }
 impl Pending {
-    fn new(settings: &Settings, at: Instant, cancelled: bool) -> Self {
-        Self {
-            press: Press::new(settings.hold_delay_ms, settings.hold_tile_enabled),
-            started: at,
-            native_pressed: false,
-            released: false,
-            point: None,
-            previous: None,
-            generation: None,
-            held: false,
-            cancelled,
-            picker: None,
-        }
-    }
-    fn deadline(&self, settings: &Settings) -> Option<Instant> {
-        if self.picker.is_some() {
-            return Some(Instant::now() + Duration::from_millis(25));
-        }
-        if self.cancelled && self.native_pressed {
-            return None;
-        }
-        if !self.native_pressed || self.point.is_none() {
-            Some(self.started + Duration::from_secs(5))
-        } else if settings.hold_tile_enabled && !self.held {
-            Some(self.started + Duration::from_millis(settings.hold_delay_ms))
-        } else {
-            None
-        }
-    }
-    fn action(&mut self) -> Option<Action> {
-        if self.cancelled {
-            None
-        } else {
-            self.press.advance(self.started.elapsed(), !self.released)
-        }
+    fn deadline(&self) -> Option<Instant> {
+        self.cycle
+            .deadline()
+            .into_iter()
+            .chain(self.picker_next)
+            .min()
     }
 }
+
 struct Controller {
     desired: Option<Config>,
     slots: HashMap<String, Slot>,
 }
 impl Controller {
     fn configure(&mut self, app: &AppHandle, config: Option<Config>) -> Result<(), String> {
-        // Cancel before any native hook is removed. Already-held hooks remain
-        // installed solely to observe release, including across a later resume.
+        // The companion owns base-key-up guards across generations. Rust may
+        // discard old cycles immediately, including any visible picker.
         for slot in self.slots.values_mut() {
-            if let Some(pending) = &mut slot.pending {
-                pending.cancelled = true;
-                pending.picker = None;
-            }
+            slot.pending.clear();
         }
         let session = crate::linux_control::configure_session(app, config.is_some());
         self.desired = config;
         if self.desired.is_none() {
-            // A transport failure must not prevent native hook cleanup.
             let reconcile = self.reconcile(app);
             let disable = crate::platform::disable_window_actions();
-            let failures: Vec<_> = [session, reconcile, disable]
-                .into_iter()
-                .filter_map(Result::err)
-                .collect();
-            return if failures.is_empty() {
-                Ok(())
-            } else {
-                Err(failures.join("; "))
-            };
+            return combined([session, reconcile, disable]);
         }
         let result = session.and_then(|_| {
+            let bindings: Vec<_> = self.desired.as_ref().unwrap().bindings.iter()
+                .filter(|b| b.enabled && b.action == "pull-app")
+                .map(|b| serde_json::json!({"id":script_name(&b.shortcut), "shortcut":qt_shortcut(&b.shortcut)}))
+                .collect();
+            crate::linux_control::configure_physical(app, serde_json::json!(bindings))?;
             self.reconcile(app)?;
             crate::platform::enable_window_actions(app, self.desired.as_ref().unwrap())
         });
@@ -339,11 +301,7 @@ impl Controller {
             let cancel = crate::linux_control::configure_session(app, false);
             let reconcile = self.reconcile(app);
             let disable = crate::platform::disable_window_actions();
-            let failures: Vec<_> = [Err(error), cancel, reconcile, disable]
-                .into_iter()
-                .filter_map(Result::err)
-                .collect();
-            return Err(failures.join("; "));
+            return combined([Err(error), cancel, reconcile, disable]);
         }
         Ok(())
     }
@@ -380,26 +338,32 @@ impl Controller {
         let obsolete: Vec<_> = self
             .slots
             .iter()
-            .filter(|(id, slot)| slot.pending.is_none() && desired.get(*id) != Some(&slot.spec))
+            .filter(|(id, slot)| desired.get(*id) != Some(&slot.spec))
             .map(|(id, _)| id.clone())
             .collect();
+        let mut errors = Vec::new();
         for id in obsolete {
-            crate::platform::unload_script(&id)?;
-            self.slots.remove(&id);
+            match crate::platform::unload_script(&id) {
+                Ok(()) => {
+                    self.slots.remove(&id);
+                }
+                Err(error) => errors.push(error),
+            }
+        }
+        if !errors.is_empty() {
+            return Err(errors.join("; "));
         }
         for (id, spec) in desired {
             if self.slots.contains_key(&id) {
                 continue;
             }
-            let callback = uuid::Uuid::new_v4().to_string();
             let config = Config {
                 version: 1,
                 bindings: vec![spec.binding.clone()],
                 settings: spec.settings.clone(),
             };
             let source = format!(
-                "var WARP_HOLD_IDS = {};\nvar WARP_HOLD_NATIVE_IDS = {};\n{}",
-                serde_json::json!([callback]),
+                "var WARP_HOLD_IDS = [true];\nvar WARP_HOLD_NATIVE_IDS = {};\n{}",
                 serde_json::json!([id]),
                 crate::platform::shortcut_source(app, &config)?
             );
@@ -408,8 +372,8 @@ impl Controller {
                 id,
                 Slot {
                     spec,
-                    callback,
-                    pending: None,
+                    pending: BTreeMap::new(),
+                    last_cycle: 0,
                 },
             );
         }
@@ -429,101 +393,153 @@ impl Controller {
             let _ = app.emit("warp-error", error);
         }
     }
-    fn advance(&mut self, app: &AppHandle) -> Result<(), String> {
-        let mut released_guards = Vec::new();
-        for (id, slot) in &mut self.slots {
-            let Some(p) = slot.pending.as_mut() else {
-                continue;
-            };
-            if p.cancelled && p.released {
-                slot.pending = None;
-                released_guards.push(id.clone());
-                continue;
+    fn physical(&mut self, id: &str, generation: &str, number: u64, phase: Phase) {
+        let Some(slot) = self
+            .slots
+            .get_mut(id)
+            .filter(|s| s.spec.generation == generation)
+        else {
+            return;
+        };
+        if self.desired.is_none() {
+            return;
+        }
+        match phase {
+            Phase::Down(capture) => {
+                if number <= slot.last_cycle {
+                    return;
+                }
+                slot.last_cycle = number;
+                let now = Instant::now();
+                let wall = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                let age = Duration::from_millis(wall.saturating_sub(capture.at));
+                let started = now.checked_sub(age).unwrap_or(now);
+                let mut cycle = Cycle::new(
+                    slot.spec.settings.hold_delay_ms,
+                    slot.spec.settings.hold_tile_enabled,
+                    started,
+                    capture,
+                );
+                if crate::retile::fire(&slot.spec.binding.shortcut) {
+                    cycle.cancel();
+                }
+                slot.pending.insert(
+                    number,
+                    Pending {
+                        cycle,
+                        picker: None,
+                        picker_next: None,
+                    },
+                );
             }
-            if p.cancelled && p.native_pressed {
-                continue;
-            }
-            if !p.native_pressed || p.point.is_none() {
-                if p.started.elapsed() >= Duration::from_secs(5) {
-                    if p.native_pressed {
-                        let _ = app.emit("warp-error", "KWin did not provide the app shortcut's pointer position. Pause and enable shortcuts to retry.");
+            Phase::Up | Phase::Cancel => {
+                if let Some(p) = slot.pending.get_mut(&number) {
+                    let cancelled = matches!(phase, Phase::Cancel);
+                    p.cycle.release(cancelled);
+                    if cancelled {
+                        p.picker = None;
+                        p.picker_next = None;
                     }
-                    slot.pending = None;
-                    released_guards.push(id.clone());
                 }
-                continue;
-            }
-            if let Some(action) = p.action() {
-                p.held = action == Action::Hold;
-                let pointer = if p.held { p.point } else { None };
-                let result = (|| -> Result<(), String> {
-                    if p.held && slot.spec.settings.hold_mode == "radial" {
-                        let point = p.point.unwrap();
-                        p.picker = crate::radial::Picker::open_for_window(
-                            app,
-                            &slot.spec.binding,
-                            crate::radial::Point {
-                                x: point.x,
-                                y: point.y,
-                            },
-                            p.previous.as_ref(),
-                        )?;
-                        if p.picker.is_some() {
-                            return Ok(());
-                        }
-                    }
-                    crate::linux_control::input_request(
-                        app,
-                        serde_json::json!({
-                            "kind":"app-pull", "binding":slot.spec.binding, "settings":slot.spec.settings, "pointer":pointer, "previous":p.previous, "window":p.previous
-                        }),
-                        p.generation.as_deref(),
-                    )?;
-                    Ok(())
-                })();
-                if let Err(error) = result {
-                    let _ = app.emit("warp-error", error);
-                    p.cancelled = true;
-                    p.picker = None;
-                }
-            }
-            if let Some(picker) = p.picker.as_ref() {
-                if !picker.update()? {
-                    p.picker = None;
-                } else if p.released {
-                    p.picker
-                        .take()
-                        .unwrap()
-                        .release(&slot.spec.binding, &slot.spec.settings)?;
-                }
-            }
-            if p.press.finished() {
-                slot.pending = None;
             }
         }
-        if !released_guards.is_empty() {
-            self.reconcile(app)?;
-            // An edit can assign a guarded chord to a non-gesture action.
-            // Re-register those actions after the old chord releases its key.
-            if let Some(config) = &self.desired {
-                let reassigned: Vec<_> = config
-                    .bindings
-                    .iter()
-                    .filter(|b| {
-                        b.enabled
-                            && b.action != "pull-app"
-                            && released_guards.contains(&script_name(&b.shortcut))
-                    })
-                    .collect();
-                if reassigned.iter().any(|b| b.action == "toggle-pause") {
-                    crate::platform::configure_pause(app, config)?;
-                }
-                if reassigned.iter().any(|b| b.action != "toggle-pause") {
-                    crate::platform::enable_window_actions(app, config)?;
-                }
+    }
+    fn next_pending(&self, now: Instant) -> Option<(String, u64)> {
+        self.slots
+            .iter()
+            .flat_map(|(id, slot)| {
+                slot.pending.iter().filter_map(move |(number, p)| {
+                    p.deadline()
+                        .filter(|deadline| *deadline <= now)
+                        .map(|deadline| (deadline, id.clone(), *number))
+                })
+            })
+            .min_by_key(|(deadline, _, _)| *deadline)
+            .map(|(_, id, number)| (id, number))
+    }
+    fn advance(&mut self, app: &AppHandle) -> Result<(), String> {
+        for slot in self.slots.values_mut() {
+            if !crate::linux_control::generation_active(app, &slot.spec.generation) {
+                slot.pending.clear();
+            } else {
+                slot.pending.retain(|_, p| !p.cycle.finished());
             }
+        }
+        let Some((id, number)) = self.next_pending(Instant::now()) else {
+            return Ok(());
+        };
+        let slot = self.slots.get_mut(&id).unwrap();
+        let p = slot.pending.get_mut(&number).unwrap();
+        // At most one action/picker operation may block per turn. The outer
+        // loop drains physical releases before advancing any other due cycle.
+        if let Some(action) = p.cycle.advance(Instant::now()) {
+            let held = action == Action::Hold;
+            let capture = p.cycle.capture();
+            let pointer = held.then_some(Point {
+                x: capture.x,
+                y: capture.y,
+            });
+            let result = (|| -> Result<(), String> {
+                if held && slot.spec.settings.hold_mode == "radial" {
+                    p.picker = crate::radial::Picker::open_for_window(
+                        app,
+                        &slot.spec.binding,
+                        crate::radial::Point {
+                            x: capture.x,
+                            y: capture.y,
+                        },
+                        capture.previous.as_ref(),
+                    )?;
+                    if p.picker.is_some() {
+                        p.picker_next = Some(Instant::now() + Duration::from_millis(25));
+                        return Ok(());
+                    }
+                }
+                crate::linux_control::input_request(
+                    app,
+                    serde_json::json!({
+                        "kind":"app-pull", "binding":slot.spec.binding, "settings":slot.spec.settings,
+                        "pointer":pointer, "previous":capture.previous, "window":capture.previous
+                    }),
+                    Some(&slot.spec.generation),
+                )?;
+                Ok(())
+            })();
+            if let Err(error) = result {
+                let _ = app.emit("warp-error", error);
+                p.cycle.cancel();
+                p.picker = None;
+                p.picker_next = None;
+            }
+        } else if let Some(picker) = p.picker.as_ref() {
+            if !picker.update()? {
+                p.picker = None;
+                p.picker_next = None;
+            } else if p.cycle.released() {
+                p.picker
+                    .take()
+                    .unwrap()
+                    .release(&slot.spec.binding, &slot.spec.settings)?;
+                p.picker_next = None;
+            } else {
+                p.picker_next = Some(Instant::now() + Duration::from_millis(25));
+            }
+        }
+        if p.cycle.finished() {
+            slot.pending.remove(&number);
         }
         Ok(())
+    }
+}
+fn combined<const N: usize>(results: [Result<(), String>; N]) -> Result<(), String> {
+    let errors: Vec<_> = results.into_iter().filter_map(Result::err).collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
     }
 }
 fn report_failure(app: &AppHandle, message: String) {
@@ -545,11 +561,8 @@ fn run(app: &AppHandle, receiver: mpsc::Receiver<Event>) {
         let deadline = state
             .slots
             .values()
-            .filter_map(|s| {
-                s.pending
-                    .as_ref()
-                    .and_then(|p| p.deadline(&s.spec.settings))
-            })
+            .flat_map(|s| s.pending.values())
+            .filter_map(Pending::deadline)
             .min();
         let received = match deadline {
             Some(deadline) => {
@@ -579,55 +592,22 @@ fn run(app: &AppHandle, receiver: mpsc::Receiver<Event>) {
                     let _ = reply.send(state.configure(app, config));
                 }
                 Event::Failed(message) => {
-                    state.finish(app);
-                    report_failure(app, message);
-                }
-                Event::Key { id, pressed, at } => {
-                    if let Some(slot) = state.slots.get_mut(&id) {
-                        if pressed {
-                            let retiled = crate::retile::fire(&slot.spec.binding.shortcut);
-                            let p = slot.pending.get_or_insert_with(|| {
-                                Pending::new(
-                                    &slot.spec.settings,
-                                    at,
-                                    state.desired.is_none() || retiled,
-                                )
-                            });
-                            if retiled {
-                                p.cancelled = true;
-                            }
-                            if !p.native_pressed {
-                                p.native_pressed = true;
-                                p.started = at;
-                            }
-                        } else if let Some(p) = slot.pending.as_mut() {
-                            p.released = true;
-                        }
+                    if state.desired.as_ref().is_some_and(|config| {
+                        config
+                            .bindings
+                            .iter()
+                            .any(|b| b.enabled && b.action == "pull-app")
+                    }) {
+                        state.finish(app);
+                        report_failure(app, message);
                     }
                 }
-                Event::Pointer { id, capture } => {
-                    if let Some(slot) = state
-                        .slots
-                        .values_mut()
-                        .find(|s| s.callback == id && s.spec.generation == capture.generation)
-                    {
-                        let pending = slot.pending.get_or_insert_with(|| {
-                            Pending::new(
-                                &slot.spec.settings,
-                                Instant::now(),
-                                state.desired.is_none(),
-                            )
-                        });
-                        if pending.point.is_none() {
-                            pending.point = Some(Point {
-                                x: capture.x,
-                                y: capture.y,
-                            });
-                            pending.previous = capture.previous;
-                            pending.generation = Some(capture.generation);
-                        }
-                    }
-                }
+                Event::Physical {
+                    id,
+                    generation,
+                    cycle,
+                    phase,
+                } => state.physical(&id, &generation, cycle, phase),
             }
         }
         if let Err(error) = state.advance(app) {
@@ -640,19 +620,149 @@ fn run(app: &AppHandle, receiver: mpsc::Receiver<Event>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn cycle_controller() -> (Controller, String) {
+        let mut config = Config::default();
+        config.bindings.truncate(1);
+        config.bindings[0].action = "pull-app".into();
+        let id = script_name(&config.bindings[0].shortcut);
+        let slot = Slot {
+            spec: Desired {
+                binding: config.bindings[0].clone(),
+                settings: config.settings.clone(),
+                generation: "current".into(),
+            },
+            pending: BTreeMap::new(),
+            last_cycle: 0,
+        };
+        (
+            Controller {
+                desired: Some(config),
+                slots: HashMap::from([(id.clone(), slot)]),
+            },
+            id,
+        )
+    }
+    fn accepted(x: i32) -> Phase {
+        Phase::Down(Capture {
+            x,
+            y: 0,
+            previous: None,
+            at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+        })
+    }
     #[test]
-    fn cancellation_survives_deadline_and_has_no_action_on_release() {
-        let mut p = Pending::new(
-            &Settings::default(),
-            Instant::now() - Duration::from_secs(10),
-            true,
+    fn rapid_same_chord_cycles_keep_capture_and_release_identity() {
+        let (mut state, id) = cycle_controller();
+        state.physical(&id, "current", 1, accepted(1));
+        state.physical(&id, "current", 1, Phase::Up);
+        state.physical(&id, "current", 2, accepted(2));
+        state.physical(&id, "current", 1, accepted(99));
+        state.physical(&id, "current", 1, Phase::Up);
+        let slot = state.slots.get_mut(&id).unwrap();
+        assert_eq!(slot.pending.len(), 2);
+        assert_eq!(slot.pending[&1].cycle.capture().x, 1);
+        assert_eq!(slot.pending[&2].cycle.capture().x, 2);
+        assert!(slot.pending[&1].cycle.released());
+        assert!(!slot.pending[&2].cycle.released());
+        assert_eq!(
+            slot.pending
+                .get_mut(&1)
+                .unwrap()
+                .cycle
+                .advance(Instant::now() + Duration::from_secs(1)),
+            Some(Action::Tap)
         );
-        p.native_pressed = true;
-        p.point = Some(Point { x: 1, y: 2 });
-        assert!(p.deadline(&Settings::default()).is_none());
-        assert_eq!(p.action(), None);
-        p.released = true;
-        assert_eq!(p.action(), None);
+        slot.pending.remove(&1);
+        state.physical(&id, "current", 1, accepted(99));
+        assert!(!state.slots[&id].pending.contains_key(&1));
+    }
+    #[test]
+    fn stale_generation_and_cancel_cannot_trigger_a_reassigned_cycle() {
+        let (mut state, id) = cycle_controller();
+        state.physical(&id, "previous", 1, accepted(1));
+        assert!(state.slots[&id].pending.is_empty());
+        state.physical(&id, "current", 2, accepted(2));
+        state.physical(&id, "previous", 2, Phase::Up);
+        assert!(!state.slots[&id].pending[&2].cycle.released());
+        state.physical(&id, "current", 2, Phase::Cancel);
+        let pending = state
+            .slots
+            .get_mut(&id)
+            .unwrap()
+            .pending
+            .get_mut(&2)
+            .unwrap();
+        assert_eq!(
+            pending
+                .cycle
+                .advance(Instant::now() + Duration::from_secs(1)),
+            None
+        );
+        assert!(pending.cycle.finished());
+    }
+    #[test]
+    fn release_queued_during_another_action_is_applied_before_the_next_due_cycle() {
+        let (mut state, first) = cycle_controller();
+        let mut spec = state.slots[&first].spec.clone();
+        spec.binding.shortcut = "Ctrl+Alt+K".into();
+        let second = script_name(&spec.binding.shortcut);
+        state.slots.insert(
+            second.clone(),
+            Slot {
+                spec,
+                pending: BTreeMap::new(),
+                last_cycle: 0,
+            },
+        );
+        let mut down = match accepted(1) {
+            Phase::Down(capture) => capture,
+            _ => unreachable!(),
+        };
+        down.at -= 600;
+        state.physical(&first, "current", 1, Phase::Down(down));
+        assert_eq!(state.next_pending(Instant::now()), Some((first.clone(), 1)));
+        assert_eq!(
+            state
+                .slots
+                .get_mut(&first)
+                .unwrap()
+                .pending
+                .get_mut(&1)
+                .unwrap()
+                .cycle
+                .advance(Instant::now()),
+            Some(Action::Hold)
+        );
+        // The first operation blocks while these events queue. The run loop
+        // drains this batch before selecting another action, regardless of age.
+        let mut delayed = match accepted(2) {
+            Phase::Down(capture) => capture,
+            _ => unreachable!(),
+        };
+        delayed.at -= 6000;
+        for phase in [Phase::Down(delayed), Phase::Up] {
+            state.physical(&second, "current", 2, phase);
+        }
+        assert_eq!(
+            state.next_pending(Instant::now()),
+            Some((second.clone(), 2))
+        );
+        assert_eq!(
+            state
+                .slots
+                .get_mut(&second)
+                .unwrap()
+                .pending
+                .get_mut(&2)
+                .unwrap()
+                .cycle
+                .advance(Instant::now()),
+            Some(Action::Tap)
+        );
+        assert!(!state.slots[&first].pending[&1].cycle.released());
     }
     #[test]
     fn hook_identity_tracks_the_chord_and_cannot_name_an_unrelated_script() {
@@ -666,6 +776,19 @@ mod tests {
             "window-warp-gesture-0",
         ] {
             assert!(!owns_script(foreign));
+        }
+    }
+    #[test]
+    fn companion_shortcuts_use_the_registration_portable_text_spelling() {
+        assert_eq!(qt_shortcut("Ctrl+Alt+Shift+J"), "Ctrl+Alt+Shift+J");
+        for (canonical, qt) in [
+            ("Super+Enter", "Meta+Return"),
+            ("Super+BracketLeft", "Meta+["),
+            ("Ctrl+PageDown", "Ctrl+PgDown"),
+            ("Alt+Backslash", "Alt+\\"),
+            ("Super+Equal", "Meta+="),
+        ] {
+            assert_eq!(qt_shortcut(canonical), qt);
         }
     }
 }

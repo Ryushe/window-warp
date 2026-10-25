@@ -13,6 +13,8 @@ mod linux_control;
 mod linux_gestures;
 #[cfg(target_os = "linux")]
 mod linux_pointer;
+#[cfg(any(target_os = "linux", test))]
+mod linux_physical;
 #[cfg(windows)]
 #[path = "windows.rs"]
 mod platform;

@@ -60,7 +60,9 @@ Build outputs are under `src-tauri/target/release/`; installers are under its `b
 
 Use a Plasma 5.27 or 6 session (Wayland or X11) and Qt's qdbus executable. Supported executable names are `qdbus6`, `qdbus-qt6`, `/usr/lib/qt6/bin/qdbus`, and `qdbus`. The Debian package declares `qdbus-qt6 | qdbus-qt5 | qdbus` as alternatives so the package manager can install the needed tool. For other distributions, package names vary: for example `qdbus-qt5` / `qdbus` for Plasma 5, or `qdbus-qt6` / `qt6-tools` for Plasma 6. The app detects the script-object path and the script adapts to each version's window, desktop, and output APIs.
 
-The application loads session-only KWin scripts via the session D-Bus service. KWin registers the shortcuts and performs window operations, so native Wayland windows do not depend on X11 automation. Pause unloads window actions and unheld app-gesture hooks. A cancelled held hook stays installed solely until release, so resuming cannot restart it from autorepeat. The pause/resume binding and workspace command bridge remain available. Quit removes the owned hooks; startup also reclaims hooks left by a crash. The shared scripts can be manually unloaded with your qdbus executable:
+The application loads session-only KWin scripts via the session D-Bus service. KWin registers the shortcuts and performs window operations, so native Wayland windows do not depend on X11 automation. App-pull tap/hold gestures additionally require the [native companion](kwin-companion/README.md) built for the exact installed KWin version. The app loads that module when needed. It tracks accepted physical key cycles independently, including overlapping chords, and exports only configured shortcut events. Missing or incompatible support produces an activation error. The current companion targets Wayland; X11 gesture support remains a porting requirement.
+
+Pause cancels pending gestures and unloads window-action registrations. The companion retains only the release guards needed to prevent an already-held key from restarting after resume or reassignment. The pause/resume binding and workspace command bridge remain available. Quit removes the owned scripts and detaches the companion's app session; startup also reclaims scripts left by a crash. The shared scripts can be manually unloaded with your qdbus executable:
 
 ```sh
 qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript window-warp-session
@@ -87,7 +89,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 Node tests execute the actual KWin script against simulated Plasma 5/6 workspaces to check placement, monitor removal, closed windows, app cycling, and tiling. Editor tests run the UI against a simulated native bridge and cover save failures, registration errors, and preserving edits. Rust tests cover configuration validation, placement math, and native Windows positioning on a hidden test window. The opt-in [native Windows fixture](tests/windows/README.md) exercises the actual app with OS keyboard input, conflict recovery, the editor, workspace capture/launch, startup registration and single-instance behavior using isolated app/browser data.
 
-On tested Plasma 5.27 Wayland, pressing another app shortcut ends the first shortcut’s hold tracking early. Independent overlapping app chords pass on Windows but remain a KDE parity gap; the opt-in native regression and signal evidence are recorded in [PARITY.md](PARITY.md).
+On tested Plasma 5.27 and 6.3.6 Wayland, KGlobalAccel ends the first shortcut's signal when another shortcut activates, even while the first key is physically held. The new companion replaces that signal as the source of physical release. Final native app regressions now pass both overlap orders on Portafort5.27.11 and supplemental6.3.6, including delayed Firefox responses. Separate48-check runs pass held-key reassignment, pause/resume, radial behavior and companion-loss recovery on both. Independent overlapping app chords also pass on Windows. See [PARITY.md](PARITY.md) for the exact evidence.
 
 Live Wayland tests verify the integration on Plasma 5.27, including a separate two-output KWin session for monitor push/pull and maximized/fullscreen tiling. The compiled Linux app also passed native UI checks for rendering, saving settings, enabling, and pausing. Windows x64 and Ubuntu 24.04 amd64 builds produced an NSIS installer and Debian package. See [live KDE validation](tests/kde/README.md) for reproducible commands and coverage limits. A supplemental KWin 6.3.6 / Qt 6.8.2 session passes 35 native script checks and 39 combined app checks, including pointer centering with default and maximum normal screen-edge resistance. Missing pointer permission is also tested. Live Portafort Plasma 5.27 testing passes the same 39 combined app checks through WSL → Hoster → Portafort. Remaining edge cases and physical-session checks are tracked in [PARITY.md](PARITY.md).
 
@@ -158,13 +160,13 @@ parity still depends on the remaining action and packaged-launch features.
 The current feature-branch builds are available locally after validation:
 
 - Windows x64 NSIS: `src-tauri/target/release/bundle/nsis/Window Warp_0.1.0_x64-setup.exe`
-- Ubuntu24.04-compatible amd64 Debian package: `src-tauri/target/release/bundle/deb/Window Warp_0.1.0_amd64.deb`
+- Ubuntu 24.04 amd64 Debian package, requiring `kwin-common (= 4:5.27.11-0ubuntu3)`: `src-tauri/target/release/bundle/deb/Window Warp_0.1.0_amd64.deb`
 
 Their embedded executables and package metadata were inspected without installing
 them. The preview includes the recent terminal, Firefox, tiling and gesture
 changes. Tray handlers and graceful shutdown pass on Windows and Plasma5.27. Full parity,
 installer behavior and full Plasma6 application behavior remain under validation; see PARITY.md,
-especially the KDE overlapping-shortcut limit.
+including X11 gestures, physical-display/login coverage and installer execution.
 
 
 Terminal restoration checks fresh shell/profile/distribution identity while

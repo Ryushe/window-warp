@@ -2196,3 +2196,111 @@ and final native evidence. Staged diff/check passed and worktree was clean
 after commit. This dossier-only follow-up records the immutable SHA. Main and
 remote refs were not changed. Next: production KDE companion integration,
 not another repetition of already-passing Firefox checks.
+
+### Physical-cycle companion implementation work
+
+The previous confirmation-only turn made no implementation progress; this
+continuation revalidated the clean feature branch and existing worker handles,
+then resumed the native integration. Root owns JS registration-only hooks,
+packaging and cross-component review. `retile_review` owns the C++ companion and
+native protocol fixture; `packaged_native` owns Rust control/gesture integration;
+`terminal_release_review` owns exact Plasma5 SDK and private Portafort proof.
+All are native children of this chat and can be resumed by their task names.
+
+New evidence: Plasma6 direct local activation plus the trailing same-device
+connection establishes a synchronous physical dispatch boundary. Modal-filtered
+input and a programmatic activation immediately after that boundary cannot
+fabricate a physical Down. The protocol emits one atomic accepted Down with
+cycle, pointer/window capture and generation, then physical Up or Cancel. Rust's
+ordered D-Bus endpoint removes cross-thread callback reordering; cycle identity
+keeps rapid repeats of the same chord separate. Final full-app overlap acceptance
+is recorded below and supersedes the earlier failing script-only implementation.
+
+Exact5 SDK image `window-warp-kwin5-sdk:5.27.11-0ubuntu3` is
+`sha256:e921bf42dc2ddc41454da4b6f7223eef28958176c139cb135b94ce33fd763aed`.
+SDK and compile/link units exited0. Private Portafort discovery unit
+`portafort-warp-sdk5-discovery-20261025` also exited0 through the required
+WSL → Hoster → Portafort route. It asserts private bus, compositor PID/executable
+and plugin path, proves late module discovery/load/unload and local Component
+signal availability, then verifies compositor exit. Module SHA256
+`d8fa2f509f4d7e61cfee5cbc51dd09647201dd1d401c57eafd3c61d8dae0dd7f` matches
+both hosts. Receipts are under `desktop/src-tauri/target/kwin-companion-5-sdk/`.
+The earlier wrong-bus probe never reached LoadPlugin and is explicitly invalid
+as discovery evidence; no normal desktop plugin/session was modified.
+
+Parent JS changes pass129 Node tests and syntax checks. Packaging now requires a
+staged native module plus the exact distro KWin package version, includes its
+files and declares the matching dependency. Exact5 and6 SDK Dockerfiles are
+tracked test/build tools. Final acceptance follows; X11 gesture support and the
+other full-port requirements remain open. No installer, normal compositor
+activation, merge or push has been performed.
+
+### Physical-cycle companion accepted increment
+
+Independent reviewer `companion_review` accepts this bounded increment with no
+remaining confirmed findings. It identified a cross-keyboard release mismatch:
+libinput's final seat release can originate from a different keyboard. Release
+now follows the seat scan code; device identity remains for removal cancellation.
+Native fixtures reproduce that backend stream, not physical hardware acceptance.
+
+The initial actual-app integration passed overlap but failed the existing held-key
+reassignment behavior check in `hoster-warp-gui-20261025-companion6-reassign`.
+A narrow native filter now suppresses only repeats for admitted held bases until
+release. This protects pause/resume and reassignment to direct window actions.
+The previous fixture assertion about one retained script now expects zero;
+the behavior assertion remains unchanged, with guards owned by the companion.
+The Rust loop drains releases between potentially blocking actions, preventing
+a delayed first action from converting the second short tap into a hold.
+
+Final KWin 5.27.11 and 6.3.6 results, all terminal exit 0:
+
+- 31 native protocol checks per version, including overlap, device loss,
+  cross-keyboard release, modal/programmatic rejection and callback failure.
+- 48 actual-app edge checks per version, including held resume/reassignment,
+  retile, radial, import, tray and companion-loss pause plus explicit recovery.
+- 43 actual-app Firefox checks per version, including both overlap orders while
+  Firefox delays acknowledgment for 1.4 seconds.
+- Windows Rust: 83 passed/6 ignored; Linux Rust: 81 passed/1 ignored; Node: 129
+  passed. Independent focused review also passed 84 KWin and 4 cycle checks.
+
+Portafort runs used WSL → Hoster → Portafort, with private buses, nested live
+compositors and plugin roots. Hoster KWin 6 runs are supplemental. Final GUI units
+are `hoster-warp-gui-20261025-companion6-final-{edges,overlap}` and
+`portafort-warp-gui-20261025-companion5-final-{edges,overlap}`; receipts are under
+`desktop/src-tauri/target/kde-validation/companion{5,6}-final-{edges,overlap}/`.
+Native receipts are `target/kwin-companion-production8/receipt.json` and
+`target/kwin-companion-5-sdk/native-production-3/result.json`, relative to
+`desktop/src-tauri/`. Containers/compositors exited and providers were removed.
+
+Final tested Linux executable SHA256:
+`1833c187d0ad3f221833ac93c3975c8311dd7e7e1b150988941fbdc6d57823f6`.
+Final companion hashes: KWin 5
+`f4a91a60eb8a7715f74fbadd0569989f4c5aa073ebbdfd23eb326f05d9bc2107`;
+KWin 6 `e5b6c1f8beb5dd38be8b6838ece48399aae64b4b29060ea6836c790cab985fa5`.
+
+Debian packaging unit `hoster-warp-package-20261025-companion5` exited 0.
+The package is 5,154,020 bytes, SHA256
+`c44b423b81cb1261133d3566299ffe38e5c67c53607bd74a1d632aa692458327`,
+and requires `kwin-common (= 4:5.27.11-0ubuntu3)`. It includes the final module,
+corresponding source and GPL text, and excludes the test plugin. Package/source
+inspection matches the current tree. The packaged executable differs from the
+tested executable only in Tauri's three-byte UNK→DEB bundle marker; its SHA256 is
+`54a031f914660d1a11839af6511d925ab547651b9cbf67aee6ed9b9299d4b3de`.
+Receipts are in `desktop/src-tauri/target/companion-integration/`, including
+`package5-inspection.json` and `package5-binary-difference.txt`.
+
+Full parity remains incomplete. Next implementation work is X11 gesture support;
+resume from `desktop/PARITY.md` and the companion Wayland guard. Deferred live
+lock/inhibitor tests require an isolated session with controllable locking.
+Physical mixed-DPI/portrait/removal requires the matching hardware setup. Actual
+login/startup, installer execution/uninstall, ordinary default Firefox startup,
+ambiguous terminal identities and Windows packaged-app variants retain their
+existing checklist gates. Package extraction is not installer execution.
+The normal desktops were not modified, and main/remote refs remain unchanged.
+The earlier strict-host-key fetch failure remains unresolved; no current-upstream
+or integration-readiness claim is made. All production child ownership is released.
+
+Final staged review preserves exact packaged companion sources. The ordinary
+whitespace check reports only an extra final blank line in CMakeLists.txt and
+PROTOCOL.md; the check with `core.whitespace=-blank-at-eof` passes. These two
+nonfunctional warnings are retained to preserve package/source hash identity.

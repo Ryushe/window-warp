@@ -18,7 +18,7 @@ driver_binary = str(Path(sys.argv[2]).resolve())
 output = Path(sys.argv[3]).resolve()
 output.mkdir(parents=True, exist_ok=True)
 session = None
-if any(flag in sys.argv for flag in ["--resume-held", "--reassign-native", "--radial", "--pointer", "--pointer-denied", "--retile"]) and "--hold" not in sys.argv:
+if any(flag in sys.argv for flag in ["--resume-held", "--reassign-native", "--companion-loss", "--radial", "--pointer", "--pointer-denied", "--retile"]) and "--hold" not in sys.argv:
     raise ValueError("Native gesture edge checks require --hold and the private compositor")
 if "--pointer" in sys.argv and "--pointer-denied" in sys.argv:
     raise ValueError("Pointer authorization and refusal require separate compositor sessions")
@@ -1222,6 +1222,34 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                 assert kwin_loaded("window-warp-pause-session") and not kwin_loaded()
                 report["checks"].append("Wayland key events resume and pause with persistent pause registration")
 
+                if "--companion-loss" in sys.argv:
+                    saved_hold = dict(config["settings"])
+                    config["settings"].update(holdTileEnabled=True, holdDelayMs=1000)
+                    invoke("save_config", {"config":config})
+                    invoke("set_enabled", {"enabled":True})
+                    reset_window()
+                    chord(36)
+                    time.sleep(0.08)
+                    subprocess.run(["qdbus", "org.kde.KWin", "/Plugins",
+                        "org.kde.KWin.Plugins.UnloadPlugin", "windowwarp_companion"],
+                        check=True, capture_output=True, text=True, timeout=5)
+                    wait_for("return document.querySelector('#status').textContent.includes('Paused')")
+                    time.sleep(1.1)
+                    keys.release()
+                    assert owned()["rect"] == initial, "Companion loss must cancel the pending hold"
+                    assert not kwin_loaded(), "Companion loss must pause ordinary actions too"
+                    invoke("set_enabled", {"enabled":True})
+                    reset_window()
+                    keys.pointer(area["x"]+20, area["y"]+20)
+                    chord(36)
+                    wait_window(lambda w:w["rect"] == dict(area,width=area["width"]//2),
+                        "explicit enable reloads the companion and accepts a fresh hold")
+                    keys.release()
+                    invoke("set_enabled", {"enabled":False})
+                    config["settings"] = saved_hold
+                    invoke("save_config", {"config":config})
+                    report["checks"].append("native companion loss cancels held input, pauses the app, and explicit enable restores gestures")
+
                 if "--resume-held" in sys.argv:
                     config["settings"]["holdTileEnabled"] = True
                     config["bindings"].append(dict(config["bindings"][hold_index], shortcut="Ctrl+Alt+Shift+L", label="Unheld gesture"))
@@ -1232,7 +1260,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                     time.sleep(0.08)
                     invoke("set_enabled", {"enabled":False})
                     names = subprocess.check_output(["qdbus", "org.kde.kglobalaccel", "/component/kwin", "org.kde.kglobalaccel.Component.shortcutNames"], text=True).splitlines()
-                    assert sum(name.startswith("window-warp-gesture-") for name in names) == 1, "Pause must retain only the already-held chord"
+                    assert not any(name.startswith("window-warp-gesture-") for name in names), "Pause must release script registrations; the native companion retains physical guards"
                     assert not kwin_loaded(), "Pause must still unload ordinary window actions"
                     invoke("set_enabled", {"enabled":True})
                     time.sleep(1.4)
@@ -1248,7 +1276,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                     keys.release()
                     reset_window()
                     invoke("set_enabled", {"enabled":False})
-                    report["checks"].append("KDE pause/resume cancels held input, releases unrelated hooks, and accepts a fresh press")
+                    report["checks"].append("KDE pause/resume cancels held input, releases script registrations, and accepts a fresh press")
 
                 if "--radial" in sys.argv:
                     radial_fixture = subprocess.Popen([sys.executable, fixture_script, "--radial"], env=fixture_env, stdout=log, stderr=log)

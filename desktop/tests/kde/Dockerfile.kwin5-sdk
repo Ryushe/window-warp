@@ -1,0 +1,16 @@
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends dpkg-dev ninja-build g++ kwin-dev=4:5.27.11-0ubuntu3 \
+    && apt-get build-dep -y --no-install-recommends kwin=4:5.27.11-0ubuntu3
+WORKDIR /opt/kwin-sdk
+RUN apt-get source kwin=4:5.27.11-0ubuntu3 \
+    && test "$(dpkg-parsechangelog -l kwin-5.27.11/debian/changelog -SVersion)" = 4:5.27.11-0ubuntu3 \
+    && cmake -S kwin-5.27.11 -B generated -G Ninja -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release \
+    && test -f generated/src/config-kwin.h \
+    && test -f generated/src/kwin_export.h \
+    && test -f kwin-5.27.11/src/input.h \
+    && test -f kwin-5.27.11/src/plugin.h \
+    && dpkg -L kwin-dev > kwin-dev-files.txt \
+    && dpkg-query -W > sdk-packages.txt

@@ -1,0 +1,10 @@
+# Build this after Dockerfile.plasma6, using that exact runtime image as the base.
+ARG KWIN_RUNTIME_IMAGE=window-warp-plasma6:local
+FROM ${KWIN_RUNTIME_IMAGE}
+USER root
+RUN version="$(dpkg-query -W -f='${Version}' kwin-wayland)" \
+    && printf 'Exact KWin SDK version: %s\n' "$version" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends "kwin-dev=$version" cmake ninja-build g++ extra-cmake-modules \
+    && rm -rf /var/lib/apt/lists/*
+USER 1000:1000
