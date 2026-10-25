@@ -20,7 +20,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | Settings persistence and startup registration | Partial | KDE native toggle creates/removes isolated autostart entry; Windows toggle and actual login/startup launch pending |
 | Workspace capture/create/update, best-match update selection, rename/delete/reorder/browser | Partial | Implemented; Rust matching/persistence model and Node editor tests pass; KDE native capture/save/browser pass; full Windows editor workflow pending |
 | Workspace launch/reuse, exclude already-consumed windows, wait for new windows, restore placement/state | Partial | KDE native two-window reuse, forced new launch, placement, per-axis maximize/fullscreen pass; Windows owned-window placement/maximize/minimize pass; Windows multi-window launch workflow pending |
-| Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Partial | Implemented; synthetic codec/profile/launch/editor tests pass; Firefox 158 live capture, reuse, and new-window tab/selection restore pass on isolated KDE; live Windows browser path pending |
+| Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Partial | 15 native KDE checks pass on the caption-fix build, including tabs/selection, same-title profile isolation, floating geometry and editor; codec/profile/launch tests pass; live Windows browser path pending |
 | Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native WSL/profile variants, legacy distro launchers/prompt fallback, and multi-window ambiguity cases still required |
 | Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Pending | Argument-safe launch tests and native fixtures |
 | Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Pending | Fixtures including disabled keys, legacy terminal fields, browser tabs |
@@ -71,7 +71,7 @@ press/release events, shared gesture state machine, native hold tile/radial,
 pointer centering, and remaining editor/global-hotkey behavior. Keep all rows
 above in scope, including unverified Windows and Plasma 6 paths.
 
-## Firefox increment — final native verification still open
+## Firefox increment — earlier verification
 
 25 Node tests, 26 Windows Rust tests (with ordinary CIM access), and 21 Linux
 Rust tests pass. The Firefox codec/profile/editor/launch paths are implemented.
@@ -80,13 +80,14 @@ reuse, two-tab launch, and selected-tab restoration. Follow-up runs found stale
 session selection and a Firefox Wayland unmaximize/resize race; source now
 reconciles selection with a unique live title and verifies/retries floating size.
 
-The final two-profile/geometry/editor run has not passed on this latest source.
+At that checkpoint, the final two-profile/geometry/editor run had not passed.
 The last run stopped at WebDriver session creation while Portafort was under
 high unrelated workload. Its process is terminal; do not treat it as still running.
 Resume `tests/kde/nested.sh --gui ... --firefox` when load permits. The current
 binary is on Portafort at `~/.cache/window-warp-01a16f69/window-warp`; the build
 receipt is Hoster `hoster-warp-build-20261024-firefox-resize` (exit 0).
-Live Windows Firefox and the native browser-editor screenshot remain unverified.
+The later caption correction below completes the KDE run. Live Windows Firefox
+remains unverified.
 
 ## Terminal increment
 
@@ -112,5 +113,22 @@ identity fallback remain required before the terminal row is complete.
 
 The recovered-host Firefox run (`hoster-warp-gui-20261024-firefox-recovered`)
 failed the restored-tab URL assertion before reaching the two-profile/geometry
-checks. Inspect the owned capture data and asynchronous session-update timing;
-do not treat the earlier high-load environment as the only remaining issue.
+checks. The caption correction below resolves the failure; it was not solely a
+high-load or session-save timing issue.
+
+## Firefox caption correction
+
+KWin appends numeric markers such as `<2>` to duplicate captions. Firefox session
+matching now ignores that decoration after the browser brand while preserving
+numbers in the page's own title. The native fixture waits for the expected URLs
+and selected tab and records the last ten distinct owned-window observations.
+
+35 Windows Rust tests, 29 Linux Rust tests, and 27 Node tests pass. Native
+`hoster-warp-gui-20261024-firefox-caption` passed all 15 checks, including the
+previously pending same-title profile isolation and floating size restoration.
+The editor screenshot was inspected; the saved URLs, selected tab, profile and
+review note render without clipping. Native receipt and screenshot are under
+`src-tauri/target/kde-validation/firefox/`; pre-fix evidence is under
+`src-tauri/target/kde-validation/firefox-caption-before/`. The Linux binary and
+Debian package come from `hoster-warp-build-20261024-firefox-caption` (exit 0).
+This verifies the Plasma 5.27 path; Windows Firefox and live Plasma 6 remain open.

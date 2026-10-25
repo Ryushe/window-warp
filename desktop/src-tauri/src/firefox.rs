@@ -262,7 +262,21 @@ fn title(text: &str) -> String {
         "Firefox",
     ] {
         for separator in [" — ", " – ", " - "] {
-            if let Some(value) = text.strip_suffix(&format!("{separator}{suffix}")) {
+            let brand = format!("{separator}{suffix}");
+            // KWin decorates otherwise identical captions with " <2>", etc.
+            // Only remove that decoration after the Firefox brand; a page's
+            // own title may legitimately end in an angle-bracketed number.
+            let undecorated = text
+                .rsplit_once(" <")
+                .and_then(|(caption, ordinal)| {
+                    let digits = ordinal.strip_suffix('>')?;
+                    (!digits.is_empty()
+                        && digits.bytes().all(|b| b.is_ascii_digit())
+                        && caption.ends_with(&brand))
+                    .then_some(caption)
+                })
+                .unwrap_or(text);
+            if let Some(value) = undecorated.strip_suffix(&brand) {
                 text = value;
                 break;
             }
@@ -505,6 +519,36 @@ impl Matcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn kde_duplicate_caption_suffix_does_not_hide_firefox_tab_identity() {
+        assert_eq!(title("Warp Second — Mozilla Firefox <2>"), "warp second");
+        assert_eq!(
+            title("Warp Second - Firefox Developer Edition <12>"),
+            "warp second"
+        );
+        assert_eq!(title("A page <2> — Mozilla Firefox <3>"), "a page <2>");
+        assert_eq!(title("A page <2>"), "a page <2>");
+        assert_eq!(
+            title("A page — Mozilla Firefox <draft>"),
+            "a page — mozilla firefox <draft>"
+        );
+        let mut browser = Browser {
+            tabs: vec![
+                Tab {
+                    url: "one".into(),
+                    title: "First".into(),
+                },
+                Tab {
+                    url: "two".into(),
+                    title: "Second".into(),
+                },
+            ],
+            active_tab: 1,
+            ..Default::default()
+        };
+        reconcile_selected_tab(&mut browser, "Second — Mozilla Firefox <2>");
+        assert_eq!(browser.active_tab, 2);
+    }
     fn profile() -> Profile {
         Profile {
             path: PathBuf::from("/profiles/work"),

@@ -51,6 +51,12 @@ window with both URLs and the selected tab. A second profile with identical page
 titles checks profile isolation. Only the fixture browser process groups are
 terminated afterward; existing browser profiles are not changed.
 
+The Firefox option records `firefox-restore-observations.json` with the last ten
+distinct capture states for its owned browser window. It waits for URL and active
+tab identity rather than assuming a two-tab count means navigation has finished.
+The duplicate-caption regression uses two windows with identical tab titles and
+a second Firefox profile to exercise KWin's numeric caption decorations.
+
 The codec follows Mozilla's [IOUtils implementation](https://github.com/mozilla-firefox/firefox/blob/main/xpcom/ioutils/IOUtils.cpp),
 including the eight-byte magic and four-byte size prefix. Launch flags follow
 Mozilla's [command-line reference](https://github.com/mozilla-firefox/firefox/blob/main/browser/docs/CommandLineParameters.md).
@@ -70,6 +76,7 @@ Subsequent full-port work increased coverage to 18 live two-output checks and
 13 Linux Rust tests, and 16 Windows Rust tests. See `../../PARITY.md` for the
 current evidence and remaining feature scope; the counts above describe the
 earlier preview only.
+
 ## Terminal workspace verification
 
 Append `--terminal` to the existing isolated `nested.sh --gui BINARY DRIVER OUTPUT`

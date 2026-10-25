@@ -55,13 +55,14 @@ parser; Linux uses `/proc`. Neither path invokes a shell for app launch.
   fix were added. Two-profile testing then exposed Firefox's asynchronous
   unmaximize response replacing the requested size. KDE floating-window restore
   now verifies placement and retries within a bounded operation, reporting a
-  refused size rather than claiming success. Final live revalidation is pending.
-- Current Linux build: `hoster-warp-build-20261024-firefox-resize` completed with
+  refused size rather than claiming success. The caption correction below later
+  passed the complete native run, including floating placement.
+- Earlier Linux build: `hoster-warp-build-20261024-firefox-resize` completed with
   25 Node tests, 21 Rust tests, executable and Debian package. The last native run,
   `hoster-warp-gui-20261024-firefox-sequential`, failed creating the WebDriver session
   before any app assertions. Portafort load was 46.27 with unrelated Steam/browser
   processes active; no task-owned process remained. Do not restart or kill those
-  unrelated workloads. The resize retry remains explicitly unverified live.
+  unrelated workloads. Later native evidence supersedes this verification gap.
 - Independent release review: pending. No merge, push, installation, or activation.
 
 ## Blockers and deferred work
@@ -73,19 +74,17 @@ parser; Linux uses `/proc`. Neither path invokes a shell for app launch.
   In particular, Windows multi-window launching and the full editor workflow,
   startup login launches, and live Plasma 6 must run before parity is claimed.
 - Existing Windows installers predate this checkpoint; rebuild after remaining work.
-- Next Firefox evidence: rerun the current `tests/kde/nested.sh --gui ... --firefox`
-  on Portafort when its load is suitable. Use the already-built
-  `~/.cache/window-warp-01a16f69/window-warp` and the extracted WebKitWebDriver.
-  Require all 15 checks and inspect `window-warp-firefox-kde.png`. If geometry
-  still fails, inspect the captured owned-window diagnostics before changing
-  compositor timing or minimum-size handling. Windows Firefox UI remains pending.
+- Firefox KDE evidence: all 15 `tests/kde/nested.sh --gui ... --firefox` checks
+  now pass, including geometry; the editor screenshot was inspected. Windows
+  Firefox UI and actual Plasma 6 still require native verification. The current
+  Portafort binary is the caption-fix build documented below.
 - Hoster cleanup sidecar inspected two unregistered live scopes, retained both,
   stopped none (`needs-attention`). No action on unrelated workloads is needed.
 
 ## Resume and gates
 
-Resume terminal variant coverage and Firefox restored-tab investigation;
-INI migration can progress independently. Then gesture/radial,
+Resume terminal variant coverage and INI migration, plus Windows Firefox native
+verification. Then gesture/radial,
 pointer, and outstanding editor/global-hotkey behavior. Preserve all checklist rows.
 Native KDE fixture tests and local Node/Rust tests are ready for reuse.
 The implementation checkpoint is reachable from the owning branch; the subsequent
@@ -140,3 +139,35 @@ feature work, not a release candidate.
 - Disk-space interruption is resolved: the user-approved incremental cache was
   removed; afterward C: regained roughly 14.5 GiB externally. The larger cache
   cleanup was not performed. No unrelated files were deleted.
+
+## Firefox duplicate-caption correction
+
+The owned-window diagnostic run `hoster-warp-gui-20261024-firefox-observe`
+showed a restored caption ending in `Mozilla Firefox <2>` and empty tab capture
+for the full readiness window. KWin's duplicate-caption decoration prevented the
+existing Firefox title matcher from identifying its session. The correction
+removes numeric duplicate markers only after a recognized Firefox brand; a
+page's own angle-bracketed number remains intact. This normalization is shared
+by session scoring and selected-tab reconciliation.
+
+The owning/lowest applicable branch is `codex/cross-platform-app`. The Firefox
+implementation commit is contained only in that local branch; no other local
+descendant needs propagation, and the original AHK branches are unchanged. No
+public identifiers, configuration keys, or paths changed. The diagnostic fixture
+now waits for expected URLs and the selected tab, not merely a two-tab count,
+and writes its last ten distinct owned-window observations on completion.
+
+35 Windows Rust tests pass (the separate native Terminal test is opt-in).
+`hoster-warp-build-20261024-firefox-caption` passed 27 Node and 29 Linux Rust tests,
+and built the executable and Debian package. The native unit
+`hoster-warp-gui-20261024-firefox-caption` exited 0 with all 15 checks passing:
+capture, profile reuse, both restored URLs and selected tab, identical-title
+profile isolation and floating geometry. No further geometry change was needed.
+Its report, observations and inspected editor screenshot are retained under
+`src-tauri/target/kde-validation/firefox/`; before-fix evidence is under
+`src-tauri/target/kde-validation/firefox-caption-before/`. The screenshot includes
+a review note from a temporary nonresponsive fixture caption; the saved tab data
+and restoration assertions passed. Both service handles are terminal.
+
+No Windows Firefox or Plasma 6 native claim is made. The full parity checklist
+remains the completion gate; this correction closes the observed KDE failure.

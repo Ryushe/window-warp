@@ -243,16 +243,27 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             result = invoke("restore_workspace", {"id": browser_capture["id"]})
             assert result[0]["restored"] and result[0]["launched"], result
             restored = []
+            observations = []
+            expected_active_url = browser["tabs"][browser["activeTab"] - 1]["url"]
             for _ in range(90):
                 draft = invoke("capture_workspace", {"name": "Check browser restore"})["profile"]
                 restored = [item for item in draft["items"] if item["window"]["pid"] == browser_fixture.pid and item["window"]["id"] != browser_capture["items"][0]["window"]["id"]]
-                if len(restored) == 1 and len(restored[0].get("browser", {}).get("tabs", [])) == 2:
-                    break
+                observation = [{"id": item["window"]["id"], "title": item["window"]["title"], "browser": item.get("browser"), "note": item.get("captureNote", "")} for item in restored]
+                if not observations or observations[-1] != observation:
+                    observations.append(observation)
+                    observations = observations[-10:]
+                if len(restored) == 1:
+                    captured_browser = restored[0].get("browser", {})
+                    tabs = captured_browser.get("tabs", [])
+                    active = captured_browser.get("activeTab", 1) - 1
+                    if len(tabs) == 2 and {tab["url"] for tab in tabs} == set(urls) and 0 <= active < len(tabs) and tabs[active]["url"] == expected_active_url:
+                        break
                 time.sleep(0.5)
+            (output / "firefox-restore-observations.json").write_text(json.dumps({"expectedUrls": urls, "expectedActiveUrl": expected_active_url, "observations": observations}, indent=2))
             assert len(restored) == 1, "Profile launch did not create exactly one new browser window"
             restored_browser = restored[0]["browser"]
-            assert {tab["url"] for tab in restored_browser["tabs"]} == set(urls)
-            assert restored_browser["tabs"][restored_browser["activeTab"] - 1]["url"] == browser["tabs"][browser["activeTab"] - 1]["url"]
+            assert {tab["url"] for tab in restored_browser["tabs"]} == set(urls), observations
+            assert restored_browser["tabs"][restored_browser["activeTab"] - 1]["url"] == expected_active_url, observations
             report["checks"].extend(["real Firefox compressed session/profile/tab capture", "reuse existing Firefox profile window", "new Firefox window restores both URLs and selected tab"])
             # A second profile with identical titles must not be borrowed.
             other_profile = Path(temporary) / "other-firefox-profile"
