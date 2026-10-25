@@ -119,6 +119,7 @@ pub fn press(app: &AppHandle, binding: &Binding, settings: &Settings) -> Result<
         .name("app-shortcut-hold".into())
         .spawn(move || {
             let mut press = Press::new(settings.hold_delay_ms, settings.hold_tile_enabled);
+            let mut picker: Option<crate::radial::Picker> = None;
             loop {
                 // Serialize the final validity check and native action with cancel.
                 // An old worker can never act on a newly enabled session with the same key.
@@ -130,11 +131,34 @@ pub fn press(app: &AppHandle, binding: &Binding, settings: &Settings) -> Result<
                     let action = press.advance(started.elapsed(), chord.down());
                     let result = match action {
                         Some(Action::Tap) => unsafe { super::execute(&binding, &settings) },
-                        Some(Action::Hold) => unsafe {
-                            super::pull_app(&binding, &settings, Some(point))
-                        },
+                        Some(Action::Hold) => (|| {
+                            if settings.hold_mode == "radial" {
+                                picker = crate::radial::Picker::open(
+                                    &app,
+                                    &binding,
+                                    crate::radial::Point {
+                                        x: point.x,
+                                        y: point.y,
+                                    },
+                                )?;
+                                if picker.is_some() {
+                                    return Ok(());
+                                }
+                            }
+                            unsafe { super::pull_app(&binding, &settings, Some(point)) }
+                        })(),
                         None => Ok(()),
                     };
+                    let result = result.and_then(|_| {
+                        if let Some(active) = picker.as_ref() {
+                            if unsafe { GetAsyncKeyState(0x1B) < 0 } || !active.update()? {
+                                picker = None;
+                            } else if press.finished() {
+                                picker.take().unwrap().release(&binding, &settings)?;
+                            }
+                        }
+                        Ok(())
+                    });
                     if press.finished() || result.is_err() {
                         sessions.active.remove(&binding.shortcut);
                     }

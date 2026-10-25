@@ -7,7 +7,7 @@ use std::{
     ptr::null_mut,
     sync::{LazyLock, Mutex},
 };
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use windows_sys::core::BOOL;
 use windows_sys::Win32::{
@@ -302,22 +302,105 @@ fn tile_rect(area: Rect, direction: &str) -> Rect {
     }
 }
 
+pub fn pointer(_: &AppHandle) -> Result<crate::radial::Point, String> {
+    let mut point = POINT::default();
+    if unsafe { GetCursorPos(&mut point) } == 0 {
+        return Err(error("Cannot read pointer position"));
+    }
+    Ok(crate::radial::Point {
+        x: point.x,
+        y: point.y,
+    })
+}
+pub fn pointer_area(_: &AppHandle, point: crate::radial::Point) -> Result<Rect, String> {
+    unsafe {
+        let monitor = MonitorFromPoint(
+            POINT {
+                x: point.x,
+                y: point.y,
+            },
+            MONITOR_DEFAULTTONEAREST,
+        ) as usize;
+        monitors()?
+            .into_iter()
+            .find(|(id, _)| *id == monitor)
+            .map(|(_, area)| area)
+            .ok_or_else(|| "The pointer's monitor is no longer connected.".into())
+    }
+}
+pub fn show_radial(app: &AppHandle, bounds: Rect) -> Result<(), String> {
+    let window = app
+        .get_webview_window("radial")
+        .ok_or("The window picker is unavailable.")?;
+    window
+        .set_size(tauri::PhysicalSize::new(
+            bounds.width as u32,
+            bounds.height as u32,
+        ))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_position(tauri::PhysicalPosition::new(bounds.x, bounds.y))
+        .map_err(|e| e.to_string())?;
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())
+}
+
 unsafe fn pull_app(
     binding: &Binding,
     settings: &Settings,
     hold_pointer: Option<POINT>,
 ) -> Result<(), String> {
+    pull_app_target(binding, settings, hold_pointer, None, None)
+}
+
+pub fn pull_selected(
+    app: &AppHandle,
+    binding: &Binding,
+    settings: &Settings,
+    selected: &crate::workspaces::WindowInfo,
+    previous: Option<&crate::workspaces::WindowInfo>,
+) -> Result<(), String> {
+    let _ = app;
+    unsafe { pull_app_target(binding, settings, None, Some(selected), previous) }
+}
+unsafe fn pull_app_target(
+    binding: &Binding,
+    settings: &Settings,
+    hold_pointer: Option<POINT>,
+    selected: Option<&crate::workspaces::WindowInfo>,
+    previous: Option<&crate::workspaces::WindowInfo>,
+) -> Result<(), String> {
     let mut candidates: Vec<usize> = Vec::new();
     EnumWindows(Some(collect_window), &mut candidates as *mut _ as LPARAM);
-    let active = GetForegroundWindow();
+    let active = previous
+        .and_then(|w| {
+            let hwnd = w.id.parse::<usize>().ok()? as HWND;
+            let mut pid = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            (IsWindow(hwnd) != 0 && pid == w.pid).then_some(hwnd)
+        })
+        .unwrap_or_else(|| GetForegroundWindow());
     let app_match = binding.app_match.to_lowercase();
     candidates.retain(|h| executable(*h as HWND).as_deref() == Some(app_match.as_str()));
-    let hwnd = candidates
-        .iter()
-        .copied()
-        .find(|h| *h == active as usize)
-        .or_else(|| candidates.first().copied())
-        .ok_or("No matching app window is open.")? as HWND;
+    let hwnd = if let Some(selected) = selected {
+        let hwnd = selected
+            .id
+            .parse::<usize>()
+            .map_err(|_| "Invalid window ID.")? as HWND;
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if IsWindow(hwnd) == 0 || pid != selected.pid || !candidates.contains(&(hwnd as usize)) {
+            return Err("The selected window has closed or changed identity.".into());
+        }
+        hwnd
+    } else {
+        candidates
+            .iter()
+            .copied()
+            .find(|h| *h == active as usize)
+            .or_else(|| candidates.first().copied())
+            .ok_or("No matching app window is open.")? as HWND
+    };
     let was_active = hwnd == active;
     if !was_active && !active.is_null() {
         let mut pid = 0;

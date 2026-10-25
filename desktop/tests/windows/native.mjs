@@ -41,7 +41,7 @@ const override = {
     app:{appDirectoriesOverride:state, windows:[{
         label:"main", title:marker, width:1050, height:760, minWidth:760, minHeight:560,
         additionalBrowserArgs:`--remote-debugging-address=127.0.0.1 --remote-debugging-port=${port}`
-    }]}
+    }, {...JSON.parse(fs.readFileSync(path.join(desktop,"src-tauri/tauri.conf.json"),"utf8")).app.windows.find(w=>w.label === "radial"),additionalBrowserArgs:`--remote-debugging-address=127.0.0.1 --remote-debugging-port=${port}`}]}
 };
 fs.writeFileSync(path.join(output, "build-config.json"), JSON.stringify(override, null, 2));
 const actions = ["push-left", "push-right", "pull", "tile-left", "tile-right", "toggle-pause", "open-editor", "open-workspaces", "update-workspace"];
@@ -52,8 +52,8 @@ fs.writeFileSync(path.join(state, "settings.json"), JSON.stringify(config, null,
 const buildLog = fs.openSync(path.join(output, "build.log"), "w");
 const cargo = path.join(process.env.USERPROFILE, ".cargo/bin/cargo.exe");
 console.log("Building isolated native fixture:", output);
-const build = spawn(cargo, ["build", "--manifest-path", "src-tauri/Cargo.toml", "--offline", "--features", "tauri/custom-protocol"], {
-    cwd:desktop, env:{...process.env, CARGO_INCREMENTAL:"0", CARGO_BUILD_JOBS:"2", TAURI_CONFIG:JSON.stringify(override)},
+const build = spawn(cargo, ["rustc", "--manifest-path", "src-tauri/Cargo.toml", "--offline", "--features", "tauri/custom-protocol", "--", "-C", "debuginfo=0"], {
+    cwd:desktop, env:{...process.env, CARGO_INCREMENTAL:"0", CARGO_BUILD_JOBS:"1", TAURI_CONFIG:JSON.stringify(override)},
     windowsHide:true, stdio:["ignore",buildLog,buildLog]
 });
 const built = await exit(build, 600000);
@@ -71,7 +71,7 @@ const appLog = fs.openSync(path.join(output,"app.log"), "w");
 try {
     app = spawn(binary, [], {cwd:output, windowsHide:true, stdio:["ignore",appLog,appLog]});
     const target = await until(async () => {
-        try { return (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t => t.type === "page" && /^https?:\/\/tauri\.localhost\//.test(t.url)); }
+        try { return (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t => t.type === "page" && /^https?:\/\/tauri\.localhost\/(?:index.html)?$/.test(t.url)); }
         catch { if (app.exitCode !== null) throw new Error("Fixture app exited before its WebView was ready"); return null; }
     }, Boolean, "owned WebView", 45000);
     socket = new WebSocket(target.webSocketDebuggerUrl);
@@ -259,6 +259,67 @@ try {
     checks.push("saved disable-hold setting preserves tap-on-release after a long press");
     await press(18); await paused(true);
 
+    await evaluate("(() => {const field=document.querySelector('#hold-enabled');field.checked=true;field.dispatchEvent(new Event('change'));const mode=document.querySelector('#hold-mode');mode.value='radial';mode.dispatchEvent(new Event('change'));})()");
+    await click("#save");
+    await wait("!document.querySelector('#add').disabled && document.querySelector('#message').textContent.startsWith('Saved.')", "radial mode saved");
+    assert.equal((await invoke("get_config")).settings.holdMode,"radial");
+    await press(18); await paused(false);
+    const center = {x:area.x+Math.floor(area.width/2),y:area.y+Math.floor(area.height/2)};
+    const radialOpen = () => until(()=>invoke("radial_view"),v=>v?.labels?.length===2,"native radial opens");
+    const radialClosed = () => until(()=>invoke("radial_view"),v=>v===null,"native radial closes");
+    const readSecond = async () => (await invoke("get_windows")).find(w=>w.id===String(fixture.windows[1]));
+    await placeOwned();
+    await native("pointer",center);
+    await native("hold_start",{key:0x7d});
+    const view = await radialOpen();
+    assert.deepEqual(view.labels,[marker+"-0",marker+"-1"]);
+    assert.equal(view.selected,null);
+    await native("pointer",{x:center.x,y:center.y+90});
+    await until(()=>invoke("radial_view"),v=>v?.selected===1,"pointer selects second radial slot");
+    assert.equal((await readSecond()).active,false,"radial selection must wait for release");
+    const radialTarget = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.url.endsWith("/radial.html"));
+    assert.ok(radialTarget,"Picker has a native webview");
+    const radialSocket = new WebSocket(radialTarget.webSocketDebuggerUrl);
+    await new Promise((resolve,reject)=>{radialSocket.addEventListener("open",resolve,{once:true});radialSocket.addEventListener("error",reject,{once:true});});
+    try {
+        const result = await new Promise((resolve,reject)=>{
+            const timer=setTimeout(()=>reject(new Error("Radial screenshot timed out")),10000);
+            radialSocket.addEventListener("message",event=>{const message=JSON.parse(event.data);if(message.id===1){clearTimeout(timer);message.error?reject(new Error(JSON.stringify(message.error))):resolve(message.result);} });
+            radialSocket.send(JSON.stringify({id:1,method:"Page.captureScreenshot"}));
+        });
+        fs.writeFileSync(path.join(output,"radial.png"),Buffer.from(result.data,"base64"));
+    } finally { radialSocket.close(); }
+    await native("repeat",{key:0x7d});
+    await native("key_up");
+    await radialClosed();
+    await until(readSecond,w=>w.active,"release focuses the selected second window");
+    assert.deepEqual((await readOwned()).rect,initial);
+    checks.push("native radial uses stable window order, tracks pointer, ignores repeats and selects only on release");
+
+    await placeOwned(); await native("pointer",center);
+    await native("hold_start",{key:0x7d}); await radialOpen();
+    await native("key_up"); await radialClosed();
+    assert.deepEqual((await readOwned()).rect,initial);
+    assert.equal((await readSecond()).active,false);
+    checks.push("radial release inside the dead zone cancels without selecting or moving a window");
+
+    await native("pointer",center); await native("hold_start",{key:0x7d}); await radialOpen();
+    await native("pointer",{x:center.x,y:center.y+90});
+    await until(()=>invoke("radial_view"),v=>v?.selected===1,"select before Escape");
+    await native("held_tap",{key:0x1b}); await radialClosed();
+    await native("key_up"); await sleep(100);
+    assert.equal((await readSecond()).active,false);
+    checks.push("native Escape cancels a selected radial gesture without applying it on release");
+
+    await native("pointer",center); await native("hold_start",{key:0x7d}); await radialOpen();
+    await invoke("set_enabled",{enabled:false}); await radialClosed();
+    await invoke("set_enabled",{enabled:true}); await sleep(850);
+    assert.equal(await invoke("radial_view"),null);
+    await native("key_up"); await sleep(100);
+    assert.equal((await readSecond()).active,false);
+    checks.push("pause closes an open radial and resume cannot revive it while the key remains held");
+    await press(18); await paused(true);
+
     await press(18); await paused(false);
     await press(20);
     await wait("!document.querySelector('#workspaces-page').hidden && !document.querySelector('#capture-workspace').disabled", "workspace browser hotkey");
@@ -350,9 +411,9 @@ try {
     fs.closeSync(appLog);
     // The fixture copied its executable already; restore the ordinary debug build.
     const normalLog = fs.openSync(path.join(output,"restore-build.log"),"w");
-    const normalEnv = {...process.env,CARGO_INCREMENTAL:"0",CARGO_BUILD_JOBS:"2"};
+    const normalEnv = {...process.env,CARGO_INCREMENTAL:"0",CARGO_BUILD_JOBS:"1"};
     delete normalEnv.TAURI_CONFIG;
-    const normal = spawn(cargo,["build","--manifest-path","src-tauri/Cargo.toml","--offline","--features","tauri/custom-protocol"],{
+    const normal = spawn(cargo,["rustc","--manifest-path","src-tauri/Cargo.toml","--offline","--features","tauri/custom-protocol","--","-C","debuginfo=0"],{
         cwd:desktop,env:normalEnv,windowsHide:true,stdio:["ignore",normalLog,normalLog]
     });
     try {

@@ -68,7 +68,7 @@ For app identifiers, use the exact resource class or desktop file ID. KWin's win
 
 ## Scope and verification
 
-The full feature port is in progress; [PARITY.md](PARITY.md) tracks the source-derived requirements and verification gaps. INI import, radial selection, pointer centering and timed retiling remain pending. Tap/hold tiling is implemented on Windows and KDE; see the checklist for native coverage and remaining gesture cases. Terminal capture and new-window restoration have passed native cmd, WSL, and Konsole fixtures; additional profile variants remain to be verified. Workspace capture/reuse/launch, per-axis maximization/fullscreen, and Firefox tab restoration have passed native KDE tests. Startup registration passes native Windows and KDE toggle tests; actual login launches still need validation. Live Windows Firefox, mixed-DPI displays, desktop-imposed minimum sizes, and elevated Windows applications also need coverage. Existing Windows preview installers predate these ongoing changes.
+The full feature port is in progress; [PARITY.md](PARITY.md) tracks the source-derived requirements and verification gaps. INI import, pointer centering and timed retiling remain pending. The radial picker is implemented on both platforms and passes native KDE selection/cancellation checks; its Windows release-focus correction still requires a fresh native retest. Tap/hold tiling is implemented on Windows and KDE; see the checklist for native coverage and remaining gesture cases. Terminal capture and new-window restoration have passed native cmd, WSL, and Konsole fixtures; additional profile variants remain to be verified. Workspace capture/reuse/launch, per-axis maximization/fullscreen, and Firefox tab restoration have passed native KDE tests. Startup registration passes native Windows and KDE toggle tests; actual login launches still need validation. Live Windows Firefox, mixed-DPI displays, desktop-imposed minimum sizes, and elevated Windows applications also need coverage. Existing Windows preview installers predate these ongoing changes.
 
 ```sh
 npm test
@@ -86,6 +86,7 @@ Manual acceptance on each OS: enable the app; push a floating window across two 
 
 - `ui/`: local HTML/CSS/JavaScript editor. All settings and actions pass through narrow Tauri commands; no shell or filesystem API is exposed to the webview.
 - `src-tauri/src/app_actions.rs`: application control shortcuts and pending editor/workspace requests.
+- `src-tauri/src/radial.rs` and `ui/radial.*`: stable window candidates, shared angular selection, and the temporary picker overlay.
 - `src-tauri/src/config.rs`: versioned configuration, canonical shortcut syntax, validation.
 - `src-tauri/src/windows.rs`: Win32 window enumeration, positioning, focus, and global shortcut registration.
 - `src-tauri/src/linux.rs`: KWin session integration via qdbus, with arguments passed directly without a shell.
@@ -97,3 +98,20 @@ Manual acceptance on each OS: enable the app; push a floating window across two 
 - `src-tauri/kwin/warp.js`: compositor-side window management and shortcuts.
 
 Settings live in Tauri's per-user configuration directory under `com.windowwarp.desktop/settings.json`; workspaces use `workspaces.json` beside it. The editor displays the settings path. Existing AHK INI files are not imported or modified.
+
+## Radial window picker
+
+In **Settings → Hold action**, select **Radial window picker**, then save and
+activate shortcuts. Hold an app-pull key, move toward a window label and release
+the key or a required modifier. The picker shows the first eight matching windows
+in case-insensitive title order, with native identity breaking ties. Duplicate
+labels are numbered. Releasing within the 10-pixel center zone, pressing Escape,
+closing the picker, or pausing cancels selection. A selected window follows that
+binding's existing main/burner and focus-last behavior. Holding is optional and
+existing settings continue to use mouse tiling.
+
+The overlay is clamped to the work area containing the original pointer. Native
+pointer updates run only while a picker is visible. On KDE, KWin positions and
+focuses the overlay, including on Wayland. More than four labels use a compact
+layout to keep all eight readable without overlap. Native Windows radial
+verification is incomplete; see PARITY.md before relying on it.

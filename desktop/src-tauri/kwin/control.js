@@ -55,19 +55,53 @@
         if (command.kind === "snapshot") { snapshot(job); return; }
         if (command.kind === "focus-editor") {
             var editor = Warp.windows().filter(function(w) {
-                return !w.deleted && w.normalWindow && Number(w.pid || 0) === WARP_CONTROL.ownPid;
+                return !w.deleted && w.normalWindow && String(w.caption) !== "Window Warp Picker" && Number(w.pid || 0) === WARP_CONTROL.ownPid;
             })[0];
             if (editor) Warp.focus(editor);
             reply(job, !!editor);
             return;
         }
         if (command.kind === "reset-app-pulls") { Warp.resetAppPulls(); reply(job, true); return; }
+        if (command.kind === "pointer") {
+            reply(job, {x:Math.round(workspace.cursorPos.x), y:Math.round(workspace.cursorPos.y)});
+            return;
+        }
+        if (command.kind === "pointer-area") {
+            var point = command.point;
+            var outputs = Warp.screens();
+            function distance(output) {
+                var r = output.geometry;
+                var dx = Math.max(r.x-point.x, 0, point.x-r.x-r.width);
+                var dy = Math.max(r.y-point.y, 0, point.y-r.y-r.height);
+                return dx*dx+dy*dy;
+            }
+            outputs.sort(function(a,b) { return distance(a)-distance(b); });
+            if (!outputs.length) throw new Error("No connected output is available.");
+            reply(job, rect(Warp.area(outputs[0])));
+            return;
+        }
+        if (command.kind === "show-radial") {
+            var picker = Warp.windows().filter(function(w) {
+                return !w.deleted && Number(w.pid || 0) === WARP_CONTROL.ownPid && String(w.caption) === "Window Warp Picker";
+            })[0];
+            if (picker) { picker.keepAbove = true; picker.frameGeometry = command.bounds; Warp.focus(picker); }
+            reply(job, !!picker);
+            return;
+        }
         if (command.kind === "app-pull") {
             Warp.run(command.binding, command.settings, command.pointer);
             reply(job, true);
             return;
         }
         var window = target(command);
+        if (command.kind === "pull-selected") {
+            var previous = command.previous && Warp.windows().filter(function(w) {
+                return !w.deleted && String(w.internalId) === command.previous.id && Number(w.pid || 0) === command.previous.pid;
+            })[0];
+            Warp.run(command.binding, command.settings, null, window, previous);
+            reply(job, true);
+            return;
+        }
         if (command.kind === "restore") {
             var placement = command.placement;
             var outputs = Warp.screens();

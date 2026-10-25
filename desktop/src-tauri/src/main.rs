@@ -15,6 +15,7 @@ mod platform;
 #[path = "linux.rs"]
 mod platform;
 mod process_info;
+mod radial;
 mod startup;
 mod terminal;
 mod workspaces;
@@ -342,6 +343,9 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "radial" {
+                    radial::cancel_visible();
+                }
                 if window.hide().is_ok() {
                     api.prevent_close();
                 }
@@ -361,7 +365,9 @@ fn main() {
             capture_workspace,
             get_windows,
             restore_workspace,
-            cancel_workspace_restore
+            cancel_workspace_restore,
+            radial::radial_view,
+            radial::cancel_radial
         ])
         .build(tauri::generate_context!())
         .expect("Could not start Window Warp")

@@ -75,10 +75,11 @@ var Warp = (function () {
         send(window, to);
         window.frameGeometry = rect;
     }
-    function pullApp(binding, all, holdPointer) {
-        var current = active();
+    function pullApp(binding, all, holdPointer, selected, previous) {
+        var current = previous || active();
         var candidates = windows().filter(function (w) { return matches(w, binding.appMatch.toLowerCase()); });
-        var window = candidates.indexOf(current) >= 0 ? current : candidates[candidates.length - 1];
+        var window = selected || (candidates.indexOf(current) >= 0 ? current : candidates[candidates.length - 1]);
+        if (selected && candidates.indexOf(selected) < 0) throw new Error("The selected window no longer matches this app.");
         if (!window) { print("Window Warp: no open window for " + binding.appMatch); return; }
         var wasActive = window === current;
         if (!wasActive && current) previousWindows[binding.shortcut] = String(current.internalId);
@@ -118,7 +119,7 @@ var Warp = (function () {
         }
         focus(window);
     }
-    function run(binding, overrides, holdPointer) {
+    function run(binding, overrides, holdPointer, selected, previous) {
         if (["toggle-pause", "open-editor", "open-workspaces", "update-workspace"].indexOf(binding.action) >= 0) {
             callDBus(WARP_APP.service, "/Control", "com.windowwarp.Control", "Action", WARP_APP.token, binding.action);
             return;
@@ -127,7 +128,7 @@ var Warp = (function () {
         var all = screens();
         if (!all.length) return;
         var window = active();
-        if (binding.action === "pull-app") { pullApp(binding, all, holdPointer); return; }
+        if (binding.action === "pull-app") { pullApp(binding, all, holdPointer, selected, previous); return; }
         if (binding.action === "focus-app") {
             var match = binding.appMatch.toLowerCase();
             var candidates = windows().filter(function (w) {

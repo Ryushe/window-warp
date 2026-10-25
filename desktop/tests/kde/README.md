@@ -163,3 +163,13 @@ on an observed occupied ID it uses the supported scripting startup entry point.
 See [KWin 5 loader implementation](https://github.com/KDE/kwin/blob/v5.27.11/src/scripting/scripting.cpp).
 Physical displays, Plasma 6, and overlapping distinct held global chords remain
 separate coverage gaps. A cancellation guard has no timer-based suppression.
+
+
+Add `--radial` to `--hold --resume-held --reassign-native` to exercise a separate
+nine-window fixture. It verifies the eight-slot limit and stable title order,
+real pointer selection followed by native key release, dead-zone cancellation,
+Escape and pause/resume cancellation while held. The combined fixture has 26
+checks. `window-warp-radial-kde.png` captures the actual overlay through its
+WebKit window. The fixture uses its own app identity and terminates all nine
+owned windows during cleanup. Its pointer and key injection remains restricted
+to the private nested compositor.

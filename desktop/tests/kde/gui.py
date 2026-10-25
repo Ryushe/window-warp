@@ -18,7 +18,7 @@ driver_binary = str(Path(sys.argv[2]).resolve())
 output = Path(sys.argv[3]).resolve()
 output.mkdir(parents=True, exist_ok=True)
 session = None
-if any(flag in sys.argv for flag in ["--resume-held", "--reassign-native"]) and "--hold" not in sys.argv:
+if any(flag in sys.argv for flag in ["--resume-held", "--reassign-native", "--radial"]) and "--hold" not in sys.argv:
     raise ValueError("Native gesture edge checks require --hold and the private compositor")
 
 
@@ -91,6 +91,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
     environment.update({"TAURI_WEBVIEW_AUTOMATION": "true", "TAURI_AUTOMATION": "true", "GDK_BACKEND": "wayland", "XDG_CONFIG_HOME": temporary + "/config", "XDG_DATA_HOME": temporary + "/data", "XDG_CACHE_HOME": temporary + "/cache"})
     driver = subprocess.Popen([driver_binary, f"--port={port}", "--host=127.0.0.1"], env=environment, stdout=log, stderr=log, start_new_session=True)
     fixture = None
+    radial_fixture = None
     hold_fixture = None
     key_monitor = None
     browser_fixture = None
@@ -407,6 +408,98 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                     invoke("set_enabled", {"enabled":False})
                     report["checks"].append("KDE pause/resume cancels held input, releases unrelated hooks, and accepts a fresh press")
 
+                if "--radial" in sys.argv:
+                    radial_fixture = subprocess.Popen([sys.executable, fixture_script, "--radial"], env=fixture_env, stdout=log, stderr=log)
+                    def radial_windows():
+                        return sorted([w for w in invoke("get_windows") if w["pid"] == radial_fixture.pid], key=lambda w:(w["title"].lower(),w["id"]))
+                    deadline = time.monotonic() + 5
+                    while len(radial_windows()) != 9 and time.monotonic() < deadline:
+                        time.sleep(0.1)
+                    choices = radial_windows()
+                    assert len(choices) == 9, "Radial fixture must map nine owned windows"
+                    config["settings"].update({"holdMode":"radial", "holdTileEnabled":True})
+                    old_match = config["bindings"][hold_index]["appMatch"]
+                    radial_match = choices[0]["appId"]
+                    config["bindings"][hold_index]["appMatch"] = radial_match
+                    config["bindings"][1]["appMatch"] = radial_match
+                    invoke("save_config", {"config":config})
+                    invoke("set_enabled", {"enabled":True})
+                    def radial_wait(predicate, description):
+                        deadline = time.monotonic()+5
+                        while time.monotonic() < deadline:
+                            value = invoke("radial_view")
+                            if predicate(value):
+                                return value
+                            time.sleep(0.05)
+                        raise AssertionError(f"{description}: {value}")
+                    def radial_focus_first():
+                        for _ in range(12):
+                            if radial_windows()[0]["active"]:
+                                return
+                            invoke_shortcut("focus-app")
+                            time.sleep(0.05)
+                        raise AssertionError("Cannot focus first owned radial window")
+                    cx, cy = area["x"]+640, area["y"]+360
+                    radial_focus_first()
+                    keys.pointer(cx,cy)
+                    chord(36)
+                    view = radial_wait(lambda v:v and len(v["labels"])==8,"radial opens with eight slots")
+                    assert view["labels"] == [w["title"] for w in choices[:8]]
+                    keys.pointer(cx+75,cy-75)
+                    radial_wait(lambda v:v and v["selected"]==1,"second angular slot selected")
+                    assert not radial_windows()[1]["active"], "Selection must wait for release"
+                    main_handle = request("GET", f"/session/{session}/window")
+                    for handle in request("GET", f"/session/{session}/window/handles"):
+                        request("POST", f"/session/{session}/window", {"handle":handle})
+                        if "radial.html" in request("GET", f"/session/{session}/url"):
+                            image = request("GET", f"/session/{session}/screenshot")
+                            (output / "window-warp-radial-kde.png").write_bytes(base64.b64decode(image))
+                            break
+                    request("POST", f"/session/{session}/window", {"handle":main_handle})
+                    keys.release()
+                    radial_wait(lambda v:v is None,"radial closes on release")
+                    deadline = time.monotonic()+5
+                    while not radial_windows()[1]["active"] and time.monotonic()<deadline:
+                        time.sleep(0.05)
+                    assert radial_windows()[1]["active"]
+                    report["checks"].append("native KDE radial displays eight of nine stable windows and applies the selected slot on release")
+                    radial_focus_first()
+                    original_rects = [w["rect"] for w in radial_windows()]
+                    keys.pointer(cx,cy); chord(36)
+                    radial_wait(lambda v:v and v["selected"] is None,"radial starts in dead zone")
+                    keys.release()
+                    radial_wait(lambda v:v is None,"dead-zone release closes radial")
+                    assert [w["rect"] for w in radial_windows()] == original_rects
+                    assert not radial_windows()[1]["active"]
+                    report["checks"].append("native KDE radial dead-zone release cancels without moving windows")
+                    radial_focus_first()
+                    keys.pointer(cx,cy); chord(36)
+                    radial_wait(lambda v:v is not None,"radial opens before Escape")
+                    keys.pointer(cx+75,cy-75)
+                    radial_wait(lambda v:v and v["selected"]==1,"selected before Escape")
+                    keys.key(1,True); keys.key(1,False)
+                    radial_wait(lambda v:v is None,"native Escape closes radial")
+                    keys.release()
+                    assert not radial_windows()[1]["active"]
+                    report["checks"].append("native KDE Escape cancels selected radial without acting on key release")
+                    radial_focus_first()
+                    keys.pointer(cx,cy); chord(36)
+                    radial_wait(lambda v:v is not None,"radial opens before pause")
+                    invoke("set_enabled", {"enabled":False})
+                    radial_wait(lambda v:v is None,"pause closes radial")
+                    invoke("set_enabled", {"enabled":True})
+                    time.sleep(0.8)
+                    assert invoke("radial_view") is None
+                    keys.release()
+                    assert [w["rect"] for w in radial_windows()] == original_rects
+                    report["checks"].append("native KDE pause closes radial and held input cannot reopen it after resume")
+                    invoke("set_enabled", {"enabled":False})
+                    config["settings"]["holdMode"] = "tile"
+                    config["bindings"][hold_index]["appMatch"] = old_match
+                    config["bindings"][1]["appMatch"] = old_match
+                    invoke("save_config", {"config":config})
+                    radial_fixture.terminate(); radial_fixture.wait(timeout=5)
+
                 if "--reassign-native" in sys.argv:
                     def shortcut_names():
                         return set(subprocess.check_output(["qdbus", "org.kde.kglobalaccel", "/component/kwin", "org.kde.kglobalaccel.Component.shortcutNames"], text=True).splitlines())
@@ -657,6 +750,9 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         if key_monitor:
             key_monitor.terminate()
             key_monitor.wait(timeout=10)
+        if radial_fixture and radial_fixture.poll() is None:
+            radial_fixture.terminate()
+            radial_fixture.wait(timeout=10)
         if hold_fixture:
             hold_fixture.terminate()
             hold_fixture.wait(timeout=10)

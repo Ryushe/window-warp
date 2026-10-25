@@ -14,7 +14,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Implemented both OSes; tiled burner round trip live KDE verified; other layouts and Windows live checks pending |
 | App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE focus-last and minimized checks pass; Windows native behavior checks pending |
 | Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE native key delivery verifies tap, hold, repeats, pause cancellation and disabled hold; resume before key release and reassignment while held now pass; overlapping distinct chords and live Plasma 6 remain |
-| Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows mouse tile uses the key-down pointer position; KDE hold tile now passes native key delivery; both radial overlays remain pending |
+| Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows mouse tile uses the key-down pointer position; KDE hold tile and radial selection/cancellation pass native key delivery; shared eight-slot geometry/order and both overlays implemented; Windows radial focus correction still requires native retest |
 | Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed reassignment tested; native KDE current-app capture and physical-key reassignment pass; Windows native current-app capture, key recording, reassignment and persistence pass |
 | Global pause/resume hotkey stays available while paused; editor/workspace/update hotkeys | Partial | Implemented with separate pause registration; native KDE KGlobalAccel action dispatch passes; Windows OS key delivery, lifecycle and registration-failure recovery pass; KDE native pause/app-pull key delivery passes; editor/workspace key delivery remains direct-dispatch coverage |
 | Settings persistence and startup registration | Partial | Windows Run entry and KDE autostart toggles pass; actual login/startup launches remain pending |
@@ -334,3 +334,64 @@ The separate pause hotkey's native delivery is also covered; two overlapping
 physical global chords still need their own check. Live Plasma 6, physical
 portrait/mixed-DPI outputs, radial selection, pointer/retile behavior, migration,
 and all other unfinished rows remain required.
+
+
+## Radial picker increment
+
+Settings now select mouse tiling (the compatible default) or a radial picker.
+The shared model captures up to eight windows, sorts case-insensitive titles with
+native identity as the tie-breaker, and numbers duplicate labels. The 260px
+picker is clamped to the pointer work area, has a 10px dead zone and clockwise
+selection from the top. More than four labels use compact, non-overlapping slots.
+A release chooses the captured native window; Escape, close, pause and superseded
+sessions cancel. Native identity is checked again before applying the binding's
+existing main/burner/focus-last behavior. Only visible held pickers poll the pointer.
+
+The initial Linux radial build passed 46 Rust tests. Native
+`hoster-warp-gui-20261024-radial` and `...-radial-layout` each passed 26 checks,
+including eight of nine owned windows, pointer selection on release, dead-zone
+cancellation, native Escape, and pause/resume before release. The first screenshot
+exposed overlapping labels; compact slots and centered instructions fix that.
+Node coverage now has 43 tests, including all 1–8 slot layouts and the original
+active-window semantics while a picker temporarily owns focus.
+
+Windows unit tests passed 50 (two opt-in terminal tests ignored) before the final
+focus-order correction. The first native run failed because the two fixture
+webviews had different WebView2 debug options; both now use the same options.
+Subsequent runs could not programmatically focus the owned input fixture. Its
+helper now permits a verified title-bar click on its own window, restores the
+pointer/topmost flag and still refuses to send keys without verified owned focus.
+
+A no-rebuild run of the existing Windows radial executable reached real pointer
+selection but failed to focus the selected window on release. Its report is
+`src-tauri/target/windows-validation/WARP-NATIVE-5d25ec84-29f8-46cd-abe9-3697850c580d/result.json`.
+The implementation now applies the selected window before hiding the picker;
+hiding first can relinquish this process's foreground eligibility. **This fix
+still requires a fresh Windows native run**; the failed selection is not counted
+as passing. Rerun `node desktop/tests/windows/native.mjs` when Windows memory is
+available. The fixture has four added radial assertions and uses one build job
+without final-crate debug symbols.
+
+Local compilation ran out of system commit even with those reduced build options.
+Latest failed build: `WARP-NATIVE-8d525638-69c1-4dec-abec-999cc5d3bfaa/build.log`.
+No task-owned WebView processes remained; unrelated processes were left alone.
+The ordinary debug build was not restored after the earlier failure in
+`WARP-NATIVE-84a75699-a9e2-4700-9e6b-1bb6ff931f68/restore-build.log`.
+Rebuild before using that debug executable. Incremental caching remains disabled
+and the cleared incremental directory is empty. Existing Windows installers
+remain old; this is an incomplete feature checkpoint, not a release.
+
+Full parity remains open: the Windows radial retest, overlapping distinct held
+chords, pointer centering/timed retile, INI migration, packaged and desktop-entry
+launch, remaining Windows browser/terminal/action cases, physical displays,
+Plasma 6, login/startup, graceful tray quit and installer/release review.
+
+Final exact-source Linux receipt: `hoster-warp-build-20261024-radial-focus` exits 0
+with 46 Rust tests, 43 Node tests, executable and Debian package.
+`hoster-warp-gui-20261024-radial-focus` exits 0 with all 26 native checks, using
+`--hold --resume-held --reassign-native --radial`. Nested session logs:
+`/tmp/window-warp-nested.27oNxI` on Portafort. The final screenshot was inspected:
+all eight slots and both centered instructions are separate and readable. The
+local final report/screenshot is under `src-tauri/target/kde-validation/radial/`.
+This validates the current Linux focus-before-hide behavior as well as the final
+layout; Windows correction verification remains pending for the reason above.

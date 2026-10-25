@@ -538,3 +538,53 @@ pause-key delivery verified separately. Do not generalize that to every keyboard
 interaction. Plasma 6, physical display coverage, final installers and independent
 release review remain pending. Keep every PARITY row in scope. No merge, push or
 user-session installation/activation occurred.
+
+
+## Radial picker checkpoint — KDE verified; Windows retest pending
+
+Implemented shared radial candidates, selection/dead-zone math and a local Tauri
+overlay; both native hold adapters use it. The picker remembers pre-overlay
+focus and validates the selected identity before applying ordinary app-pull
+behavior. KDE owns overlay position/focus on Wayland. Settings retain mouse
+tiling by default and expose radial selection with explicit Save. The expanded
+native fixtures cover release, Escape, center cancellation and pause/resume.
+
+Current evidence: 43 Node tests; 46 Linux Rust tests in the radial builds;
+50 Windows Rust tests before the final focus correction. Native KDE radial and
+layout runs each pass 26 checks; final focus-order build/run also passes 46 Rust, 43 Node and 26 native checks.
+Screenshots and receipts are under `desktop/src-tauri/target/kde-validation/radial/`.
+The first 8-slot screenshot had overlap, corrected with compact slots and
+centered instructions; no final Windows native success is claimed.
+
+Windows native selection failed to activate the selected window after hiding
+the picker. The code now activates before hiding. The exact reproduction report
+is `desktop/src-tauri/target/windows-validation/WARP-NATIVE-5d25ec84-29f8-46cd-abe9-3697850c580d/result.json`.
+This used the already-built fixture from `WARP-NATIVE-84a75699-a9e2-4700-9e6b-1bb6ff931f68`
+after fresh compilation became impossible from system commit pressure. The
+no-rebuild runner is a local diagnostic artifact, not a replacement test path.
+The committed Windows fixture is the authoritative retest:
+`node desktop/tests/windows/native.mjs`.
+
+Windows rebuilds (including the normal debug build restoration) failed from low
+available commit, even with incremental caching off, one compiler job and
+final-crate debug symbols disabled. Stop repeating local builds until sufficient
+memory is available; then run the complete Windows fixture and verify the normal
+build is restored. It also tests a verified click confined to the fixture's own
+title bar if Windows refuses foreground focus. No unrelated processes/settings
+were changed. Both webviews require identical debug arguments in the fixture.
+
+No merge, push, installation or user-session activation. Main and root AHK remain
+unchanged. Resume with the Windows radial correction verification, then all
+remaining rows in `desktop/PARITY.md`; do not narrow the full-port goal. Known
+remaining requirements include pointer/retile, INI migration, launch variants,
+physical/Plasma 6 acceptance and final review/installer checks.
+
+Final exact-source Linux receipt: `hoster-warp-build-20261024-radial-focus` exits 0
+with 46 Rust tests, 43 Node tests, executable and Debian package.
+`hoster-warp-gui-20261024-radial-focus` exits 0 with all 26 native checks, using
+`--hold --resume-held --reassign-native --radial`. Nested session logs:
+`/tmp/window-warp-nested.27oNxI` on Portafort. The final screenshot was inspected:
+all eight slots and both centered instructions are separate and readable. The
+local final report/screenshot is under `desktop/src-tauri/target/kde-validation/radial/`.
+This validates the current Linux focus-before-hide behavior as well as the final
+layout; Windows correction verification remains pending for the reason above.

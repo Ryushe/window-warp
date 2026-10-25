@@ -40,7 +40,8 @@
     <details><summary>Settings & compatibility</summary>
       <label class="enabled-field"><input type="checkbox" id="startup" disabled> Start Window Warp at login and enable shortcuts</label>
       <div class="monitor-settings"><label>Main monitor<input id="main-monitor" type="number" min="0" max="32" value="0"><small>0 = primary/origin display. Other numbers follow left-to-right display order.</small></label><label>Burner monitor<input id="burner-monitor" type="number" min="1" max="32" value="2"><small>Falls back to another connected display when unavailable.</small></label></div>
-      <label class="enabled-field"><input type="checkbox" id="hold-enabled" checked> Hold app-pull shortcuts to tile</label>
+      <label class="enabled-field"><input type="checkbox" id="hold-enabled" checked> Enable holding app-pull shortcuts</label>
+      <label>Hold action<select id="hold-mode"><option value="tile">Mouse tiling</option><option value="radial">Radial window picker</option></select></label>
       <label>Hold delay (milliseconds)<input id="hold-delay" type="number" min="100" max="5000" step="1" value="400"></label>
       <p id="hold-hint"></p>
       <p id="compatibility"></p><p id="settings-path"></p>

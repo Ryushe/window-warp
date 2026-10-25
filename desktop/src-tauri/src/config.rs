@@ -34,6 +34,7 @@ pub struct Settings {
     pub burner_monitor: usize,
     pub hold_delay_ms: u64,
     pub hold_tile_enabled: bool,
+    pub hold_mode: String,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -42,6 +43,7 @@ impl Default for Settings {
             burner_monitor: 2,
             hold_delay_ms: 400,
             hold_tile_enabled: true,
+            hold_mode: "tile".into(),
         }
     }
 }
@@ -129,6 +131,12 @@ impl Config {
         }
         if !(100..=5000).contains(&self.settings.hold_delay_ms) {
             return Err("Choose a hold delay between 100 and 5000 milliseconds.".into());
+        }
+        if !["tile", "radial"].contains(&self.settings.hold_mode.as_str()) {
+            return Err(
+                "Choose mouse tiling or the radial window picker for holding an app shortcut."
+                    .into(),
+            );
         }
         if self.settings.main_monitor > 32
             || self.settings.burner_monitor > 32
@@ -301,6 +309,7 @@ mod tests {
         assert_eq!(config.bindings[0].shortcut, "Super+Semicolon");
         assert_eq!(config.settings.burner_monitor, 2);
         assert_eq!(config.settings.hold_delay_ms, 400);
+        assert_eq!(config.settings.hold_mode, "tile");
         assert!(config.settings.hold_tile_enabled);
     }
     #[test]
@@ -309,11 +318,13 @@ mod tests {
         for delay in [100, 400, 5000] {
             config.settings.hold_delay_ms = delay;
             config.settings.hold_tile_enabled = false;
+            config.settings.hold_mode = "radial".into();
             config.validate().unwrap();
             let loaded: Config =
                 serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
             assert_eq!(loaded.settings.hold_delay_ms, delay);
             assert!(!loaded.settings.hold_tile_enabled);
+            assert_eq!(loaded.settings.hold_mode, "radial");
         }
         for delay in [0, 99, 5001, u64::MAX] {
             config.settings.hold_delay_ms = delay;

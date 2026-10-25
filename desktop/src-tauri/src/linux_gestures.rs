@@ -250,6 +250,7 @@ struct Pending {
     point: Option<Point>,
     held: bool,
     cancelled: bool,
+    picker: Option<crate::radial::Picker>,
 }
 impl Pending {
     fn new(settings: &Settings, at: Instant, cancelled: bool) -> Self {
@@ -261,9 +262,13 @@ impl Pending {
             point: None,
             held: false,
             cancelled,
+            picker: None,
         }
     }
     fn deadline(&self, settings: &Settings) -> Option<Instant> {
+        if self.picker.is_some() {
+            return Some(Instant::now() + Duration::from_millis(25));
+        }
         if self.cancelled && self.native_pressed {
             return None;
         }
@@ -294,6 +299,7 @@ impl Controller {
         for slot in self.slots.values_mut() {
             if let Some(pending) = &mut slot.pending {
                 pending.cancelled = true;
+                pending.picker = None;
             }
         }
         self.desired = config;
@@ -418,14 +424,43 @@ impl Controller {
             if let Some(action) = p.action() {
                 p.held = action == Action::Hold;
                 let pointer = if p.held { p.point } else { None };
-                if let Err(error) = crate::linux_control::request(
-                    app,
-                    serde_json::json!({
-                        "kind":"app-pull", "binding":slot.spec.binding, "settings":slot.spec.settings, "pointer":pointer
-                    }),
-                ) {
+                let result = (|| -> Result<(), String> {
+                    if p.held && slot.spec.settings.hold_mode == "radial" {
+                        let point = p.point.unwrap();
+                        p.picker = crate::radial::Picker::open(
+                            app,
+                            &slot.spec.binding,
+                            crate::radial::Point {
+                                x: point.x,
+                                y: point.y,
+                            },
+                        )?;
+                        if p.picker.is_some() {
+                            return Ok(());
+                        }
+                    }
+                    crate::linux_control::request(
+                        app,
+                        serde_json::json!({
+                            "kind":"app-pull", "binding":slot.spec.binding, "settings":slot.spec.settings, "pointer":pointer
+                        }),
+                    )?;
+                    Ok(())
+                })();
+                if let Err(error) = result {
                     let _ = app.emit("warp-error", error);
                     p.cancelled = true;
+                    p.picker = None;
+                }
+            }
+            if let Some(picker) = p.picker.as_ref() {
+                if !picker.update()? {
+                    p.picker = None;
+                } else if p.released {
+                    p.picker
+                        .take()
+                        .unwrap()
+                        .release(&slot.spec.binding, &slot.spec.settings)?;
                 }
             }
             if p.press.finished() {

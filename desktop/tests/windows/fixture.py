@@ -59,6 +59,8 @@ user.EnumWindows.argtypes = [ENUMWINDOWS, w.LPARAM]
 user.IsWindowVisible.argtypes = [w.HWND]
 user.GetWindowRect.argtypes = [w.HWND, c.POINTER(w.RECT)]
 user.SetWindowPos.argtypes = [w.HWND, w.HWND, c.c_int, c.c_int, c.c_int, c.c_int, w.UINT]
+user.WindowFromPoint.argtypes = [w.POINT]
+user.WindowFromPoint.restype = w.HWND
 user.GetCursorPos.argtypes = [c.POINTER(w.POINT)]
 user.SetCursorPos.argtypes = [c.c_int, c.c_int]
 user.GetWindowThreadProcessId.argtypes = [w.HWND, c.POINTER(w.DWORD)]
@@ -202,9 +204,51 @@ try:
                     rect = request["rect"]
                     if not user.SetWindowPos(hwnd, None, rect["x"], rect["y"], rect["width"], rect["height"], 0x14):
                         raise c.WinError(c.get_last_error())
-                user.SetForegroundWindow(hwnd)
+                focus_deadline = time.monotonic() + 1.5
+                while user.GetForegroundWindow() != hwnd and time.monotonic() < focus_deadline:
+                    user.SetForegroundWindow(hwnd)
+                    while user.PeekMessageW(c.byref(message), None, 0, 0, 1):
+                        user.TranslateMessage(c.byref(message))
+                        user.DispatchMessageW(c.byref(message))
+                    time.sleep(0.05)
+                if user.GetForegroundWindow() != hwnd and not held_keys:
+                    # Windows can deny programmatic activation. Click only the
+                    # verified title bar of our own temporary window, then undo
+                    # its temporary topmost flag. Never send keys to another app.
+                    point = w.POINT()
+                    user.GetCursorPos(c.byref(point))
+                    if original_pointer is None:
+                        original_pointer = (point.x, point.y)
+                    rect = w.RECT()
+                    click_point = None
+                    try:
+                        if not user.SetWindowPos(hwnd, w.HWND(-1), 0, 0, 0, 0, 0x13):
+                            raise c.WinError(c.get_last_error())
+                        if not user.GetWindowRect(hwnd, c.byref(rect)):
+                            raise c.WinError(c.get_last_error())
+                        click_point = w.POINT(rect.left+80, rect.top+14)
+                        if user.WindowFromPoint(click_point) != hwnd:
+                            raise RuntimeError("Owned title bar is covered; no click sent")
+                        if not user.SetCursorPos(click_point.x, click_point.y):
+                            raise c.WinError(c.get_last_error())
+                        last_pointer = (click_point.x, click_point.y)
+                        clicks = (INPUT * 2)(INPUT(type=0, mi=MOUSEINPUT(dwFlags=2)), INPUT(type=0, mi=MOUSEINPUT(dwFlags=4)))
+                        if user.SendInput(2, clicks, c.sizeof(INPUT)) != 2:
+                            raise c.WinError(c.get_last_error())
+                        focus_deadline = time.monotonic()+1.5
+                        while user.GetForegroundWindow() != hwnd and time.monotonic()<focus_deadline:
+                            while user.PeekMessageW(c.byref(message), None, 0, 0, 1):
+                                user.TranslateMessage(c.byref(message))
+                                user.DispatchMessageW(c.byref(message))
+                            time.sleep(0.02)
+                    finally:
+                        user.SetWindowPos(hwnd, w.HWND(-2), 0, 0, 0, 0, 0x13)
+                        current_pointer = w.POINT()
+                        if click_point is not None and user.GetCursorPos(c.byref(current_pointer)) and (current_pointer.x,current_pointer.y) == (click_point.x,click_point.y):
+                            user.SetCursorPos(point.x,point.y)
+                            last_pointer = (point.x,point.y)
                 if user.GetForegroundWindow() != hwnd:
-                    raise RuntimeError("Owned fixture could not take focus; no keys sent")
+                    raise RuntimeError(f"Owned fixture could not take focus for {command}; no keys sent (requested={hwnd}, foreground={user.GetForegroundWindow()})")
                 if command in ("press", "hold_start"):
                     if any(user.GetAsyncKeyState(key) & 0x8000 for key in (0x10, 0x11, 0x12, 0x5B, 0x5C)):
                         raise RuntimeError("A modifier is already held; no keys sent")

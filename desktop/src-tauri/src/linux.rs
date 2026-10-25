@@ -102,6 +102,55 @@ pub fn focus_window(app: &AppHandle, window: &crate::workspaces::WindowInfo) -> 
     Ok(())
 }
 
+pub fn pointer(app: &AppHandle) -> Result<crate::radial::Point, String> {
+    serde_json::from_value(crate::linux_control::request(
+        app,
+        serde_json::json!({"kind":"pointer"}),
+    )?)
+    .map_err(|e| format!("Invalid KDE pointer position: {e}"))
+}
+pub fn pointer_area(
+    app: &AppHandle,
+    point: crate::radial::Point,
+) -> Result<crate::geometry::Rect, String> {
+    serde_json::from_value(crate::linux_control::request(
+        app,
+        serde_json::json!({"kind":"pointer-area","point":point}),
+    )?)
+    .map_err(|e| format!("Invalid KDE pointer work area: {e}"))
+}
+pub fn show_radial(app: &AppHandle, bounds: crate::geometry::Rect) -> Result<(), String> {
+    let window = app
+        .get_webview_window("radial")
+        .ok_or("The window picker is unavailable.")?;
+    window.show().map_err(|e| e.to_string())?;
+    for _ in 0..15 {
+        if crate::linux_control::request(
+            app,
+            serde_json::json!({"kind":"show-radial","bounds":bounds}),
+        )? == serde_json::Value::Bool(true)
+        {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    Err("KWin could not place the window picker.".into())
+}
+pub fn pull_selected(
+    app: &AppHandle,
+    binding: &crate::config::Binding,
+    settings: &crate::config::Settings,
+    selected: &crate::workspaces::WindowInfo,
+    previous: Option<&crate::workspaces::WindowInfo>,
+) -> Result<(), String> {
+    crate::linux_control::request(
+        app,
+        serde_json::json!({"kind":"pull-selected", "window":selected,
+        "previous":previous, "binding":binding, "settings":settings}),
+    )?;
+    Ok(())
+}
+
 fn qdbus() -> Result<String, String> {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
     if !desktop.split(':').any(|d| d.eq_ignore_ascii_case("KDE")) {

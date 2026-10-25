@@ -60,6 +60,10 @@ test("hold settings migrate defaults, save edits and lock while shortcuts are ac
     const e = await editor();
     assert.equal(e.document.querySelector("#hold-enabled").checked, true);
     assert.equal(e.document.querySelector("#hold-delay").value, "400");
+    const mode = e.document.querySelector("#hold-mode");
+    assert.equal(mode.value, "tile");
+    mode.value = "radial";
+    mode.dispatchEvent(new e.window.Event("change"));
     e.input("#hold-delay", "725");
     const field = e.document.querySelector("#hold-enabled");
     field.checked = false;
@@ -68,8 +72,10 @@ test("hold settings migrate defaults, save edits and lock while shortcuts are ac
     const saved = e.calls.find(c => c.command === "save_config").args.config;
     assert.equal(saved.settings.holdDelayMs, 725);
     assert.equal(saved.settings.holdTileEnabled, false);
+    assert.equal(saved.settings.holdMode,"radial");
     await e.click("#toggle");
     assert.equal(field.disabled, true);
+    assert.equal(mode.disabled, true);
     assert.equal(e.document.querySelector("#hold-delay").disabled, true);
     e.listeners.get("warp-enabled")({payload:false});
     assert.equal(field.disabled, false);

@@ -10,6 +10,18 @@ from PyQt5.QtDBus import QDBusConnection, QDBusMessage
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout
 
 app = QApplication(sys.argv)
+if "--radial" in sys.argv:
+    app.setApplicationName("WindowWarpRadialSmoke")
+    app.setDesktopFileName("com.windowwarp.radial-smoke")
+    radial_windows = []
+    for index in range(9):
+        window = QWidget()
+        window.setWindowTitle(f"WARP-RADIAL-{index}")
+        window.resize(400, 300)
+        window.show()
+        radial_windows.append(window)
+    QTimer.singleShot(120000, app.quit)
+    sys.exit(app.exec_())
 if len(sys.argv) > 1 and sys.argv[1] in ["--other", "--workspace", "--workspace-single", "--hold"]:
     app.setApplicationName("WindowWarpOtherSmoke")
     app.setDesktopFileName("com.windowwarp.hold-smoke" if sys.argv[1] == "--hold" else "com.windowwarp.other-smoke")

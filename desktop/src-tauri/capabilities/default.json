@@ -1,6 +1,6 @@
 {
   "identifier": "main",
   "description": "Local settings window",
-  "windows": ["main"],
+  "windows": ["main", "radial"],
   "permissions": ["core:default"]
 }

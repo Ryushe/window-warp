@@ -39,6 +39,19 @@ function fixture(bindings, legacy = false, settings = {mainMonitor: 1, burnerMon
 const push = { label: "Push", shortcut: "Ctrl+Alt+Right", action: "push-right", appMatch: "" };
 const pull = { label: "Pull", shortcut: "Ctrl+Alt+Down", action: "pull", appMatch: "" };
 
+for (const legacy of [false,true]) test(`radial selection preserves the pre-picker active window on Plasma ${legacy ? 5 : 6}`, () => {
+    const binding = {label:"App",shortcut:"Ctrl+Alt+J",action:"pull-app",appMatch:"firefox",mainMonitorAction:"burner",burnerLayout:"tile-right"};
+    const settings = {mainMonitor:1,burnerMonitor:2};
+    const f = fixture([],legacy,settings);
+    const picker = {internalId:"picker",resourceClass:"window-warp"};
+    f.workspace.stackingOrder.push(picker);
+    if (legacy) f.workspace.activeClient=picker; else f.workspace.activeWindow=picker;
+    f.warp.run(binding,settings,null,f.window,f.window);
+    assert.deepEqual(clone(f.window.frameGeometry),{x:540,y:40,width:541,height:1920});
+    assert.equal(legacy ? f.workspace.activeClient : f.workspace.activeWindow,f.window);
+    assert.throws(()=>f.warp.run(binding,settings,null,picker,f.window),/no longer matches/);
+});
+
 test("native editor focus selects only this process's normal window and reports mapping delays", () => {
     const owned = {pid:42,normalWindow:true};
     let windows = [{pid:42,normalWindow:false},{pid:7,normalWindow:true},owned];
