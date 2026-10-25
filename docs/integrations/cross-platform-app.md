@@ -7,7 +7,7 @@
 - Base commit: `7b907778f0022d73fb3527b82c0ab7ecedf8124d`
 - Intended eventual target: `main`; promotion/merge has not been requested
 - Last updated: 2026-10-25
-- Latest immutable recovery checkpoint: `13af0ee50546a406ebac7700c1303d4bc3713c9c`
+- Latest immutable recovery checkpoint: `b1c173bef678b473dd4c22034883acac4a522891`
 - Feature implementation commits: `abfc95e` (desktop/workspace foundation), `ee7bee4` (Firefox profiles/tabs), `c09d79c` (terminal capture/editor/restore), `491a9d8` (KDE Firefox caption correction and complete 15-check native run), `5e6373d` (WSL distribution discovery and native directory restoration), `02d4e02` (reviewed shortcut reassignment and 12-check native KDE run), `b216f0c` (persistent pause and application control hotkeys, 15 native KDE checks), `d49e380` (14 native Windows application checks), `9794b75` (Windows tap/hold, activation deadlock correction, 18 Windows and 15 KDE native checks), `b63cb1d` (KDE native tap/hold, Wayland editor focus, 20 native KDE checks), `41fbc70` (KDE key reservation cleanup, 21 native KDE checks, held-key regression reproduced), `da23019` (held-key cancellation and deferred reassignment, verified script startup, 22 native KDE checks), `61233ff` (shared radial picker, 26 native KDE checks; initial 22 native Windows pass later superseded by rapid Escape regression), `4a92065` (reviewed INI migration and native import receipts), `9ccbaa7` (portable fixture line endings)
 - Canonical references: original root AHK files; `desktop/PARITY.md`
 
@@ -2189,3 +2189,10 @@ source/SDK receipts in target/kwin-companion-spike before any cache cleanup.
 Keep all other identity/physical-display/login/installer completion gates active.
 Reviewed Firefox implementation, Windows/Linux artifacts and full native receipts
 are ready for a recoverable feature-branch checkpoint. No merge/push/installation.
+
+Recovery checkpoint: `b1c173bef678b473dd4c22034883acac4a522891` contains reviewed
+Firefox live-lock identity, native fixtures, disposable-image dependency fix,
+and final native evidence. Staged diff/check passed and worktree was clean
+after commit. This dossier-only follow-up records the immutable SHA. Main and
+remote refs were not changed. Next: production KDE companion integration,
+not another repetition of already-passing Firefox checks.
