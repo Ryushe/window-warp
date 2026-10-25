@@ -28,6 +28,45 @@ static PAUSE_SHORTCUTS: Mutex<Vec<Shortcut>> = Mutex::new(Vec::new());
 static HISTORY: Mutex<Vec<Placement>> = Mutex::new(Vec::new());
 static PREVIOUS: LazyLock<Mutex<HashMap<String, (usize, u32)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+static MAXIMIZE_RESTORE: LazyLock<Mutex<HashMap<usize, (u32, Rect)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static RESTORE_PROPERTY: LazyLock<Vec<u16>> = LazyLock::new(|| {
+    format!("WindowWarp.RestoreRect.{}\0", std::process::id())
+        .encode_utf16()
+        .collect()
+});
+
+unsafe fn restore_identity(hwnd: HWND, expected_pid: u32) -> bool {
+    let mut pid = 0;
+    GetWindowThreadProcessId(hwnd, &mut pid);
+    // Windows removes properties on destruction. PID alone would not detect a
+    // recycled HWND in the same process between two maximize shortcuts.
+    pid == expected_pid && GetPropW(hwnd, RESTORE_PROPERTY.as_ptr()) as usize == 1
+}
+
+unsafe fn toggle_maximize(hwnd: HWND) -> Result<(), String> {
+    let mut saved = MAXIMIZE_RESTORE.lock().map_err(|e| e.to_string())?;
+    saved.retain(|id, (pid, _)| restore_identity(*id as HWND, *pid));
+    if IsZoomed(hwnd) != 0 {
+        ShowWindow(hwnd, SW_RESTORE);
+        if let Some((_, target)) = saved.get(&(hwnd as usize)) {
+            place(hwnd, *target, false)?;
+        }
+    } else {
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+        }
+        let target = window_rect(hwnd)?;
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if SetPropW(hwnd, RESTORE_PROPERTY.as_ptr(), 1usize as HANDLE) == 0 {
+            return Err(error("Cannot remember window restore geometry"));
+        }
+        saved.insert(hwnd as usize, (pid, target));
+        ShowWindow(hwnd, SW_MAXIMIZE);
+    }
+    Ok(())
+}
 
 fn error(message: &str) -> String {
     format!("{message}: {}", std::io::Error::last_os_error())
@@ -622,15 +661,7 @@ unsafe fn execute(binding: &Binding, settings: &Settings) -> Result<(), String> 
         return Ok(());
     }
     if action == "toggle-maximize" {
-        ShowWindow(
-            hwnd,
-            if IsZoomed(hwnd) != 0 {
-                SW_RESTORE
-            } else {
-                SW_MAXIMIZE
-            },
-        );
-        return Ok(());
+        return toggle_maximize(hwnd);
     }
     let all = monitors()?;
     let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) as usize;
@@ -832,6 +863,15 @@ pub fn disable(app: &AppHandle) -> Result<(), String> {
 pub fn shutdown(app: &AppHandle) {
     let _ = gestures::cancel();
     let _ = app.global_shortcut().unregister_all();
+    if let Ok(mut saved) = MAXIMIZE_RESTORE.lock() {
+        for (id, (pid, _)) in saved.drain() {
+            unsafe {
+                if restore_identity(id as HWND, pid) {
+                    RemovePropW(id as HWND, RESTORE_PROPERTY.as_ptr());
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1295,6 +1335,29 @@ mod tests {
             assert!(restore_native(&stale, &saved)
                 .unwrap_err()
                 .contains("changed identity"));
+
+            place(hwnd, target, false).unwrap();
+            toggle_maximize(hwnd).unwrap();
+            assert_ne!(IsZoomed(hwnd), 0);
+            place(hwnd, saved.rect, true).unwrap();
+            toggle_maximize(hwnd).unwrap();
+            assert_eq!(window_rect(hwnd).unwrap(), target);
+            // Like fullscreen.ahk, retaining the last saved rectangle also
+            // handles a later native maximize without overwriting the cache.
+            place(hwnd, saved.rect, true).unwrap();
+            toggle_maximize(hwnd).unwrap();
+            assert_eq!(window_rect(hwnd).unwrap(), target);
+
+            // Missing per-window lifetime marker invalidates the map entry,
+            // even if a replacement window has the same HWND and process ID.
+            RemovePropW(hwnd, RESTORE_PROPERTY.as_ptr());
+            place(hwnd, saved.rect, true).unwrap();
+            toggle_maximize(hwnd).unwrap();
+            assert_eq!(window_rect(hwnd).unwrap(), saved.rect);
+            assert!(!MAXIMIZE_RESTORE
+                .lock()
+                .unwrap()
+                .contains_key(&(hwnd as usize)));
         }
     }
 }

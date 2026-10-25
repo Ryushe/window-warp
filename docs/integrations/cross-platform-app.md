@@ -1141,3 +1141,95 @@ currently stores geometry/output but no explicit maximization state. Continue
 with remaining burner, Firefox/terminal, overlapping-chord, real Plasma 6,
 physical-display, login and installer gates. Full parity remains incomplete.
 No merge, push, installation or user-session activation occurred.
+
+## Compound maximize restoration — verified (2026-10-25)
+
+This defect belongs to `codex/cross-platform-app`: `git ls-tree main desktop`
+is empty, so the unchanged AHK-only main branch has no native backend to repair.
+The previous turn made verified progress (42 native Windows checks and checkpoint
+`5f0a9ac`); this increment fixes the compound restore gap identified there.
+
+Windows now saves the pre-maximize rectangle independently of OS placement.
+A process-scoped window property marks the HWND lifetime, paired with PID,
+so a recycled HWND cannot inherit stale geometry; the literal sentinel owns no
+allocated payload. Closed entries are pruned on toggle, and graceful shutdown
+removes surviving markers. Marker refusal returns the native error, including
+Windows integrity restrictions, instead of silently weakening identity checks.
+The cache survives shortcut pause. The native regression first reproduced a
+1920x1080 restore instead of 500x320 on the old implementation, then passed with
+explicit saved geometry. Final Windows source receipt: 43 checks pass / one
+physical second-display skip, in
+`desktop/src-tauri/target/windows-validation/WARP-NATIVE-0df0e17c-cf6a-44f6-b8fd-b26bd13fedc2/`.
+Windows Rust: 64 pass / 5 opt-in ignored, including cached-rectangle and missing
+window-lifetime-marker regression, `target/maximize-windows-rust.log`.
+
+KDE now has explicit saved rectangle/output and history maximize axes,
+bounded compositor state/geometry acknowledgment, queued same-script geometry
+actions, delayed control replies with actual error propagation, and diagnostics
+without titles or identities. Numeric Plasma 5 flags are normalized (horizontal
+2 / vertical 1 observed natively). A 1.8-second budget begins at enqueue; stale
+requests expire before mutation, late replies are ignored, and the timer stops
+while idle. Known restore-size hints followed by post-acknowledgment placement
+resolved the native Qt same-size unmaximize stall and preserve the existing
+Firefox resize-race protection. Retile time now starts after push acknowledgment.
+
+KDE native receipts live in `desktop/src-tauri/target/kde-validation/maximize/`.
+The `hint` run passed 32 checks in the isolated two-output Plasma 5.27 Wayland
+compositor. The subsequent `direct` run exposed a history-pull stall when
+pulling a maximized window without first tiling it; `direct-result.json` and
+`direct-kwin.log` retain that evidence. Fully maximized/nonfullscreen history
+now preserves maximization and changes output directly, avoiding the redundant
+floating transition. Other states retain the staged geometry path.
+
+Final verification:
+
+- 103 Node tests pass locally and in the Linux builder; JavaScript syntax,
+  Python AST, Rust formatting and diff checks pass. The 58 KWin cases cover
+  delayed state/geometry commits, numeric flags, timeout/late replies, closed
+  targets, stale queued actions, control error propagation and fresh retile time.
+- `hoster-warp-native-20261025-maximize-preserve`: inactive/exit 0, 35 native
+  checks pass in two virtual outputs; `preserve-result.json` and journal retained.
+- `hoster-warp-build-20261025-maximize`: inactive/exit 0, 57 Linux Rust tests
+  pass / one opt-in ignored, release executable and Debian bundle rebuilt;
+  `build-journal.log`. The pre-existing Linux dead-code warning for `relative`
+  remains unrelated to this Windows-used helper.
+- `hoster-warp-gui-20261025-maximize`: inactive/exit 0, 33 full application
+  checks pass with `--hold --radial --retile`, including existing gesture,
+  registration and delayed-window-operation cleanup cases. Local receipt and
+  screenshots are in `maximize/gui/`; the built binary is the new maximize build.
+- `portafort-warp-native-20261025-maximize`: inactive/exit 0, all 35 native
+  checks pass on the real Plasma 5.27.11 Wayland desktop with one physical
+  display. `portafort-result.json` and journal retained; temporary script unload
+  and owned-window cleanup succeeded. The one-output assertions explicitly
+  validate fallback behavior rather than claiming a second physical display.
+
+`/root/retile_review` implemented the three KWin source/test files and returned
+terminal. `/root/packaged_native` independently reviewed Windows and KDE source,
+identified stale queue replay, asked for direct maximized history acceptance,
+and reviewed the corrections with no remaining actionable findings. Parent
+implemented Windows and native fixtures and reconciled the canonical evidence.
+All related native/build/application workloads are terminal; the normal Windows
+debug binary is restored. No installer was installed or normal user app activated.
+
+Portafort is reachable again through Hoster (2026-10-25 inspection): Plasma
+5.27.11, Wayland, one 1920x1080 eDP output, Python/PyQt5 available; WebKitWebDriver
+is absent. No test script or matching fixture process was active before testing.
+The real-desktop fixture subsequently passed as recorded above. Live fixtures
+now restrict discovery and action dispatch to their exact PIDs, use a unique
+app ID, bound the helper lifetime, show without stealing initial focus, and
+recheck original-focus identity on cleanup.
+Hoster cleanup sidecar: two live/unregistered scopes retained, none stopped.
+
+Remaining full-parity work includes state retention across pause/reload and
+ordering across separate native-shortcut/control KWin script instances. AHK's
+`SetWindowWarpHotkeysEnabled` only clears pending retile; the current Windows
+disable path clears history/previous-focus, and KWin script reload drops caches.
+Immediate unmaximize-then-tile behavior for delayed browser clients also needs
+acceptance. Keep the existing physical display, real Plasma 6, browser/terminal,
+overlapping-chord, login, installer and independent final release gates.
+
+Resume at preserving window history, previous-focus and saved maximize state
+across pause/configuration reload, then reconcile geometry dispatch through the
+persistent KDE control instance so cross-script actions share one state owner.
+The user-requested full port remains active; this is a verified feature checkpoint,
+not full parity, a merge, publication or installation.

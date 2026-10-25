@@ -2,13 +2,16 @@
 var modernTest = "activeWindow" in workspace;
 var testWindows = modernTest ? workspace.stackingOrder : workspace.clientList();
 var originalFocus = modernTest ? workspace.activeWindow : workspace.activeClient;
+var originalFocusIdentity = originalFocus ? {id:String(originalFocus.internalId),pid:Number(originalFocus.pid)} : null;
 var fixtureA = null;
 var fixtureB = null;
 var fixtureC = null;
 for (var testIndex = 0; testIndex < testWindows.length; testIndex++) {
-    if (testWindows[testIndex].caption === "WARP-TEST-A") fixtureA = testWindows[testIndex];
-    if (testWindows[testIndex].caption === "WARP-TEST-B") fixtureB = testWindows[testIndex];
-    if (testWindows[testIndex].caption === "WARP-TEST-C") fixtureC = testWindows[testIndex];
+    if (Number(testWindows[testIndex].pid) === WARP_FIXTURE_PIDS.main) {
+        if (testWindows[testIndex].caption === "WARP-TEST-A") fixtureA = testWindows[testIndex];
+        if (testWindows[testIndex].caption === "WARP-TEST-B") fixtureB = testWindows[testIndex];
+    }
+    if (Number(testWindows[testIndex].pid) === WARP_FIXTURE_PIDS.other && testWindows[testIndex].caption === "WARP-TEST-C") fixtureC = testWindows[testIndex];
 }
 var testResults = [];
 function testRect(r) { return {x:r.x, y:r.y, width:r.width, height:r.height}; }
@@ -25,9 +28,24 @@ var testStep = 0;
 var startRect;
 var startOutput;
 var outputCount;
+var pendingStateChecks = 0;
+function checkState(name, window, horizontal, vertical) {
+    pendingStateChecks++;
+    callDBus("org.kde.KWin", "/KWin", "org.kde.KWin", "getWindowInfo", String(window.internalId), function(info) {
+        check(name, !!info && !!info.maximizeHorizontal === horizontal && !!info.maximizeVertical === vertical, info);
+        pendingStateChecks--;
+    });
+}
+function sameRect(actual, expected) {
+    return ["x","y","width","height"].every(function(key) { return approximately(actual[key], expected[key]); });
+}
 function report() {
+    if (pendingStateChecks) return;
     testTimer.stop();
-    if (originalFocus && originalFocus !== fixtureA && originalFocus !== fixtureB && originalFocus !== fixtureC && !originalFocus.deleted) testFocus(originalFocus);
+    var survivingFocus = originalFocusIdentity && (modernTest ? workspace.stackingOrder : workspace.clientList()).filter(function(w) {
+        return !w.deleted && String(w.internalId) === originalFocusIdentity.id && Number(w.pid) === originalFocusIdentity.pid;
+    })[0];
+    if (survivingFocus && survivingFocus !== fixtureA && survivingFocus !== fixtureB && survivingFocus !== fixtureC) testFocus(survivingFocus);
     var passed = testResults.length > 0 && testResults.every(function(r) { return r.passed; });
     callDBus("com.windowwarp.Smoke", "/Smoke", "com.windowwarp.Smoke", "report", JSON.stringify({passed:passed, tests:testResults, plasmaApi:modernTest ? 6 : 5}));
 }
@@ -119,7 +137,77 @@ testTimer.timeout.connect(function() {
             testCallbacks["Window Warp: Close"]();
         } else if (testStep === 23) {
             var open = modernTest ? workspace.stackingOrder : workspace.clientList();
-            check("graceful close of owned fixture", !open.some(function(w) { return w.caption === "WARP-TEST-C"; }));
+            check("graceful close of owned fixture", !open.some(function(w) { return Number(w.pid) === WARP_FIXTURE_PIDS.other && w.caption === "WARP-TEST-C"; }));
+            testFocus(fixtureA);
+            fixtureA.fullScreen = false;
+            fixtureA.setMaximize(false, false);
+            area = testArea(fixtureA);
+            fixtureA.frameGeometry = {x:area.x+80,y:area.y+90,width:500,height:320};
+        } else if (testStep === 24) {
+            startRect = testRect(fixtureA.frameGeometry);
+            startOutput = modernTest ? fixtureA.output.name : fixtureA.screen;
+            testCallbacks["Window Warp: Maximize"]();
+        } else if (testStep === 25) {
+            checkState("compound fixture maximized", fixtureA, true, true);
+            testCallbacks["Window Warp: Push"]();
+        } else if (testStep === 26) {
+            var movedOutput = (modernTest ? fixtureA.output.name : fixtureA.screen) !== startOutput;
+            check(outputCount > 1 ? "maximized push moves to another output" : "single-output maximized push wraps in place", outputCount > 1 ? movedOutput : !movedOutput);
+            checkState("push preserves maximization", fixtureA, true, true);
+            testCallbacks["Window Warp: Maximize"]();
+        } else if (testStep === 27) {
+            check("toggle restores original geometry after maximized push", sameRect(fixtureA.frameGeometry,startRect), {actual:testRect(fixtureA.frameGeometry),expected:startRect});
+            check("toggle restores original output after maximized push", (modernTest ? fixtureA.output.name : fixtureA.screen) === startOutput);
+            checkState("compound toggle is floating", fixtureA, false, false);
+            testCallbacks["Window Warp: Maximize"]();
+        } else if (testStep === 28) {
+            testCallbacks["Window Warp: Push"]();
+        } else if (testStep === 29) {
+            testCallbacks["Window Warp: Left"]();
+        } else if (testStep === 30) {
+            checkState("intervening tile clears maximization", fixtureA, false, false);
+            testCallbacks["Window Warp: Pull"]();
+        } else if (testStep === 31) {
+            checkState("history pull restores maximization after tile", fixtureA, true, true);
+            check("history pull restores original output after tile", (modernTest ? fixtureA.output.name : fixtureA.screen) === startOutput);
+            testCallbacks["Window Warp: Maximize"]();
+        } else if (testStep === 32) {
+            check("toggle retains floating geometry through history pull", sameRect(fixtureA.frameGeometry,startRect), {actual:testRect(fixtureA.frameGeometry),expected:startRect});
+            testCallbacks["Window Warp: Maximize"]();
+            testCallbacks["Window Warp: Maximize"]();
+        } else if (testStep === 33) {
+            check("rapid double-toggle restores floating geometry", sameRect(fixtureA.frameGeometry,startRect), {actual:testRect(fixtureA.frameGeometry),expected:startRect});
+            checkState("rapid double-toggle ends restored", fixtureA, false, false);
+            testCallbacks["Window Warp: Maximize"]();
+            testCallbacks["Window Warp: App"]();
+        } else if (testStep === 34) {
+            area = testArea(fixtureA);
+            if (outputCount > 1) {
+                check("rapid maximize then app pull reaches tiled burner", (modernTest ? fixtureA.output.name : fixtureA.screen) !== startOutput && approximately(fixtureA.frameGeometry.x,area.x+Math.floor(area.width/2)) && approximately(fixtureA.frameGeometry.width,area.width-Math.floor(area.width/2)), {actual:testRect(fixtureA.frameGeometry)});
+                checkState("rapid maximize then burner tile ends restored", fixtureA, false, false);
+            } else {
+                check("one-output burner keeps the maximized window on its output", (modernTest ? fixtureA.output.name : fixtureA.screen) === startOutput);
+                checkState("one-output burner preserves maximization", fixtureA, true, true);
+            }
+        } else if (testStep === 35) {
+            fixtureA.setMaximize(false, false);
+            area = testArea(fixtureA);
+            fixtureA.frameGeometry = {x:area.x+80,y:area.y+90,width:500,height:320};
+        } else if (testStep === 36) {
+            startRect = testRect(fixtureA.frameGeometry);
+            startOutput = modernTest ? fixtureA.output.name : fixtureA.screen;
+            testCallbacks["Window Warp: Maximize"]();
+        } else if (testStep === 37) {
+            testCallbacks["Window Warp: Push"]();
+        } else if (testStep === 38) {
+            testCallbacks["Window Warp: Pull"]();
+        } else if (testStep === 39) {
+            checkState("direct history pull keeps maximization", fixtureA, true, true);
+            check("direct maximized history pull returns to original output", (modernTest ? fixtureA.output.name : fixtureA.screen) === startOutput);
+            testCallbacks["Window Warp: Maximize"]();
+        } else if (testStep === 40) {
+            check("toggle restores floating geometry after direct maximized push-pull", sameRect(fixtureA.frameGeometry,startRect), {actual:testRect(fixtureA.frameGeometry),expected:startRect});
+        } else if (testStep >= 41) {
             report();
         }
         testStep++;

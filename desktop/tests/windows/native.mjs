@@ -579,7 +579,7 @@ try {
     await actionPress(fixture.windows[0]);
     await until(readOwned,isMaximized,"maximize shortcut");
     await actionPress(fixture.windows[0]);
-    await until(readOwned,w=>!isMaximized(w),"restore shortcut");
+    await until(readOwned,w=>!isMaximized(w)&&Object.keys(initial).every(k=>w.rect[k]===initial[k]),"restore shortcut");
     assert.deepEqual((await readOwned()).rect,initial);
     checks.push("native maximize/restore shortcut preserves the original floating rectangle");
 
@@ -597,6 +597,10 @@ try {
     await press(15);
     await until(readOwned,w=>isMaximized(w)&&w.active,"history pull restores maximized state");
     checks.push("native push and history pull preserve a maximized window");
+    await actionPress(fixture.windows[0]);
+    await until(readOwned,w=>!isMaximized(w)&&Object.keys(initial).every(k=>w.rect[k]===initial[k]),"restore after maximized push and history pull");
+    assert.deepEqual((await readOwned()).rect,initial,"Restore must use the original toggle's floating rectangle after intervening moves");
+    checks.push("native maximize toggle retains floating geometry through maximized push and history pull");
     await placeOwned();
     await selectAction("pull-app");
     await actionPress(fixture.windows[1]);

@@ -89,8 +89,8 @@
             return;
         }
         if (command.kind === "app-pull") {
-            Warp.run(command.binding, command.settings, command.pointer);
-            reply(job, true);
+            Warp.run(command.binding, command.settings, command.pointer, undefined, undefined,
+                function(error) { reply(job, error ? null : true, error); });
             return;
         }
         var window = target(command);
@@ -98,8 +98,8 @@
             var previous = command.previous && Warp.windows().filter(function(w) {
                 return !w.deleted && String(w.internalId) === command.previous.id && Number(w.pid || 0) === command.previous.pid;
             })[0];
-            Warp.run(command.binding, command.settings, null, window, previous);
-            reply(job, true);
+            Warp.run(command.binding, command.settings, null, window, previous,
+                function(error) { reply(job, error ? null : true, error); });
             return;
         }
         if (command.kind === "restore") {

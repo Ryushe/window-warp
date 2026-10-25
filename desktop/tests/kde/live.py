@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import subprocess
-from PyQt5.QtCore import QObject, QTimer, pyqtSlot, Q_CLASSINFO
+from PyQt5.QtCore import QObject, QTimer, Qt, pyqtSlot, Q_CLASSINFO
 from PyQt5.QtDBus import QDBusConnection, QDBusMessage
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout
 
@@ -34,6 +34,8 @@ if len(sys.argv) > 1 and sys.argv[1] in ["--other", "--workspace", "--workspace-
                     output.write(json.dumps({"key":event.key(),"text":event.text()})+"\n")
             super().keyPressEvent(event)
     other_window = InputWindow()
+    if sys.argv[1] == "--other":
+        other_window.setAttribute(Qt.WA_ShowWithoutActivating)
     other_window.setWindowTitle("WARP-TEST-C")
     other_window.resize(400, 300)
     other_window.show()
@@ -42,13 +44,14 @@ if len(sys.argv) > 1 and sys.argv[1] in ["--other", "--workspace", "--workspace-
         second_window.setWindowTitle("WARP-TEST-D")
         second_window.resize(450, 320)
         second_window.show()
-    if sys.argv[1].startswith("--workspace") or sys.argv[1] == "--hold":
-        # A native workspace launch can outlive its caller if a test fails.
+    if sys.argv[1].startswith("--workspace") or sys.argv[1] in ["--hold", "--other"]:
+        # A native fixture can outlive its caller if setup or a test fails.
         QTimer.singleShot(60000, app.quit)
     sys.exit(app.exec_())
 
 app.setApplicationName("WindowWarpSmoke")
-app.setDesktopFileName("com.windowwarp.smoke")
+fixture_app_id = "com.windowwarp.smoke." + str(os.getpid())
+app.setDesktopFileName(fixture_app_id)
 bus = QDBusConnection.sessionBus()
 service = "com.windowwarp.Smoke"
 script_name = "window-warp-live-test"
@@ -58,6 +61,7 @@ other_process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()),
 fixtures = []
 for name in ["WARP-TEST-A", "WARP-TEST-B"]:
     window = QWidget()
+    window.setAttribute(Qt.WA_ShowWithoutActivating)
     window.setWindowTitle(name)
     window.resize(640, 400)
     layout = QVBoxLayout(window)
@@ -107,17 +111,18 @@ configuration = {"settings": {"mainMonitor": 1, "burnerMonitor": 2}, "bindings":
     {"label": "Right", "shortcut": "Ctrl+Alt+Shift+F21", "action": "tile-right"},
     {"label": "Push", "shortcut": "Ctrl+Alt+Shift+F22", "action": "push-right"},
     {"label": "Pull", "shortcut": "Ctrl+Alt+Shift+F23", "action": "pull"},
-    {"label": "Focus", "shortcut": "Ctrl+Alt+Shift+F24", "action": "focus-app", "appMatch": "com.windowwarp.smoke"},
+    {"label": "Focus", "shortcut": "Ctrl+Alt+Shift+F24", "action": "focus-app", "appMatch": fixture_app_id},
     {"label": "Top", "shortcut": "Ctrl+Alt+Shift+F13", "action": "tile-up"},
     {"label": "Bottom", "shortcut": "Ctrl+Alt+Shift+F14", "action": "tile-down"},
     {"label": "Maximize", "shortcut": "Ctrl+Alt+Shift+F15", "action": "toggle-maximize"},
-    {"label": "App", "shortcut": "Ctrl+Alt+Shift+F16", "action": "pull-app", "appMatch": "com.windowwarp.smoke", "mainMonitorAction": "burner", "burnerLayout": "tile-right"},
-    {"label": "Previous", "shortcut": "Ctrl+Alt+Shift+F17", "action": "pull-app", "appMatch": "com.windowwarp.smoke", "mainMonitorAction": "focus-last"},
+    {"label": "App", "shortcut": "Ctrl+Alt+Shift+F16", "action": "pull-app", "appMatch": fixture_app_id, "mainMonitorAction": "burner", "burnerLayout": "tile-right"},
+    {"label": "Previous", "shortcut": "Ctrl+Alt+Shift+F17", "action": "pull-app", "appMatch": fixture_app_id, "mainMonitorAction": "focus-last"},
     {"label": "Close", "shortcut": "Ctrl+Alt+Shift+F18", "action": "close-window"},
 ]}
 script = "var WARP_CONFIG = " + json.dumps(configuration) + ";\nvar testCallbacks = {};\nvar nativeRegisterShortcut = registerShortcut;\nvar registeredTestIds = [];\n"
-script += "(function(registerShortcut) {\n" + source + "\n})(function(id, label, key, callback) { testCallbacks[label] = callback; var testId = 'window-warp-smoke-' + id; registeredTestIds.push(testId); return nativeRegisterShortcut(testId, label, key, callback); });\n"
+script += "(function(registerShortcut) {\n" + source + "\n})(function(id, label, key, callback) { function ownedCallback() { var active = 'activeWindow' in workspace ? workspace.activeWindow : workspace.activeClient; if (!active || [WARP_FIXTURE_PIDS.main,WARP_FIXTURE_PIDS.other].indexOf(Number(active.pid)) < 0) throw new Error('Fixture lost focus; refusing to dispatch against an unowned window'); callback(); } testCallbacks[label] = ownedCallback; var testId = 'window-warp-smoke-' + id; registeredTestIds.push(testId); return nativeRegisterShortcut(testId, label, key, ownedCallback); });\n"
 script = "var WARP_APP = " + json.dumps({"service":service,"token":"fixture"}) + ";\n" + script
+script = "var WARP_FIXTURE_PIDS = " + json.dumps({"main":os.getpid(),"other":other_process.pid}) + ";\n" + script
 script += harness
 temporary = tempfile.TemporaryDirectory(prefix="window-warp-live-")
 script_path = Path(temporary.name) / "live.js"
