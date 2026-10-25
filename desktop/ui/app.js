@@ -5,6 +5,7 @@ let dirty = false;
 let busy = false;
 let platform = "";
 let recording = null;
+let reassignment = null;
 let startupEnabled = false;
 let startupKnown = false;
 const native = window.__TAURI__;
@@ -26,8 +27,13 @@ function controls() {
     $("#edit-hint").textContent = enabled ? "Pause shortcuts to make changes." : "Changes take effect after saving and enabling.";
     $("#save-status").textContent = dirty ? "Unsaved changes" : "Stored on this device";
 }
-function changed() { dirty = true; controls(); }
+function cancelReassignment() {
+    reassignment = null;
+    document.querySelectorAll(".reassignment").forEach(panel => { panel.hidden = true; });
+}
+function changed() { cancelReassignment(); dirty = true; controls(); }
 function render() {
+    cancelReassignment();
     recording = null;
     $("#bindings").replaceChildren();
     config.bindings.forEach((binding, index) => {
@@ -51,9 +57,31 @@ function render() {
                 changed();
             });
         });
+        const review = card.querySelector(".reassignment");
+        const confirm = card.querySelector(".confirm-reassignment");
+        card.querySelector(".reassign").addEventListener("click", () => perform(async () => {
+            cancelReassignment();
+            if (recording) { recording.button.textContent = "Record keys"; recording = null; }
+            const proposal = await native.core.invoke("preview_shortcut_reassignment", {config, index});
+            if (!proposal.disabledIndices.length) { message("No other enabled shortcut uses this key."); return; }
+            reassignment = {proposal, index};
+            const labels = proposal.disabledIndices.map(i => proposal.config.bindings[i].label || "Unnamed shortcut");
+            review.querySelector(".reassignment-summary").textContent =
+                `Use ${proposal.config.bindings[index].shortcut} for “${binding.label || "Unnamed shortcut"}”? Disable: ${labels.join(", ")}. Their settings will be kept.`;
+            review.hidden = false;
+            message("Review the conflicting shortcuts below. Save changes afterward to apply.");
+        }));
+        confirm.addEventListener("click", () => {
+            if (enabled || busy || reassignment?.index !== index) return;
+            config = reassignment.proposal.config;
+            changed(); render();
+            message("Key reassigned in this draft. Save changes to apply.");
+        });
+        card.querySelector(".cancel-reassignment").addEventListener("click", cancelReassignment);
         const record = card.querySelector(".record");
         const shortcut = card.querySelector('[data-field="shortcut"]');
         record.addEventListener("click", () => {
+            cancelReassignment();
             if (recording) recording.button.textContent = "Record keys";
             recording = {button: record, input: shortcut, binding};
             record.textContent = "Press keys…";

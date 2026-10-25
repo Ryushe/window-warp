@@ -109,6 +109,27 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         settings = list(Path(temporary).glob("config/**/settings.json"))
         assert len(settings) == 1
         assert json.loads(settings[0].read_text())["bindings"][0]["shortcut"] == "Ctrl+Alt+Shift+F13"
+        # A conflicting key is reviewed in the UI, then saved explicitly.
+        evaluate("const input=document.querySelectorAll('[data-field=shortcut]')[1]; input.value='shift+alt+control+F13'; input.dispatchEvent(new Event('input',{bubbles:true})); return true;")
+        click(".binding:nth-child(2) .reassign")
+        wait_for("return !document.querySelector('.binding:nth-child(2) .reassignment').hidden && !document.querySelector('.binding:nth-child(2) .confirm-reassignment').disabled")
+        assert "Push window left" in evaluate("return document.querySelector('.binding:nth-child(2) .reassignment-summary').textContent")
+        assert invoke("get_config")["bindings"][0]["enabled"]
+        evaluate("document.querySelector('.binding:nth-child(2)').scrollIntoView({block:'center'}); return true;")
+        screenshot = request("GET", f"/session/{session}/screenshot")
+        (output / "window-warp-reassignment-kde.png").write_bytes(base64.b64decode(screenshot))
+        click(".binding:nth-child(2) .cancel-reassignment")
+        assert evaluate("return document.querySelector('[data-field=enabled]').checked")
+        click(".binding:nth-child(2) .reassign")
+        wait_for("return !document.querySelector('.binding:nth-child(2) .confirm-reassignment').disabled")
+        click(".binding:nth-child(2) .confirm-reassignment")
+        assert not evaluate("return document.querySelector('[data-field=enabled]').checked")
+        assert invoke("get_config")["bindings"][0]["enabled"], "Review must not auto-save"
+        click("#save")
+        wait_for("return document.querySelector('#message').textContent.startsWith('Saved.')")
+        reassigned = invoke("get_config")["bindings"]
+        assert not reassigned[0]["enabled"] and reassigned[1]["enabled"]
+        assert reassigned[0]["shortcut"] == reassigned[1]["shortcut"] == "Ctrl+Alt+Shift+F13"
         assert not invoke("get_startup")
         assert invoke("set_startup", {"enabled": True})
         entry = Path(temporary) / "config/autostart/com.windowwarp.desktop.desktop"
@@ -189,7 +210,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         assert "Owned fixture" in evaluate("return document.querySelector('#workspace-list').innerText")
         screenshot = request("GET", f"/session/{session}/screenshot")
         (output / "window-warp-workspaces-kde.png").write_bytes(base64.b64decode(screenshot))
-        report = {"passed": True, "checks": ["native editor renders", "save persists settings", "enable loads KWin script", "pause unloads KWin script", "startup creates and removes isolated autostart entry", "native workspace capture", "workspace persistence", "native workspace reuse and separate placements", "workspace launch creates a new window without consuming existing ones", "per-axis maximization and fullscreen workspace restoration", "workspace browser renders saved profiles"], "screenshot": str(output / "window-warp-workspaces-kde.png")}
+        report = {"passed": True, "checks": ["native editor renders", "shortcut conflict review, cancel, reassignment and explicit save", "save persists settings", "enable loads KWin script", "pause unloads KWin script", "startup creates and removes isolated autostart entry", "native workspace capture", "workspace persistence", "native workspace reuse and separate placements", "workspace launch creates a new window without consuming existing ones", "per-axis maximization and fullscreen workspace restoration", "workspace browser renders saved profiles"], "screenshot": str(output / "window-warp-workspaces-kde.png")}
         if "--firefox" in sys.argv:
             # Run this option only in nested.sh's isolated compositor/session bus.
             assert os.environ.get("WAYLAND_DISPLAY") == "warp-test", "Firefox test requires the isolated compositor"

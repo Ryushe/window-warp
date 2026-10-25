@@ -197,3 +197,28 @@ The user-approved incremental build cache was removed again; no source or
 unrelated files were deleted. Builds run with `CARGO_INCREMENTAL=0`.
 Next: remaining terminal profile variants and the other open PARITY requirements.
 No merge, push, installation or activation was performed.
+
+## Reviewed shortcut reassignment
+
+The native configuration normalizer computes a proposal to assign a key to the
+chosen binding and disable only enabled conflicts. Existing settings are retained.
+The UI names affected bindings, offers confirmation/cancel, invalidates stale
+proposals after edits, and persists only when Save is clicked. The command does
+not mutate runtime registrations or files. This supports sequential correction
+of a draft with multiple conflicts without discarding unrelated invalid edits.
+
+41 Windows Rust tests, 29 Node tests, JavaScript syntax and Python fixture syntax
+checks pass. The KDE fixture now exercises review, cancel, draft-only application
+and explicit persistence through the native bridge. Native service
+`hoster-warp-gui-20261024-reassignment` passed all 12 checks (inactive, exit 0),
+including the existing workspace regression suite. Its nested session logs are
+`/tmp/window-warp-nested.WXfkDs`; local report and inspected screenshot are under
+`desktop/src-tauri/target/kde-validation/reassignment/`. The review text and
+buttons fit without clipping. Linux build `hoster-warp-build-20261024-reassignment`
+passed 33 Rust and 29 Node tests and produced the executable and Debian package;
+this is now the test binary on Portafort. The full Windows UI path remains open.
+
+Next concrete work: persistent pause/resume and editor/workspace control hotkeys,
+including current-app capture, then the remaining gesture and INI migration
+requirements. Preserve the open terminal/profile and browser native checks in
+PARITY.md. No merge/push or user-session installation/activation was requested.

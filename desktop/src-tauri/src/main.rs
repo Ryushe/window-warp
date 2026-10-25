@@ -77,6 +77,13 @@ fn save_config(app: AppHandle, mut config: Config) -> Result<Config, String> {
     Ok(config)
 }
 #[tauri::command]
+fn preview_shortcut_reassignment(
+    config: Config,
+    index: usize,
+) -> Result<config::Reassignment, String> {
+    config.preview_reassignment(index)
+}
+#[tauri::command]
 fn set_enabled(app: AppHandle, enabled: bool) -> Result<bool, String> {
     let runtime = app.state::<Runtime>();
     let mut current = runtime.enabled.lock().map_err(|e| e.to_string())?;
@@ -264,6 +271,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_config,
             save_config,
+            preview_shortcut_reassignment,
             set_enabled,
             get_status,
             get_startup,

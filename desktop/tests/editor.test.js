@@ -8,7 +8,7 @@ const html = fs.readFileSync(new URL("../ui/index.html", import.meta.url), "utf8
 const source = fs.readFileSync(new URL("../ui/app.js", import.meta.url), "utf8");
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-async function editor({ failLoad = false, failSave = false, failEnable = false } = {}) {
+async function editor({ failLoad = false, failSave = false, failEnable = false, failReassignment = false } = {}) {
     const { window, document } = parseHTML(html);
     // linkedom exposes select.value as a getter; browsers also provide a setter.
     Object.defineProperty(window.HTMLSelectElement.prototype, "value", {
@@ -31,6 +31,14 @@ async function editor({ failLoad = false, failSave = false, failEnable = false }
             if (command === "get_config") { if (failLoad) throw "Settings are unreadable"; return structuredClone(config); }
             if (command === "get_startup") return false;
             if (command === "set_startup") return args.enabled;
+            if (command === "preview_shortcut_reassignment") {
+                if (failReassignment) throw "Use a modifier plus a key";
+                const config = structuredClone(args.config);
+                config.bindings[0].enabled = false;
+                config.bindings[args.index].enabled = true;
+                config.bindings[args.index].shortcut = "Ctrl+Alt+Right";
+                return {config, disabledIndices:[0]};
+            }
             if (command === "save_config") { if (failSave) throw "Duplicate shortcut"; return structuredClone(args.config); }
             if (command === "set_enabled") { if (failEnable) throw "Shortcut is already in use"; return args.enabled; }
             throw new Error(command);
@@ -117,4 +125,48 @@ test("shortcut recording saves physical key names and supports cancellation", as
     assert.equal(e.document.querySelector(".binding").hidden, true);
     e.input("#search", "move");
     assert.equal(e.document.querySelector(".binding").hidden, false);
+});
+
+async function conflictingShortcut(e) {
+    await e.click("#add");
+    e.input('.binding:last-child [data-field="label"]', "New owner");
+    e.input('.binding:last-child [data-field="shortcut"]', "alt+control+right");
+    e.input('.binding:last-child [data-field="appMatch"]', "firefox.exe");
+    await e.click(".binding:last-child .reassign");
+}
+
+test("reassignment previews affected shortcuts and only saves after confirmation and Save", async () => {
+    const e = await editor();
+    await conflictingShortcut(e);
+    assert.match(e.document.querySelector(".binding:last-child .reassignment-summary").textContent, /Move right/);
+    assert.equal(e.document.querySelector(".binding:last-child .reassignment").hidden, false);
+    assert.equal(e.calls.filter(c => c.command === "save_config").length, 0);
+    await e.click(".binding:last-child .cancel-reassignment");
+    assert.equal(e.document.querySelector(".binding:last-child .reassignment").hidden, true);
+    assert.equal(e.document.querySelector('[data-field="enabled"]').checked, true);
+    await e.click(".binding:last-child .reassign");
+    await e.click(".binding:last-child .confirm-reassignment");
+    assert.equal(e.document.querySelector('[data-field="enabled"]').checked, false);
+    assert.equal(e.calls.filter(c => c.command === "save_config").length, 0);
+    await e.click("#save");
+    const saved = e.calls.find(c => c.command === "save_config").args.config;
+    assert.equal(saved.bindings[0].enabled, false);
+    assert.equal(saved.bindings[0].label, "Move right");
+    assert.equal(saved.bindings[1].enabled, true);
+    assert.equal(saved.bindings[1].shortcut, "Ctrl+Alt+Right");
+});
+
+test("editing invalidates reassignment proposals and errors preserve the draft", async () => {
+    const e = await editor();
+    await conflictingShortcut(e);
+    e.input('.binding:last-child [data-field="label"]', "Changed since preview");
+    assert.equal(e.document.querySelector(".binding:last-child .reassignment").hidden, true);
+    await e.click(".binding:last-child .confirm-reassignment");
+    assert.equal(e.document.querySelector('[data-field="enabled"]').checked, true);
+    assert.equal(e.document.querySelector('.binding:last-child [data-field="label"]').value, "Changed since preview");
+    const failure = await editor({failReassignment:true});
+    await conflictingShortcut(failure);
+    assert.match(failure.document.querySelector("#message").textContent, /modifier/);
+    assert.equal(failure.document.querySelector('[data-field="enabled"]').checked, true);
+    assert.equal(failure.document.querySelector('.binding:last-child [data-field="shortcut"]').value, "alt+control+right");
 });

@@ -15,7 +15,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE focus-last and minimized checks pass; Windows native behavior checks pending |
 | Tap vs hold, configurable 100–5000 ms delay, disable hold | Pending | Actual press/release path, repeats, modifier-first release, pause cancellation |
 | Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Pending | Both native desktop paths and rendered overlay |
-| Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable and behavior controls implemented and Node-tested; current-app capture/conflict reassignment pending |
+| Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed conflict reassignment implemented and tested; current-app capture pending |
 | Global pause/resume hotkey stays available while paused; editor/workspace/update hotkeys | Pending | Lifecycle and registration tests, including conflicts |
 | Settings persistence and startup registration | Partial | KDE native toggle creates/removes isolated autostart entry; Windows toggle and actual login/startup launch pending |
 | Workspace capture/create/update, best-match update selection, rename/delete/reorder/browser | Partial | Implemented; Rust matching/persistence model and Node editor tests pass; KDE native capture/save/browser pass; full Windows editor workflow pending |
@@ -151,3 +151,14 @@ only their owned windows. Additional PowerShell/custom-profile variants remain.
 Linux build `hoster-warp-build-20261024-wsl` passed 32 Rust tests and built the
 executable and Debian package (exit 0). The existing Portafort native binary
 remains the Firefox caption checkpoint; no new KDE GUI behavior changed.
+
+## Shortcut reassignment
+
+The editor previews which enabled bindings use the chosen shortcut, including
+modifier and punctuation aliases. Confirming disables those bindings in the
+draft and preserves their settings. Cancel or any subsequent edit discards the
+proposal; Save is still required to persist it. 41 Windows Rust tests, 29 Node
+tests and JavaScript syntax checks pass. Linux has 33 passing Rust tests.
+Native `hoster-warp-gui-20261024-reassignment` passed all 12 checks, including
+conflict review/cancel/save and workspace regressions. The inspected screenshot
+and report are under `src-tauri/target/kde-validation/reassignment/`.

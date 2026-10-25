@@ -51,6 +51,13 @@ pub struct Config {
     pub settings: Settings,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Reassignment {
+    pub config: Config,
+    pub disabled_indices: Vec<usize>,
+}
+
 impl Default for Config {
     fn default() -> Self {
         let entries = [
@@ -80,6 +87,31 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Return an editable proposal; persistence and full validation happen on Save.
+    pub fn preview_reassignment(mut self, index: usize) -> Result<Reassignment, String> {
+        let chosen = self
+            .bindings
+            .get(index)
+            .ok_or("Shortcut no longer exists.")?;
+        let shortcut = normalize_shortcut(&chosen.shortcut)?;
+        let mut disabled_indices = Vec::new();
+        for (other_index, binding) in self.bindings.iter_mut().enumerate() {
+            if other_index != index
+                && binding.enabled
+                && normalize_shortcut(&binding.shortcut).ok().as_ref() == Some(&shortcut)
+            {
+                binding.enabled = false;
+                disabled_indices.push(other_index);
+            }
+        }
+        self.bindings[index].shortcut = shortcut;
+        self.bindings[index].enabled = true;
+        Ok(Reassignment {
+            config: self,
+            disabled_indices,
+        })
+    }
+
     pub fn validate(&mut self) -> Result<(), String> {
         if self.version != 1 {
             return Err("Unsupported settings version.".into());
@@ -204,6 +236,27 @@ fn normalize_shortcut(value: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reassignment_disables_only_enabled_alias_conflicts_and_preserves_edits() {
+        let mut config = Config::default();
+        config.bindings[0].shortcut = "Super+Semicolon".into();
+        config.bindings[1].shortcut = "win+;".into();
+        config.bindings[1].enabled = false;
+        config.bindings[2].shortcut = "Meta+Semicolon".into();
+        config.bindings[3].shortcut = "win+;".into();
+        config.bindings[3].enabled = false;
+        config.bindings[4].label = "Unsaved edit".into();
+        let proposal = config.preview_reassignment(1).unwrap();
+        assert_eq!(proposal.disabled_indices, [0, 2]);
+        assert!(proposal.config.bindings[1].enabled);
+        assert_eq!(proposal.config.bindings[1].shortcut, "Super+Semicolon");
+        assert!(!proposal.config.bindings[3].enabled);
+        assert_eq!(proposal.config.bindings[4].label, "Unsaved edit");
+        assert_eq!(proposal.config.bindings[0].shortcut, "Super+Semicolon");
+        let mut validated = proposal.config;
+        validated.validate().unwrap();
+        assert!(validated.preview_reassignment(100).is_err());
+    }
     #[test]
     fn aliases_and_order_cannot_hide_conflicts() {
         let mut config = Config::default();
