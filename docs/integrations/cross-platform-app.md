@@ -7,8 +7,8 @@
 - Base commit: `7b907778f0022d73fb3527b82c0ab7ecedf8124d`
 - Intended eventual target: `main`; promotion/merge has not been requested
 - Last updated: 2026-10-24
-- Latest immutable recovery checkpoint: `61233ff2e8e10eb7c5df8e8906aaf45e982817d8`
-- Feature implementation commits: `abfc95e` (desktop/workspace foundation), `ee7bee4` (Firefox profiles/tabs), `c09d79c` (terminal capture/editor/restore), `491a9d8` (KDE Firefox caption correction and complete 15-check native run), `5e6373d` (WSL distribution discovery and native directory restoration), `02d4e02` (reviewed shortcut reassignment and 12-check native KDE run), `b216f0c` (persistent pause and application control hotkeys, 15 native KDE checks), `d49e380` (14 native Windows application checks), `9794b75` (Windows tap/hold, activation deadlock correction, 18 Windows and 15 KDE native checks), `b63cb1d` (KDE native tap/hold, Wayland editor focus, 20 native KDE checks), `41fbc70` (KDE key reservation cleanup, 21 native KDE checks, held-key regression reproduced), `da23019` (held-key cancellation and deferred reassignment, verified script startup, 22 native KDE checks), `61233ff` (shared radial picker, 26 native KDE checks; 22 native Windows checks after memory recovery)
+- Latest immutable recovery checkpoint: `9ccbaa77dd0fe475e995ae382a7b18abaecb54d8`
+- Feature implementation commits: `abfc95e` (desktop/workspace foundation), `ee7bee4` (Firefox profiles/tabs), `c09d79c` (terminal capture/editor/restore), `491a9d8` (KDE Firefox caption correction and complete 15-check native run), `5e6373d` (WSL distribution discovery and native directory restoration), `02d4e02` (reviewed shortcut reassignment and 12-check native KDE run), `b216f0c` (persistent pause and application control hotkeys, 15 native KDE checks), `d49e380` (14 native Windows application checks), `9794b75` (Windows tap/hold, activation deadlock correction, 18 Windows and 15 KDE native checks), `b63cb1d` (KDE native tap/hold, Wayland editor focus, 20 native KDE checks), `41fbc70` (KDE key reservation cleanup, 21 native KDE checks, held-key regression reproduced), `da23019` (held-key cancellation and deferred reassignment, verified script startup, 22 native KDE checks), `61233ff` (shared radial picker, 26 native KDE checks; initial 22 native Windows pass later superseded by rapid Escape regression), `4a92065` (reviewed INI migration and native import receipts), `9ccbaa7` (portable fixture line endings)
 - Canonical references: original root AHK files; `desktop/PARITY.md`
 
 ## Intent and implemented contract
@@ -651,3 +651,8 @@ All Hoster task build/GUI units are terminal. Memory is no longer a blocker.
 Fixture text line endings were normalized after the migration commit; conversion
 behavior is unchanged. The focused importer tests and staged whitespace check
 pass on the normalized fixtures.
+
+Recoverable implementation checkpoint: `9ccbaa77dd0fe475e995ae382a7b18abaecb54d8`
+on `codex/cross-platform-app`, including migration commit `4a92065`. A following
+dossier-only commit records this SHA. Resume at the Windows rapid Escape issue
+above; the full feature-port goal remains active and incomplete.
