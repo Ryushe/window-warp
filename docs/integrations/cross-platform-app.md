@@ -7,8 +7,8 @@
 - Base commit: `7b907778f0022d73fb3527b82c0ab7ecedf8124d`
 - Intended eventual target: `main`; promotion/merge has not been requested
 - Last updated: 2026-10-24
-- Latest immutable recovery checkpoint: `ee7bee4471b0032907f4649ae475825111329860`
-- Feature implementation commits: `abfc95e` (desktop/workspace foundation), `ee7bee4` (Firefox profiles/tabs and pending KDE resize verification)
+- Latest immutable recovery checkpoint: `c09d79c36a083e55dbd87e0b730d711c21db8705`
+- Feature implementation commits: `abfc95e` (desktop/workspace foundation), `ee7bee4` (Firefox profiles/tabs and pending KDE resize verification), `c09d79c` (terminal capture/editor/restore and native verification)
 - Canonical references: original root AHK files; `desktop/PARITY.md`
 
 ## Intent and implemented contract
