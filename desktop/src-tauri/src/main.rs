@@ -5,6 +5,8 @@ mod firefox;
 mod geometry;
 mod gesture;
 #[cfg(target_os = "linux")]
+mod linux_apps;
+#[cfg(target_os = "linux")]
 mod linux_control;
 #[cfg(target_os = "linux")]
 mod linux_gestures;
@@ -21,6 +23,8 @@ mod radial;
 mod retile;
 mod startup;
 mod terminal;
+#[cfg(windows)]
+mod windows_apps;
 mod workspaces;
 #[cfg(any(windows, test))]
 mod wsl;

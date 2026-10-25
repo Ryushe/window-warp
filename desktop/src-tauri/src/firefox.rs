@@ -414,6 +414,7 @@ pub fn enrich(items: &mut [WorkspaceItem]) {
         if !browser.tabs.is_empty() && score(&item.window, &browser) < 120 {
             item.capture_note = "Firefox's last saved session does not match the current window title. Review the tab URLs and selected tab.".into();
         }
+        item.launch.kind = crate::workspaces::LaunchKind::Executable;
         item.launch.program = if item.window.path.is_empty() {
             "firefox".into()
         } else {
@@ -458,6 +459,9 @@ impl Browser {
     pub fn launch_commands(&self, base: &LaunchSpec) -> Result<Vec<LaunchSpec>, String> {
         self.validate()?;
         let profile_args = self.profile_args()?;
+        if base.kind != crate::workspaces::LaunchKind::Executable {
+            return Err("Firefox tab restoration requires an executable launch. Select Executable or turn off Restore Firefox tabs.".into());
+        }
         let mut urls: Vec<_> = self
             .tabs
             .iter()

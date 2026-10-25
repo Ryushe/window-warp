@@ -76,6 +76,128 @@ user.DispatchMessageW.argtypes = [c.POINTER(w.MSG)]
 user.DispatchMessageW.restype = LRESULT
 kernel.GetModuleHandleW.argtypes = [w.LPCWSTR]
 kernel.GetModuleHandleW.restype = w.HMODULE
+kernel.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+kernel.OpenProcess.restype = w.HANDLE
+kernel.CloseHandle.argtypes = [w.HANDLE]
+kernel.GetApplicationUserModelId.argtypes = [w.HANDLE, c.POINTER(w.UINT), w.LPWSTR]
+kernel.GetApplicationUserModelId.restype = w.LONG
+kernel.GetProcessTimes.argtypes = [w.HANDLE, c.POINTER(w.FILETIME), c.POINTER(w.FILETIME), c.POINTER(w.FILETIME), c.POINTER(w.FILETIME)]
+kernel.GetSystemTimeAsFileTime.argtypes = [c.POINTER(w.FILETIME)]
+user.EnumChildWindows.argtypes = [w.HWND, ENUMWINDOWS, w.LPARAM]
+user.IsWindow.argtypes = [w.HWND]
+user.PostMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
+
+class PROCESSENTRY32(c.Structure):
+    _fields_ = [("dwSize", w.DWORD), ("cntUsage", w.DWORD), ("th32ProcessID", w.DWORD),
+                ("th32DefaultHeapID", c.c_size_t), ("th32ModuleID", w.DWORD),
+                ("cntThreads", w.DWORD), ("th32ParentProcessID", w.DWORD),
+                ("pcPriClassBase", w.LONG), ("dwFlags", w.DWORD), ("szExeFile", w.WCHAR * 260)]
+
+kernel.CreateToolhelp32Snapshot.argtypes = [w.DWORD, w.DWORD]
+kernel.CreateToolhelp32Snapshot.restype = w.HANDLE
+kernel.Process32FirstW.argtypes = [w.HANDLE, c.POINTER(PROCESSENTRY32)]
+kernel.Process32NextW.argtypes = [w.HANDLE, c.POINTER(PROCESSENTRY32)]
+CALCULATOR = "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"
+calculator_baseline = None
+
+def filetime(value):
+    return (value.dwHighDateTime << 32) | value.dwLowDateTime
+
+def process_identity(pid):
+    handle = kernel.OpenProcess(0x1000, False, pid)
+    if not handle:
+        return None
+    try:
+        length = w.UINT()
+        if kernel.GetApplicationUserModelId(handle, c.byref(length), None) != 122:
+            return None
+        value = c.create_unicode_buffer(length.value)
+        if kernel.GetApplicationUserModelId(handle, c.byref(length), value) != 0:
+            return None
+        times = [w.FILETIME() for _ in range(4)]
+        if not kernel.GetProcessTimes(handle, *(c.byref(t) for t in times)):
+            raise c.WinError(c.get_last_error())
+        return value.value, filetime(times[0])
+    finally:
+        kernel.CloseHandle(handle)
+
+def all_windows():
+    found = []
+    @ENUMWINDOWS
+    def collect(hwnd, _):
+        found.append(hwnd)
+        return True
+    user.EnumWindows(collect, 0)
+    return found
+
+def calculator_process(hwnd):
+    pids = set()
+    @ENUMWINDOWS
+    def collect(child, _):
+        pid = w.DWORD()
+        user.GetWindowThreadProcessId(child, c.byref(pid))
+        pids.add(pid.value)
+        return True
+    collect(hwnd, 0)
+    user.EnumChildWindows(hwnd, collect, 0)
+    matches = [(pid, identity[1]) for pid in pids
+               if (identity := process_identity(pid)) and identity[0] == CALCULATOR]
+    return matches[0] if len(matches) == 1 else None
+
+def begin_calculator():
+    global calculator_baseline
+    snapshot = kernel.CreateToolhelp32Snapshot(2, 0)
+    if snapshot == w.HANDLE(-1).value:
+        raise c.WinError(c.get_last_error())
+    pids = set()
+    busy = False
+    try:
+        entry = PROCESSENTRY32(dwSize=c.sizeof(PROCESSENTRY32))
+        more = kernel.Process32FirstW(snapshot, c.byref(entry))
+        if not more:
+            raise c.WinError(c.get_last_error())
+        while more:
+            pids.add(entry.th32ProcessID)
+            identity = process_identity(entry.th32ProcessID)
+            busy |= entry.szExeFile.lower() in ("calculator.exe", "calculatorapp.exe", "calc.exe") or bool(identity and identity[0] == CALCULATOR)
+            more = kernel.Process32NextW(snapshot, c.byref(entry))
+    finally:
+        kernel.CloseHandle(snapshot)
+    handles = set(all_windows())
+    busy |= any(calculator_process(hwnd) for hwnd in handles)
+    if busy:
+        return False
+    now = w.FILETIME()
+    kernel.GetSystemTimeAsFileTime(c.byref(now))
+    calculator_baseline = (pids, handles, filetime(now))
+    return True
+
+def cleanup_calculator():
+    global calculator_baseline
+    if calculator_baseline is None:
+        return 0
+    pids, handles, started = calculator_baseline
+    closed = []
+    for hwnd in all_windows():
+        if not user.IsWindowVisible(hwnd):
+            continue
+        identity = calculator_process(hwnd)
+        if hwnd in handles or not identity or identity[0] in pids or identity[1] < started:
+            continue
+        # Recheck the exact HWND and process creation time immediately before
+        # WM_CLOSE. No process-name termination or preexisting window is allowed.
+        if calculator_process(hwnd) != identity:
+            raise RuntimeError("Calculator identity changed before fixture cleanup")
+        if not user.PostMessageW(hwnd, 0x10, 0, 0):
+            raise c.WinError(c.get_last_error())
+        closed.append((hwnd, identity))
+    until = time.monotonic() + 5
+    while any(user.IsWindow(hwnd) and calculator_process(hwnd) == identity for hwnd, identity in closed):
+        if time.monotonic() >= until:
+            raise RuntimeError("Owned Calculator window did not close after WM_CLOSE")
+        time.sleep(0.05)
+    calculator_baseline = None
+    return len(closed)
 
 @WNDPROC
 def procedure(hwnd, message, wp, lp):
@@ -153,6 +275,10 @@ try:
                 if len(found) != 1:
                     raise RuntimeError(f"Expected one visible app-sized fixture window; found {len(found)}")
                 result = found[0]
+            elif command == "calculator_begin":
+                result = begin_calculator()
+            elif command == "calculator_cleanup":
+                result = cleanup_calculator()
             elif command == "startup_value":
                 try:
                     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as key:
@@ -289,3 +415,5 @@ finally:
         user.UnregisterHotKey(windows[0], key)
     for hwnd in windows:
         user.DestroyWindow(hwnd)
+    if calculator_baseline is not None:
+        cleanup_calculator()

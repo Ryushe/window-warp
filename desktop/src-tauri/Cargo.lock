@@ -4422,6 +4422,7 @@ dependencies = [
 name = "window-warp"
 version = "0.1.0"
 dependencies = [
+ "gio",
  "libc",
  "lz4_flex",
  "serde",
@@ -4433,6 +4434,7 @@ dependencies = [
  "uuid",
  "wayland-client",
  "wayland-protocols-plasma",
+ "windows",
  "windows-sys 0.61.2",
  "x11rb",
  "zbus",

@@ -13,6 +13,15 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const monitors = [{x:-1920,y:30,width:1920,height:1050},{x:0,y:0,width:1920,height:1080}];
 const workspace = extra => `[Meta]\ncount=1\n[Profile1]\nid=old-id\nname=Work\nitemCount=1\n[Profile1Item1]\nprocessName=WindowsTerminal.exe\npath=C:\\WindowsApps\\Terminal.exe\ntitle=Dev\nx=-1800\ny=120\nw=800\nh=600\nstate=1\nmonitorIndex=1\n${extra}`;
 
+test("legacy packaged apps retain their source path without guessing an activation ID",()=>{
+    const ini=workspace("launchKind=packaged-app").replace("WindowsTerminal.exe","CalculatorApp.exe");
+    const item=preview(ini,{platform:"windows",monitors})[0].value.items[0];
+    assert.equal(item.launch.kind,"packaged-app");
+    assert.equal(item.launch.program,"");
+    assert.equal(item.window.path,"C:\\WindowsApps\\Terminal.exe");
+    assert.match(item.captureNote,/Recapture.*AUMID/);
+});
+
 test("real app/shared/settings INIs retain behavior including pointer-center actions",()=>{
     const read = name => decode(fs.readFileSync(new URL("./fixtures/legacy/"+name+".fixture",import.meta.url)));
     const apps = preview(read("window_manager_apps.ini"));

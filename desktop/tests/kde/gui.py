@@ -91,6 +91,16 @@ def click(selector):
 with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (output / "gui.log").open("w") as log:
     environment = os.environ.copy()
     environment.update({"TAURI_WEBVIEW_AUTOMATION": "true", "TAURI_AUTOMATION": "true", "GDK_BACKEND": "wayland", "XDG_CONFIG_HOME": temporary + "/config", "XDG_DATA_HOME": temporary + "/data", "XDG_CACHE_HOME": temporary + "/cache"})
+    if "--desktop-entry" in sys.argv:
+        # Only this disposable desktop session can discover the fixture entry.
+        applications = Path(environment["XDG_DATA_HOME"]) / "applications"
+        applications.mkdir(parents=True)
+        desktop_launch_log = Path(temporary) / "desktop-launch.json"
+        desktop_launch_dir = Path(temporary) / "desktop launch directory"
+        desktop_launch_dir.mkdir()
+        desktop_entry = applications / "com.windowwarp.other-smoke.desktop"
+        fixture_source = Path(__file__).with_name("live.py").resolve()
+        desktop_entry.write_text(f'[Desktop Entry]\nType=Application\nName=Window Warp launch fixture\nExec=/usr/bin/env QT_QPA_PLATFORM=wayland WARP_LAUNCH_LOG={desktop_launch_log} {sys.executable} "{fixture_source}" --workspace-single %U\nPath={desktop_launch_dir}\n')
     driver = subprocess.Popen([driver_binary, f"--port={port}", "--host=127.0.0.1"], env=environment, stdout=log, stderr=log, start_new_session=True)
     fixture = None
     radial_fixture = None
@@ -208,7 +218,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         # The program/arguments go through the real launch path, without a shell.
         new_item = json.loads(json.dumps(captured["items"][0]))
         new_item["window"]["title"] = "WARP-TEST-C"
-        new_item["launch"] = {"program": sys.executable, "args": [fixture_script, "--workspace-single"], "newWindow": True, "workingDirectory": ""}
+        new_item["launch"] = {"kind": "executable", "program": sys.executable, "args": [fixture_script, "--workspace-single"], "newWindow": True, "workingDirectory": ""}
         launched = dict(captured, id="fixture-launch", name="Launch fixture", items=[new_item])
         invoke("save_workspaces", {"store": {"version": 1, "profiles": [captured, launched]}})
         before = {w["id"] for w in invoke("get_windows")}
@@ -247,6 +257,39 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         screenshot = request("GET", f"/session/{session}/screenshot")
         (output / "window-warp-workspaces-kde.png").write_bytes(base64.b64decode(screenshot))
         report = {"passed": True, "checks": ["native editor renders", "shortcut conflict review, cancel, reassignment and explicit save", "save persists settings", "enable loads KWin script", "pause unloads KWin script", "startup creates and removes isolated autostart entry", "native workspace capture", "workspace persistence", "native workspace reuse and separate placements", "workspace launch creates a new window without consuming existing ones", "per-axis maximization and fullscreen workspace restoration", "workspace browser renders saved profiles"], "screenshot": str(output / "window-warp-workspaces-kde.png")}
+        if "--desktop-entry" in sys.argv:
+            assert all(i["launch"]["kind"] == "desktop-entry" and i["launch"]["program"] == "com.windowwarp.other-smoke" for i in captured["items"]), captured
+            desktop_item = json.loads(json.dumps(captured["items"][0]))
+            desktop_item["launch"].update({"newWindow": True, "args": ["https://example.test/a%20b?x=1&y=2", "file:///tmp/warp%20document.txt"]})
+            desktop_profile = dict(captured, id="desktop-launch", items=[desktop_item])
+            desktop_store = {"version": 1, "profiles": [desktop_profile]}
+            invoke("save_workspaces", {"store": desktop_store})
+            before = {w["id"] for w in invoke("get_windows")}
+            result = invoke("restore_workspace", {"id": desktop_profile["id"]})
+            fresh = [w for w in invoke("get_windows") if w["id"] not in before and w["desktopId"] == "com.windowwarp.other-smoke"]
+            for w in fresh:
+                args = Path(f"/proc/{w['pid']}/cmdline").read_bytes().split(b"\0")
+                if fixture_script.encode() in args and b"--workspace-single" in args:
+                    launched_pids.add(w["pid"])
+            assert len(fresh) == 1 and result[0]["restored"] and result[0]["launched"], result
+            launched_data = json.loads(desktop_launch_log.read_text())
+            # GIO resolves local file URIs to native paths for an entry that
+            # does not opt into GIO's URI-only application metadata.
+            assert launched_data == {"args": ["--workspace-single", desktop_item["launch"]["args"][0], "/tmp/warp document.txt"], "cwd": str(desktop_launch_dir)}, launched_data
+            assert fresh[0]["rect"] == desktop_item["window"]["rect"]
+            report["checks"].append("native KDE desktop entry capture and activation preserve URL arguments, entry working directory and saved placement")
+            desktop_item["window"] = fresh[0]
+            desktop_item["launch"]["newWindow"] = False
+            invoke("save_workspaces", {"store": desktop_store})
+            result = invoke("restore_workspace", {"id": desktop_profile["id"]})
+            assert result[0]["restored"] and not result[0]["launched"], result
+            report["checks"].append("desktop entry identity reuses the existing native window")
+            desktop_item["launch"].update({"newWindow": True, "program": "org.windowwarp.missing-entry"})
+            invoke("save_workspaces", {"store": desktop_store})
+            result = invoke("restore_workspace", {"id": desktop_profile["id"]})
+            assert not result[0]["restored"] and not result[0]["launched"] and "not installed" in result[0]["error"], result
+            report["checks"].append("missing desktop entry reports an activation error without starting a window")
+            invoke("save_workspaces", {"store": {"version": 1, "profiles": [captured, launched]}})
         click("#show-shortcuts")
         invoke("set_enabled", {"enabled": True})
         invoke_shortcut("open-workspaces")

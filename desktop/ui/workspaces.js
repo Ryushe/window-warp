@@ -126,12 +126,24 @@
                 });
             }
             include.addEventListener("change", () => { selected[index] = include.checked; count(); controls(); });
+            item.launch.kind ||= "executable";
+            const launchTargetLabel = fragment.querySelector(".launch-target-label");
+            const launchArgsLabel = fragment.querySelector(".launch-args-label");
+            const launchHint = fragment.querySelector(".launch-hint");
+            const launchFields = () => {
+                const kind = item.launch.kind;
+                launchTargetLabel.textContent = kind === "desktop-entry" ? "Desktop entry ID" : kind === "packaged-app" ? "Application user model ID (AUMID)" : "Program";
+                launchArgsLabel.textContent = kind === "desktop-entry" ? "Documents / URLs (one per line)" : "Arguments (one per line)";
+                launchHint.textContent = kind === "executable" ? "Apps that reuse an existing window may not support opening a new one." : "The app controls whether activation opens a new window. Clear Working directory; the app or desktop entry supplies it.";
+            };
+            launchFields();
             fragment.querySelectorAll("[data-launch]").forEach(input => {
                 const field = input.dataset.launch;
                 if (field === "newWindow") input.checked = item.launch.newWindow;
                 else input.value = field === "args" ? item.launch.args.join("\n") : item.launch[field];
                 input.addEventListener("input", () => {
                     item.launch[field] = field === "newWindow" ? input.checked : field === "args" ? input.value.split(/\r?\n/).filter(line => line !== "") : input.value;
+                    if (field === "kind") launchFields();
                 });
             });
             select("#workspace-items").append(fragment);

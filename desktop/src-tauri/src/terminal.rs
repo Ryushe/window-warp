@@ -54,6 +54,9 @@ impl Terminal {
 
     pub fn launch_command(&self, base: &LaunchSpec) -> Result<LaunchSpec, String> {
         self.validate()?;
+        if base.kind != crate::workspaces::LaunchKind::Executable {
+            return Err("Terminal session restoration requires an executable launch. Select Executable or turn off Restore terminal session.".into());
+        }
         if self.kind == Kind::Konsole
             && !self.profile_path.is_empty()
             && !std::path::Path::new(&self.profile_path).is_file()
@@ -107,6 +110,7 @@ impl Terminal {
             args = args.into_iter().map(|s| s.replace(';', "\\;")).collect();
         }
         Ok(LaunchSpec {
+            kind: crate::workspaces::LaunchKind::Executable,
             program: base.program.clone(),
             args,
             working_directory: base.working_directory.clone(),
@@ -196,6 +200,7 @@ pub fn enrich(items: &mut [WorkspaceItem]) {
         let Some(kind) = kind(&item.window) else {
             continue;
         };
+        item.launch.kind = crate::workspaces::LaunchKind::Executable;
         item.launch.program = match kind {
             Kind::WindowsTerminal => "wt.exe".into(),
             Kind::Konsole => {

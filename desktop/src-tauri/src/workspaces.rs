@@ -36,9 +36,18 @@ pub struct WorkspaceItem {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub capture_note: String,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LaunchKind {
+    #[default]
+    Executable,
+    DesktopEntry,
+    PackagedApp,
+}
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct LaunchSpec {
+    pub kind: LaunchKind,
     pub program: String,
     pub args: Vec<String>,
     pub working_directory: String,
@@ -119,6 +128,8 @@ impl WorkspaceStore {
                     || w.id.len() > 100
                     || w.title.len() > 16000
                     || w.path.len() > 32768
+                    || w.desktop_id.len() > 32768
+                    || w.desktop_id.contains('\0')
                     || w.monitor == 0
                     || w.monitor > 100
                     || item.label.len() > 1024
@@ -188,9 +199,22 @@ pub fn capture(windows: Vec<WindowInfo>, name: String) -> Workspace {
                     program: window.path.clone(),
                     ..Default::default()
                 };
-                if std::env::consts::OS == "linux" && !window.desktop_id.is_empty() {
-                    launch.program = "gtk-launch".into();
-                    launch.args = vec![window.desktop_id.clone()];
+                let mut capture_note = String::new();
+                #[cfg(target_os = "linux")]
+                if !window.desktop_id.is_empty() {
+                    if crate::linux_apps::installed(&window.desktop_id) {
+                        launch.kind = LaunchKind::DesktopEntry;
+                        launch.program = window.desktop_id.clone();
+                    } else {
+                        capture_note = "The window's desktop entry is not installed. Review the captured executable before restoring it.".into();
+                    }
+                }
+                #[cfg(windows)]
+                if !window.desktop_id.is_empty() {
+                    launch.kind = LaunchKind::PackagedApp;
+                    launch.program = window.desktop_id.clone();
+                } else if window.path.to_ascii_lowercase().contains("\\windowsapps\\") {
+                    capture_note = "The packaged app's activation ID could not be captured. Select Windows packaged app and enter its AUMID before launching.".into();
                 }
                 WorkspaceItem {
                     label,
@@ -198,7 +222,7 @@ pub fn capture(windows: Vec<WindowInfo>, name: String) -> Workspace {
                     launch,
                     browser: None,
                     terminal: None,
-                    capture_note: String::new(),
+                    capture_note,
                 }
             })
             .collect(),
@@ -221,6 +245,24 @@ pub fn launch(spec: &LaunchSpec) -> Result<(), String> {
             "No launch command is saved for this app. Edit the workspace launch command first."
                 .into(),
         );
+    }
+    if spec.kind != LaunchKind::Executable && !spec.working_directory.is_empty() {
+        return Err("Working directory applies only to executable launches. Clear it or select Executable in app launch settings.".into());
+    }
+    match spec.kind {
+        LaunchKind::DesktopEntry => {
+            #[cfg(target_os = "linux")]
+            return crate::linux_apps::launch(&spec.program, &spec.args);
+            #[cfg(not(target_os = "linux"))]
+            return Err("Desktop entries can only be launched on Linux. Adapt the app launch settings for this operating system.".into());
+        }
+        LaunchKind::PackagedApp => {
+            #[cfg(windows)]
+            return crate::windows_apps::activate(&spec.program, &spec.args);
+            #[cfg(not(windows))]
+            return Err("Packaged Windows apps can only be launched on Windows. Adapt the app launch settings for this operating system.".into());
+        }
+        LaunchKind::Executable => {}
     }
     let mut command = Command::new(&spec.program);
     command
@@ -362,8 +404,11 @@ pub fn find_match<'a>(
         .iter()
         .filter(|w| {
             !used.contains(&w.id)
-                && (w.app_id.eq_ignore_ascii_case(&saved.app_id)
-                    || (!saved.desktop_id.is_empty() && w.desktop_id == saved.desktop_id))
+                && if saved.desktop_id.is_empty() {
+                    w.app_id.eq_ignore_ascii_case(&saved.app_id)
+                } else {
+                    w.desktop_id == saved.desktop_id
+                }
         })
         .max_by_key(|w| {
             (
@@ -496,6 +541,52 @@ mod tests {
             best_match(&[one, two], &[window("new1", "One"), window("new2", "Two")]),
             Some(expected)
         );
+    }
+    #[test]
+    fn launch_kind_defaults_for_existing_workspaces_and_round_trips() {
+        let old: LaunchSpec = serde_json::from_str(
+            r#"{"program":"app","args":[],"workingDirectory":"","newWindow":false}"#,
+        )
+        .unwrap();
+        assert_eq!(old.kind, LaunchKind::Executable);
+        for kind in [LaunchKind::DesktopEntry, LaunchKind::PackagedApp] {
+            let spec = LaunchSpec {
+                kind,
+                program: "application-id".into(),
+                ..Default::default()
+            };
+            let saved: LaunchSpec =
+                serde_json::from_str(&serde_json::to_string(&spec).unwrap()).unwrap();
+            assert_eq!(saved.kind, kind);
+            assert_eq!(saved.program, "application-id");
+            let mut invalid = spec;
+            invalid.working_directory = "/tmp".into();
+            assert!(launch(&invalid).unwrap_err().contains("Working directory"));
+        }
+    }
+    #[test]
+    fn desktop_identity_prevents_reusing_a_different_app_in_the_same_host() {
+        let mut saved = window("old", "Same title");
+        saved.desktop_id = "PackageA!App".into();
+        let mut wrong = window("1", "Same title");
+        wrong.desktop_id = "PackageB!App".into();
+        let mut right = window("2", "New title");
+        right.desktop_id = saved.desktop_id.clone();
+        let windows = [wrong, right];
+        assert_eq!(
+            find_match(&saved, &windows, &HashSet::new()).unwrap().id,
+            "2"
+        );
+        assert!(find_match(&saved, &windows[..1], &HashSet::new()).is_none());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn capture_uses_actual_packaged_identity_instead_of_guessing_app_suffix() {
+        let mut packaged = window("1", "Packaged app");
+        packaged.desktop_id = "Contoso_abc!OtherApp".into();
+        let profile = capture(vec![packaged], "Packages".into());
+        assert_eq!(profile.items[0].launch.kind, LaunchKind::PackagedApp);
+        assert_eq!(profile.items[0].launch.program, "Contoso_abc!OtherApp");
     }
     #[test]
     fn missing_launch_target_reports_error_instead_of_success() {

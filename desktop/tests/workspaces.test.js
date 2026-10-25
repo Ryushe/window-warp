@@ -10,6 +10,27 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const item = title => ({label:title, window:{title, appId:"fixture", monitor:1, rect:{width:640,height:400}}, launch:{program:"fixture", args:[], workingDirectory:"", newWindow:false}});
 const profile = (id, name) => ({id,name,platform:"linux",items:[item(name + " window")]});
 
+test("launch types round trip through the editor and keep target and argument semantics visible",async()=>{
+    const e=await editor({profiles:[profile("launch","Launch")]});
+    await e.click('[data-action="edit"]');
+    assert.equal(e.document.querySelector('[data-launch="kind"]').value,"executable");
+    e.input('[data-launch="kind"]',"desktop-entry");
+    e.input('[data-launch="program"]',"org.example.Editor");
+    e.input('[data-launch="args"]',"file:///tmp/a%20b.txt\nhttps://example.test/document");
+    assert.equal(e.document.querySelector('.launch-target-label').textContent,"Desktop entry ID");
+    assert.match(e.document.querySelector('.launch-args-label').textContent,/URLs/);
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].items[0].launch.kind,"desktop-entry");
+    assert.equal(e.stored().profiles[0].items[0].launch.args.length,2);
+    await e.click('[data-action="edit"]');
+    e.input('[data-launch="kind"]',"packaged-app");
+    e.input('[data-launch="program"]',"Contoso_abc!OtherApp");
+    assert.match(e.document.querySelector('.launch-target-label').textContent,/AUMID/);
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].items[0].launch.kind,"packaged-app");
+    assert.equal(e.stored().profiles[0].items[0].launch.program,"Contoso_abc!OtherApp");
+});
+
 test("imported workspace stays a draft, preserves existing drafts and permits platform/placement adaptation",async()=>{
     const e=await editor();
     const p=profile("imported","Imported");p.platform="windows";

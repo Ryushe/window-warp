@@ -151,7 +151,7 @@
         const note = `The INI has no source work area. Review the imported coordinates and monitor ${monitor}; its reference area uses ${monitors[monitor-1] ? "the current display" : "the first current display because the saved monitor is absent"}.`;
         const item = {label:get("label") || get("title") || appId,
             window:{id:"",pid:0,title:get("title"),appId,desktopId:"",path:get("path"),rect,workArea:{...area},monitor,monitorName:"",maximizedHorizontal:state===1,maximizedVertical:state===1,fullscreen:false,minimized:state===-1,active:false},
-            launch:{program:get("path"),args:[],workingDirectory:"",newWindow:false},captureNote:note};
+            launch:{kind:"executable",program:get("path"),args:[],workingDirectory:"",newWindow:false},captureNote:note};
         if (!notes.includes("Review window placement: old INIs omit the original monitor work areas.")) notes.push("Review window placement: old INIs omit the original monitor work areas.");
         if (/windowsterminal\.exe$/i.test(appId) || get("launchKind") === "windows-terminal") {
             let kind = (get("shellKind") || get("terminalShell")).toLowerCase().replace(/\.exe$/, "");
@@ -186,7 +186,11 @@
             const tabs = Array.from({length:count},(_,i)=>({url:get("browserUrl"+(i+1)),title:""}));
             if (count || get("browserProfilePath") || get("browserProfileName")) item.browser = {profilePath:get("browserProfilePath"),profileName:get("browserProfileName"),tabs,activeTab:Math.max(1,integer(get("browserActiveTab","1"),"active tab",0,1000))};
         }
-        if (!item.terminal && (get("launchKind") === "packaged-app" || /\\WindowsApps\\/i.test(get("path")))) item.captureNote += " Packaged app launch still needs an activation target; review Program before launching.";
+        if (!item.terminal && !item.browser && (get("launchKind") === "packaged-app" || /\\WindowsApps\\/i.test(get("path")))) {
+            item.launch.kind = "packaged-app";
+            item.launch.program = "";
+            item.captureNote += " The INI did not save this packaged app's activation ID. Recapture the running app or enter its AUMID in app launch settings; its original executable path is preserved above.";
+        }
         return item;
     }
     window.WindowWarpImport = {decode, preview, shortcut};

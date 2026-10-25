@@ -62,7 +62,7 @@ if (built !== 0) throw new Error("Native fixture build failed: " + fs.readFileSy
 const binary = path.join(output, "window-warp-fixture.exe");
 fs.copyFileSync(path.join(desktop,"src-tauri/target/debug/window-warp.exe"), binary);
 
-let app, helper, socket, second, startupTouched = false;
+let app, helper, socket, second, startupTouched = false, calculatorPrepared = false;
 const checks = [];
 const skipped = [];
 let fixture, native;
@@ -382,7 +382,7 @@ try {
     const launch = structuredClone(store.profiles[0]);
     launch.id = "launch-fixture"; launch.name = "Owned launch fixture"; launch.items = [launch.items[0]];
     launch.items[0].label = marker+"-launch-0"; launch.items[0].window.title = marker+"-launch-0";
-    launch.items[0].launch = {program:fixture.executable,args:[path.join(desktop,"tests/windows/fixture.py"),"--marker",marker+"-launch","--standalone"],workingDirectory:"",newWindow:true};
+    launch.items[0].launch = {kind:"executable",program:fixture.executable,args:[path.join(desktop,"tests/windows/fixture.py"),"--marker",marker+"-launch","--standalone"],workingDirectory:"",newWindow:true};
     store.profiles.push(launch);
     await invoke("save_workspaces",{store});
     await cdp("Page.reload");
@@ -511,10 +511,78 @@ try {
         await invoke("save_config",{config:pointerConfig});
     }
     if (monitorAreas.length < 2) skipped.push("Physical Windows multi-monitor push geometry requires a second display; one-monitor wrap and retile are verified");
+
+    await invoke("set_enabled",{enabled:false});
+    const previousStore = await invoke("get_workspaces");
+    const packaged = structuredClone(store.profiles[0]);
+    packaged.id = "packaged-fixture"; packaged.name = "Packaged application fixture";
+    packaged.items = [packaged.items[0]];
+    const packagedItem = packaged.items[0];
+    const missingId = "WindowWarpNonexistentFixture_abc!App";
+    packagedItem.window.desktopId = missingId;
+    packagedItem.launch = {kind:"packaged-app",program:missingId,args:[],workingDirectory:"",newWindow:true};
+    await invoke("save_workspaces",{store:{version:1,profiles:[packaged]}});
+    const failedActivation = await invoke("restore_workspace",{id:packaged.id});
+    assert.equal(failedActivation.length,1);
+    assert.equal(failedActivation[0].restored,false);
+    assert.equal(failedActivation[0].launched,false);
+    assert.match(failedActivation[0].error,/Cannot activate packaged application/);
+    checks.push("missing packaged activation reports an individual restore failure without an error dialog");
+
+    const calculatorId = "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App";
+    const registered = spawnSync("powershell.exe",["-NoProfile","-NonInteractive","-Command",`[bool](Get-StartApps | Where-Object { $_.AppID -eq '${calculatorId}' })`],{windowsHide:true,encoding:"utf8",timeout:10000});
+    if (registered.status !== 0 || registered.stdout.trim() !== "True") {
+        skipped.push("Calculator packaged fixture is unavailable or its registration could not be verified");
+    } else {
+        packagedItem.label = "Owned Calculator";
+        packagedItem.window.desktopId = calculatorId;
+        packagedItem.window.appId = "CalculatorApp.exe";
+        packagedItem.window.title = "";
+        packagedItem.window.path = "";
+        const area = packagedItem.window.workArea;
+        // Calculator enforces a DPI-scaled minimum size. Use the work area's
+        // available dimensions rather than a fixed 600px height below that limit.
+        packagedItem.window.rect = {x:area.x+20,y:area.y+20,width:area.width-40,height:area.height-40};
+        packagedItem.launch.program = calculatorId;
+        await invoke("save_workspaces",{store:{version:1,profiles:[packaged]}});
+        // This helper checks both windows and processes immediately before
+        // activation, retaining process creation times and the preexisting set.
+        calculatorPrepared = await native("calculator_begin");
+        if (!calculatorPrepared) {
+            skipped.push("Calculator is already running; packaged activation fixture leaves it untouched");
+        } else {
+            const activated = await invoke("restore_workspace",{id:packaged.id});
+            assert.deepEqual(activated.map(r=>({restored:r.restored,launched:r.launched})),[{restored:true,launched:true}]);
+            const calculator = await until(async()=>(await invoke("get_windows")).filter(w=>w.desktopId===calculatorId),ws=>ws.length===1,"new packaged Calculator window");
+            assert.deepEqual(calculator[0].rect,packagedItem.window.rect);
+            const capture = await invoke("capture_workspace",{name:"Captured packaged fixture"});
+            const item = capture.profile.items.find(i=>i.window.id===calculator[0].id);
+            assert.ok(item,"Captured workspace includes the owned Calculator window");
+            assert.equal(item.window.desktopId,calculatorId);
+            assert.equal(item.launch.kind,"packaged-app");
+            assert.equal(item.launch.program,calculatorId);
+            capture.profile.items = [item];
+            await invoke("save_workspaces",{store:{version:1,profiles:[capture.profile]}});
+            const reused = await invoke("restore_workspace",{id:capture.profile.id});
+            assert.deepEqual(reused.map(r=>({restored:r.restored,launched:r.launched})),[{restored:true,launched:false}]);
+            assert.equal((await invoke("get_windows")).filter(w=>w.desktopId===calculatorId).length,1);
+            assert.equal(await native("calculator_cleanup"),1);
+            calculatorPrepared = false;
+            checks.push("native packaged Calculator activation captures its real AUMID, restores placement, reuses its window and closes only the new fixture");
+        }
+    }
+    await invoke("save_workspaces",{store:previousStore});
     report.passed = true;
 } catch (error) {
     report.error = String(error.stack || error);
 } finally {
+    if (calculatorPrepared) {
+        try {
+            if (!native || helper?.exitCode !== null) throw new Error("Calculator cleanup helper is unavailable; inspect the owned fixture before continuing");
+            await native("calculator_cleanup");calculatorPrepared=false;
+        }
+        catch (error) {report.passed=false;report.calculatorCleanupError=String(error);}
+    }
     if (startupTouched && native && helper?.exitCode === null) {
         const actual = await native("startup_value").catch(()=>null);
         if (actual === `"${binary}" --startup`) {

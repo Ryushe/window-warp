@@ -886,3 +886,62 @@ on `codex/cross-platform-app`, following implementation/reproducer commit
 `316ad5d0ddb544bdaa6679801c3521f81b942dd1`. The dossier-only follow-up records the
 immutable SHA. The working tree is ready to continue with launch/migration work;
 no native test is left running and no user-session runtime was activated.
+
+
+## Packaged application and desktop-entry launch (2026-10-25)
+
+Launch settings now distinguish executable, Linux desktop entry, and Windows
+packaged application targets. Existing JSON defaults to executable. Windows
+capture records actual package AUMIDs, including unambiguous hosted child-process
+identity, and uses COM activation without guessing a manifest's `!App` suffix.
+Desktop entries use GIO for entry lookup, argument field codes, working directory
+and activation. A missing entry/failed activation becomes an individual restore
+error. Saved desktop/package identity prevents a shared executable host from
+matching a different application. Browser-tab and terminal-session enrichment
+retain executable launches and their specialized argument handling.
+
+The editor exposes launch type and the corresponding target/argument labels.
+Non-executable launches reject an explicit working directory instead of silently
+ignoring it. New-window restoration still requires a new window to appear; apps
+that reuse an existing window can refuse this behavior. INI package migration
+preserves its source executable path and requests an AUMID or recapture; automatic
+resolution of old versioned WindowsApps paths remains pending.
+
+Verification:
+
+- 59 Node tests and JavaScript syntax checks pass.
+- Windows Rust suite: 56 pass, 3 opt-in tests ignored; Windows activation argument
+  quoting round-trips through the native parser (spaces, empty values, quotes,
+  trailing backslashes and Unicode).
+- Linux Rust suite: 51 pass, 1 X11 opt-in test ignored. Release executable and
+  Debian bundle built successfully in `hoster-warp-build-20261025-launch-types`
+  (inactive, exit 0).
+- Windows native application suite: 32 checks pass, one physical second-display
+  skip. Includes nonexistent-package error, real Calculator activation, captured
+  AUMID, placement, reuse, and checked cleanup of only the new fixture window.
+  Receipt: `desktop/src-tauri/target/windows-validation/WARP-NATIVE-69494d6e-177e-4bda-969f-f65f1c45e208/result.json`.
+  Command: `node desktop/tests/windows/native.mjs`. Ordinary debug build restored.
+- KDE native suite: 20 checks pass in a private two-output Plasma 5.27 compositor.
+  Captured desktop entry launches an owned Qt window with a remote URL and local
+  file URI, respects entry Path with spaces, restores geometry, reuses its window,
+  and reports a nonexistent entry. GIO resolves the local file URI to a native
+  path; the fixture asserts the observed argument boundaries. Unit
+  `hoster-warp-gui-20261025-desktop-launch` finished inactive/exit 0; command flags
+  `--desktop-entry --import`. Local report/screenshots:
+  `desktop/src-tauri/target/kde-validation/desktop-launch/`. Remote report directory:
+  `~/.cache/window-warp-01a16f69/src-tauri/target/kde-container-desktop-launch/`.
+- The earlier `launch-types-files` KDE run reached and passed desktop-entry checks
+  but then lacked optional `konsole`; no new native Konsole acceptance is claimed.
+  Browser/terminal command-model tests pass; fresh native variants remain in the
+  checklist. Initial Calculator fixture requested height 600, below its observed
+  DPI-scaled minimum 674. Final test uses available work-area dimensions. Acceptance
+  for saved geometry below app minimum sizes remains open.
+- Independent scoped review: `/root/retile_review` reviewed shared/Linux/UI/model
+  changes; `/root/packaged_native` reviewed Windows identity/COM implementation.
+  Both found no actionable issues. They did not independently accept their own
+  implementations. This does not replace the final release-wide review.
+
+Remaining coverage: hosted UWP and packaged Win32 variants, packaged argument
+receipt in an owned packaged fixture, D-Bus-activated desktop entries, real Plasma
+6/Portafort, legacy package-target resolution, and the rest of this checklist.
+No merge, push, installer activation, or user-session startup change was performed.

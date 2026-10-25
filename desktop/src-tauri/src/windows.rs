@@ -215,7 +215,7 @@ unsafe fn snapshot_native(exclude_own: bool) -> Result<Vec<crate::workspaces::Wi
                 pid,
                 title,
                 app_id,
-                desktop_id: String::new(),
+                desktop_id: crate::windows_apps::identity(hwnd),
                 path,
                 rect: geometry,
                 work_area: all[index].1,

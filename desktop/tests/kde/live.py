@@ -23,6 +23,8 @@ if "--radial" in sys.argv:
     QTimer.singleShot(120000, app.quit)
     sys.exit(app.exec_())
 if len(sys.argv) > 1 and sys.argv[1] in ["--other", "--workspace", "--workspace-single", "--hold"]:
+    if os.environ.get("WARP_LAUNCH_LOG"):
+        Path(os.environ["WARP_LAUNCH_LOG"]).write_text(json.dumps({"args": sys.argv[1:], "cwd": os.getcwd()}))
     app.setApplicationName("WindowWarpOtherSmoke")
     app.setDesktopFileName("com.windowwarp.hold-smoke" if sys.argv[1] == "--hold" else "com.windowwarp.other-smoke")
     class InputWindow(QWidget):
