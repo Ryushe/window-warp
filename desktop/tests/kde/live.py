@@ -10,9 +10,9 @@ from PyQt5.QtDBus import QDBusConnection, QDBusMessage
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout
 
 app = QApplication(sys.argv)
-if len(sys.argv) > 1 and sys.argv[1] in ["--other", "--workspace", "--workspace-single"]:
+if len(sys.argv) > 1 and sys.argv[1] in ["--other", "--workspace", "--workspace-single", "--hold"]:
     app.setApplicationName("WindowWarpOtherSmoke")
-    app.setDesktopFileName("com.windowwarp.other-smoke")
+    app.setDesktopFileName("com.windowwarp.hold-smoke" if sys.argv[1] == "--hold" else "com.windowwarp.other-smoke")
     other_window = QWidget()
     other_window.setWindowTitle("WARP-TEST-C")
     other_window.resize(400, 300)
@@ -22,7 +22,7 @@ if len(sys.argv) > 1 and sys.argv[1] in ["--other", "--workspace", "--workspace-
         second_window.setWindowTitle("WARP-TEST-D")
         second_window.resize(450, 320)
         second_window.show()
-    if sys.argv[1].startswith("--workspace"):
+    if sys.argv[1].startswith("--workspace") or sys.argv[1] == "--hold":
         # A native workspace launch can outlive its caller if a test fails.
         QTimer.singleShot(60000, app.quit)
     sys.exit(app.exec_())

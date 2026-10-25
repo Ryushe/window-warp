@@ -17,7 +17,7 @@ Port all original features into a standalone Windows/KDE application. The user's
 explicit branch requirement is satisfied by this existing feature branch.
 Original AHK sources remain unchanged. Full parity is not achieved: the checklist
 is the completion gate, including remaining browser verification, terminal variants, INI migration,
-KDE tap/hold, radial selection, pointer movement, and remaining shortcut/editor paths.
+KDE gesture edge cases, radial selection, pointer movement, and remaining shortcut/editor paths.
 
 The current implementation includes the Tauri editor/tray, native Windows/KWin
 window actions, startup registration, and workspace capture/review/edit/restore.
@@ -71,13 +71,13 @@ parser; Linux uses `/proc`. Neither path invokes a shell for app launch.
   Verify the configured GitHub SSH host key before refreshing refs for integration.
   This does not block implementing/testing this existing feature branch.
 - Full feature scope and missing native evidence remain in `desktop/PARITY.md`.
-  In particular, Windows multi-window launching and the full editor workflow,
-  startup login launches, and live Plasma 6 must run before parity is claimed.
+  In particular, remaining Windows action/browser/terminal variants, startup
+  login launches, gesture edge cases, and live Plasma 6 must run before parity is claimed.
 - Existing Windows installers predate this checkpoint; rebuild after remaining work.
 - Firefox KDE evidence: all 15 `tests/kde/nested.sh --gui ... --firefox` checks
   now pass, including geometry; the editor screenshot was inspected. Windows
   Firefox UI and actual Plasma 6 still require native verification. The current
-  Portafort binary is the caption-fix build documented below.
+  Portafort binary is the KDE hold build documented in the latest section.
 - Hoster cleanup sidecar inspected two unregistered live scopes, retained both,
   stopped none (`needs-attention`). No action on unrelated workloads is needed.
 
@@ -366,3 +366,60 @@ keep actual keyboard delivery, modifier-first release, pause cancellation and
 overlay rendering as explicit native acceptance criteria. Pointer centering,
 retile timing, INI migration and every remaining `desktop/PARITY.md` row remain
 in scope. No merge, push or user-session activation is authorized by this checkpoint.
+
+
+## KDE native tap/hold and editor activation
+
+Added `linux_gestures.rs`: KGlobalAccel signals provide native press/release,
+the authenticated KWin callback supplies the original pointer, and shared
+`gesture::Press` decides tap/hold. No gesture polling occurs while idle. Pause
+cancels and joins the listener/worker before unloading window actions. Repeated
+presses retain the original timer/pointer; a hold cannot fire a later tap.
+KDE settings now support the same delay and disable switch as Windows.
+
+The first native focus test exposed Wayland self-activation denial. `show` now
+asks KWin to focus only this process's normal window, with bounded mapping
+retries. The native regression and a Node control-command test cover that path.
+The initial hold test also needed a separate fixture application identity:
+multiple existing workspace fixtures correctly matched the same app pull.
+
+A subsequent native run showed no press signal after pause/resume. The private
+compositor's registration file confirmed that a fresh UUID action ID had lost
+its key to the previous inactive ID. Native IDs now remain stable by binding
+index/key; callback UUIDs remain per activation, and the listener maps only the
+current native IDs. A Node regression checks stable registration with changing
+callback IDs. The previously failing disabled-hold step now passes natively.
+
+Validation: `npm test --prefix desktop` has 40 passing tests;
+`npm run check --prefix desktop`, Python compilation, Rust formatting, and
+`git diff --check` pass. Linux build `hoster-warp-build-20261024-kde-hold-stable`
+is inactive with exit 0, 39 Rust tests and 40 Node tests, executable and Debian
+package. Windows production behavior is unchanged in this increment and retains
+the previous 48 Rust / 18 native checks. Incremental Windows cache contents were
+removed with user authorization; the empty directory left by later checks is
+removed as well. Further Rust work uses `CARGO_INCREMENTAL=0`.
+
+Native run `hoster-warp-gui-20261024-kde-hold-stable` is inactive with exit 0 and
+all 20 checks passing. Receipt on Portafort:
+`~/.cache/window-warp-01a16f69/gui-kde-hold-stable/`; copied report, signal log and
+inspected hold-settings screenshot:
+`desktop/src-tauri/target/kde-validation/hold-native/`.
+Nested logs: `/tmp/window-warp-nested.yfjyU6`. Settings and labels fit without
+clipping. The earlier signal probe `hoster-warp-input-20261024-probe-final` also
+exited 0, proving native autorepeat and modifier-first release.
+
+The helper uses the fake-input protocol only in a guarded private nested
+compositor, separate bus, runtime and config. Its test-only permission switch
+never applies to the user's compositor or the product. All injected keys and
+owned child processes are cleaned up. The test source and invocation are
+recorded in `desktop/tests/kde/README.md`; the app does not depend on this helper.
+
+Resume with explicit native regressions for pause/resume before the original
+key is released and key reassignment between different binding IDs. The latter
+is especially relevant because KDE retains inactive key assignments; existing
+reassignment UI/direct-dispatch tests do not prove physical key ownership.
+Then continue radial selection on both OSes, pointer centering/timed retiling,
+INI migration and remaining platform acceptance. Physical portrait displays,
+Plasma 6, final installers and independent release review remain required.
+All `desktop/PARITY.md` rows stay in scope. No build or GUI unit from this
+increment remains active. No merge, push or user-session activation was made.

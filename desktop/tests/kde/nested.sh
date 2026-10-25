@@ -10,7 +10,9 @@ export XDG_CACHE_HOME="$session_dir/cache"
 mkdir -m 700 "$XDG_RUNTIME_DIR"
 export QT_QPA_PLATFORM=offscreen KWIN_COMPOSE=Q XDG_CURRENT_DESKTOP=KDE
 unset DISPLAY WAYLAND_DISPLAY
-kwin_wayland --virtual --output-count 2 --width 1280 --height 720 --socket warp-test --no-lockscreen --no-kactivities >"$session_dir/kwin.log" 2>&1 &
+# KWin's documented source-level test switch exposes fake-input to our helper.
+# It applies only to this private compositor/bus/runtime, never the user's seat.
+KWIN_WAYLAND_NO_PERMISSION_CHECKS=1 kwin_wayland --virtual --output-count 2 --width 1280 --height 720 --socket warp-test --no-lockscreen --no-kactivities >"$session_dir/kwin.log" 2>&1 &
 compositor_pid=$!
 cleanup() {
     kill "$compositor_pid" 2>/dev/null || true
@@ -24,7 +26,9 @@ for attempt in $(seq 1 60); do
     sleep 0.2
 done
 export WAYLAND_DISPLAY=warp-test QT_QPA_PLATFORM=wayland
-if [[ "${2:-}" == "--gui" ]]; then
+if [[ "${2:-}" == "--input-probe" ]]; then
+    python3 "$root/tests/kde/input_probe.py"
+elif [[ "${2:-}" == "--gui" ]]; then
     shift 2
     python3 "$root/tests/kde/gui.py" "$@"
 else

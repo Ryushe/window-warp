@@ -89,6 +89,8 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
     environment.update({"TAURI_WEBVIEW_AUTOMATION": "true", "TAURI_AUTOMATION": "true", "GDK_BACKEND": "wayland", "XDG_CONFIG_HOME": temporary + "/config", "XDG_DATA_HOME": temporary + "/data", "XDG_CACHE_HOME": temporary + "/cache"})
     driver = subprocess.Popen([driver_binary, f"--port={port}", "--host=127.0.0.1"], env=environment, stdout=log, stderr=log, start_new_session=True)
     fixture = None
+    hold_fixture = None
+    key_monitor = None
     browser_fixture = None
     other_browser_fixture = None
     terminal_fixture = None
@@ -256,6 +258,128 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         wait_for("return document.querySelector('#status').textContent.includes('Paused')")
         assert kwin_loaded("window-warp-pause-session") and not kwin_loaded()
         report["checks"].extend(["pause shortcut resumes and pauses while retaining its registration", "editor shortcut captures the active owned app before taking focus", "workspace control shortcuts open browser and closest-match update draft"])
+        if "--hold" in sys.argv:
+            from wayland_input import Input
+            # App pulls deliberately select a matching window. Give this check
+            # its own app identity so previous workspace fixtures cannot win.
+            hold_fixture = subprocess.Popen([sys.executable, fixture_script, "--hold"], env=fixture_env, stdout=log, stderr=log)
+            for _ in range(30):
+                hold_windows = [w for w in invoke("get_windows") if w["pid"] == hold_fixture.pid]
+                if len(hold_windows) == 1:
+                    break
+                time.sleep(0.1)
+            assert len(hold_windows) == 1, "Owned hold fixture did not map"
+            state_item = json.loads(json.dumps(state_item))
+            state_item["window"] = hold_windows[0]
+            config = invoke("get_config")
+            config["bindings"][-1]["appMatch"] = state_item["window"]["appId"]
+            config["bindings"][5]["shortcut"] = "Ctrl+Alt+Shift+P"
+            config["bindings"][1].update({"action":"focus-app", "appMatch":state_item["window"]["appId"]})
+            config["bindings"][-1].update({"shortcut":"Ctrl+Alt+Shift+J", "mainMonitorAction":"focus-last"})
+            config["settings"].update({"mainMonitor":1, "holdDelayMs":600, "holdTileEnabled":True})
+            invoke("save_config", {"config":config})
+            target = state_item["window"]
+            target["maximizedHorizontal"] = target["maximizedVertical"] = target["fullscreen"] = target["minimized"] = False
+            area = target["workArea"]
+            initial = {"x":area["x"]+80,"y":area["y"]+80,"width":550,"height":360}
+            target["rect"] = initial.copy()
+            hold_profile = dict(captured,id="hold-fixture",name="Hold fixture",items=[state_item])
+            invoke("save_workspaces", {"store":{"version":1,"profiles":[hold_profile]}})
+
+            def owned():
+                return next(w for w in invoke("get_windows") if w["id"] == target["id"] and w["pid"] == hold_fixture.pid)
+
+            def wait_window(predicate, description):
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    current = owned()
+                    if predicate(current):
+                        return current
+                    time.sleep(0.05)
+                raise AssertionError(f"{description}: {current}; page: {evaluate('return document.body.innerText')}")
+
+            def reset_window():
+                result = invoke("restore_workspace", {"id":"hold-fixture"})
+                assert result[0]["restored"], result
+                # Reusing a workspace window deliberately preserves current focus.
+                # Use the app's existing focus/cycle action to select the owned target.
+                for _ in range(4):
+                    if owned()["active"]:
+                        break
+                    invoke_shortcut("focus-app")
+                wait_window(lambda w:w["active"] and w["rect"] == initial,"reset owned hold window")
+
+            with Input() as keys:
+                key_log = (output / "shortcut-signals.log").open("w")
+                key_monitor = subprocess.Popen(["dbus-monitor", "--session", "type='signal',interface='org.kde.kglobalaccel.Component'"], stdout=key_log, stderr=key_log)
+                key_log.close()
+                def chord(key):
+                    for code in [29,56,42,key]:
+                        keys.key(code,True)
+
+                chord(25)  # Ctrl+Alt+Shift+P; native Wayland delivery.
+                keys.release()
+                wait_for("return document.querySelector('#status').classList.contains('active')")
+                reset_window()
+                invoke_shortcut("open-workspaces")
+                wait_for("return !document.querySelector('#workspaces-page').hidden")
+                wait_window(lambda w:not w["active"],"editor takes focus before tap")
+                chord(36)  # J
+                time.sleep(0.08)
+                assert not owned()["active"], "Tap ran before release"
+                keys.key(29,False)
+                wait_window(lambda w:w["active"],"modifier-first release taps")
+                assert owned()["rect"] == initial
+                keys.release()
+                report["checks"].append("Wayland key events deliver app tap on modifier-first release")
+
+                reset_window()
+                keys.pointer(area["x"]+20,area["y"]+20)
+                chord(36)
+                time.sleep(0.08)
+                keys.pointer(area["x"]+area["width"]-20,area["y"]+area["height"]-20)
+                tile = dict(area,width=area["width"]//2)
+                wait_window(lambda w:w["rect"] == tile,"hold uses the original pointer")
+                reset_window()
+                time.sleep(0.8)  # Native autorepeat must not tile again.
+                assert owned()["rect"] == initial
+                keys.release()
+                time.sleep(0.15)
+                assert owned()["active"] and owned()["rect"] == initial
+                report["checks"].append("Wayland hold tiles once from key-down pointer despite native repeats")
+
+                chord(36)
+                time.sleep(0.08)
+                # The app's pause command must cancel an in-flight native hold.
+                invoke("set_enabled", {"enabled":False})
+                time.sleep(0.7)
+                keys.release()
+                assert owned()["active"] and owned()["rect"] == initial
+                report["checks"].append("pausing cancels a pending KDE hold without tiling or tapping")
+
+                config["settings"]["holdTileEnabled"] = False
+                invoke("save_config", {"config":config})
+                invoke("set_enabled", {"enabled":True})
+                reset_window()
+                invoke_shortcut("open-workspaces")
+                wait_window(lambda w:not w["active"],"editor takes focus before disabled hold")
+                chord(36)
+                time.sleep(0.8)
+                assert not owned()["active"] and owned()["rect"] == initial
+                keys.release()
+                wait_window(lambda w:w["active"],"disabled hold taps on release")
+                assert owned()["rect"] == initial
+                report["checks"].append("disabled KDE hold remains a tap after a long press")
+                chord(25)
+                keys.release()
+                wait_for("return document.querySelector('#status').textContent.includes('Paused')")
+                assert kwin_loaded("window-warp-pause-session") and not kwin_loaded()
+                report["checks"].append("Wayland key events resume and pause with persistent pause registration")
+            evaluate("location.reload(); return true;")
+            wait_for("return document.querySelectorAll('.binding').length === 10 && !document.querySelector('#toggle').disabled")
+            evaluate("document.querySelector('#hold-delay').closest('details').open=true; document.querySelector('#hold-enabled').scrollIntoView({block:'center'}); return true;")
+            screenshot = request("GET", f"/session/{session}/screenshot")
+            (output / "window-warp-hold-kde.png").write_bytes(base64.b64decode(screenshot))
         if "--firefox" in sys.argv:
             # Run this option only in nested.sh's isolated compositor/session bus.
             assert os.environ.get("WAYLAND_DISPLAY") == "warp-test", "Firefox test requires the isolated compositor"
@@ -462,6 +586,12 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                 request("DELETE", f"/session/{session}")
             except Exception:
                 pass
+        if key_monitor:
+            key_monitor.terminate()
+            key_monitor.wait(timeout=10)
+        if hold_fixture:
+            hold_fixture.terminate()
+            hold_fixture.wait(timeout=10)
         if fixture:
             fixture.terminate()
             fixture.wait(timeout=10)

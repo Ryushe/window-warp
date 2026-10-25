@@ -53,6 +53,20 @@
         if (Date.now() > job.expires) { reply(job, null, "Window command expired before it could run."); return; }
         var command = job.command;
         if (command.kind === "snapshot") { snapshot(job); return; }
+        if (command.kind === "focus-editor") {
+            var editor = Warp.windows().filter(function(w) {
+                return !w.deleted && w.normalWindow && Number(w.pid || 0) === WARP_CONTROL.ownPid;
+            })[0];
+            if (editor) Warp.focus(editor);
+            reply(job, !!editor);
+            return;
+        }
+        if (command.kind === "reset-app-pulls") { Warp.resetAppPulls(); reply(job, true); return; }
+        if (command.kind === "app-pull") {
+            Warp.run(command.binding, command.settings, command.pointer);
+            reply(job, true);
+            return;
+        }
         var window = target(command);
         if (command.kind === "restore") {
             var placement = command.placement;

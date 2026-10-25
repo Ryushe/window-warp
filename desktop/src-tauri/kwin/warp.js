@@ -75,7 +75,7 @@ var Warp = (function () {
         send(window, to);
         window.frameGeometry = rect;
     }
-    function pullApp(binding, all) {
+    function pullApp(binding, all, holdPointer) {
         var current = active();
         var candidates = windows().filter(function (w) { return matches(w, binding.appMatch.toLowerCase()); });
         var window = candidates.indexOf(current) >= 0 ? current : candidates[candidates.length - 1];
@@ -90,6 +90,15 @@ var Warp = (function () {
         var main = all[mainIndex];
         var from = outputFor(window, all);
         window.minimized = false;
+        if (holdPointer) {
+            var work = area(main);
+            var direction = work.height > work.width
+                ? (holdPointer.y < work.y + work.height / 2 ? "tile-up" : "tile-down")
+                : (holdPointer.x < work.x + work.width / 2 ? "tile-left" : "tile-right");
+            tile(window, main, direction);
+            focus(window);
+            return;
+        }
         if (from !== main) { moveRelative(window, from || main, main); focus(window); return; }
         if (wasActive && binding.mainMonitorAction === "focus-last") {
             var previous = windows().filter(function (w) { return !w.deleted && String(w.internalId) === previousWindows[binding.shortcut]; })[0];
@@ -109,7 +118,7 @@ var Warp = (function () {
         }
         focus(window);
     }
-    function run(binding, overrides) {
+    function run(binding, overrides, holdPointer) {
         if (["toggle-pause", "open-editor", "open-workspaces", "update-workspace"].indexOf(binding.action) >= 0) {
             callDBus(WARP_APP.service, "/Control", "com.windowwarp.Control", "Action", WARP_APP.token, binding.action);
             return;
@@ -118,7 +127,7 @@ var Warp = (function () {
         var all = screens();
         if (!all.length) return;
         var window = active();
-        if (binding.action === "pull-app") { pullApp(binding, all); return; }
+        if (binding.action === "pull-app") { pullApp(binding, all, holdPointer); return; }
         if (binding.action === "focus-app") {
             var match = binding.appMatch.toLowerCase();
             var candidates = windows().filter(function (w) {
@@ -175,10 +184,19 @@ var Warp = (function () {
         // Include the key in the ID: KGlobalAccel otherwise keeps an old key
         // for a reused action name when the user edits a binding.
         var id = "window-warp-" + binding.action + "-" + index + "-" + shortcut.replace(/[^a-z0-9]/gi, "-");
+        var holdId = typeof WARP_HOLD_IDS !== "undefined" && WARP_HOLD_IDS[index];
+        if (holdId) id = "window-warp-hold-" + index + "-" + binding.shortcut;
         if (!registerShortcut(id, "Window Warp: " + binding.label, shortcut, function () {
-            try { run(binding); } catch (error) { print("Window Warp: " + String(error)); }
+            try {
+                if (holdId) {
+                    var pointer = workspace.cursorPos;
+                    callDBus(WARP_APP.service, "/Control", "com.windowwarp.Control", "GesturePointer", WARP_APP.token, holdId,
+                        JSON.stringify({x: Math.round(pointer.x), y: Math.round(pointer.y)}));
+                } else run(binding);
+            } catch (error) { print("Window Warp: " + String(error)); }
         })) throw new Error("Could not register " + shortcut);
     });
     return {windows: windows, screens: screens, area: area, outputFor: outputFor, focus: focus,
-        send: send, relative: relative, copy: copy, tile: tile, run: run, active: active};
+        send: send, relative: relative, copy: copy, tile: tile, run: run, active: active,
+        resetAppPulls: function () { previousWindows = {}; }};
 })();

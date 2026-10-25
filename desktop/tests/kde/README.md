@@ -103,3 +103,38 @@ paused, and only owned test windows are used for app capture. These checks cover
 the real app/KWin bridge; they do not inject physical keyboard events. The test
 unloads window, pause and control scripts afterward. Screenshots include
 `window-warp-current-app-kde.png` and `window-warp-update-kde.png`.
+
+
+### Native tap/hold input
+
+Append `--hold` to `nested.sh --gui BINARY DRIVER OUTPUT` to exercise native
+Wayland key delivery, modifier-first release, pointer-at-press tiling, automatic
+key repeat, pause cancellation, disabled hold, and persistent pause registration.
+This option requires `libwayland-client.so.0` and `dbus-monitor`. Its distinct
+owned app identity prevents earlier workspace fixtures from satisfying a pull.
+The report is `gui-result.json`, the settings screenshot is
+`window-warp-hold-kde.png`, and `shortcut-signals.log` records the private
+compositor's KGlobalAccel signals for failure diagnosis.
+
+`wayland_input.py` refuses any display other than `warp-test` in a temporary
+`/tmp/window-warp-nested.*/runtime` directory. It injects evdev key events through
+KDE's fake-input protocol and releases its own keys on exit. Only the nested
+KWin process receives `KWIN_WAYLAND_NO_PERMISSION_CHECKS=1`; the user's compositor
+and input permissions are unaffected. The protocol is a fixture dependency,
+not part of the application. The application uses KGlobalAccel pressed/released
+signals and the authenticated KWin callback to capture the pointer.
+
+For an isolated signal-contract probe, run:
+
+```sh
+dbus-run-session -- bash tests/kde/nested.sh "$PWD" --input-probe
+```
+
+Unlike direct `invokeShortcut` dispatch, this exercises real compositor key
+press, autorepeat and modifier release. It still uses virtual outputs rather
+than physical devices. Plasma 6 and pause/resume while a key remains held need
+separate acceptance checks.
+
+Implementation references: [KGlobalAccel signals](https://github.com/KDE/kglobalaccel/blob/v5.115.0/src/runtime/component.cpp),
+[KDE fake-input protocol](https://github.com/KDE/plasma-wayland-protocols/blob/master/src/protocols/fake-input.xml),
+and [KWin's test permission switch](https://github.com/KDE/kwin/blob/v5.27.11/src/wayland_server.cpp).

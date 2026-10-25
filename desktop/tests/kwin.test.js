@@ -4,8 +4,9 @@ import vm from "node:vm";
 import fs from "node:fs";
 
 const source = fs.readFileSync(new URL("../src-tauri/kwin/warp.js", import.meta.url), "utf8");
+const controlSource = fs.readFileSync(new URL("../src-tauri/kwin/control.js", import.meta.url), "utf8");
 const clone = (value) => JSON.parse(JSON.stringify(value));
-function fixture(bindings, legacy = false, settings = {mainMonitor: 1, burnerMonitor: 2}) {
+function fixture(bindings, legacy = false, settings = {mainMonitor: 1, burnerMonitor: 2}, holdIds) {
     const left = { name: "left", geometry: { x: -1920, y: 0, width: 1920, height: 1080 } };
     const right = { name: "right", geometry: { x: 0, y: 40, width: 1081, height: 1920 } };
     const window = { internalId: "a", resourceClass: "firefox", desktopFileName: "firefox", output: left,
@@ -28,13 +29,68 @@ function fixture(bindings, legacy = false, settings = {mainMonitor: 1, burnerMon
     }
     const shortcuts = new Map();
     const calls = [];
-    vm.runInNewContext(source, { workspace, KWin: { MaximizeArea: 0 }, print: () => {},
+    const context = { workspace, KWin: { MaximizeArea: 0 }, print: () => {},
         WARP_APP: {service:"fixture",token:"test"}, callDBus: (...args) => calls.push(args),
-        WARP_CONFIG: { bindings, settings }, registerShortcut: (_, label, key, callback) => { shortcuts.set(label, { key, callback }); return true; } });
-    return { workspace, window, left, right, shortcuts, calls, trigger: (label) => shortcuts.get("Window Warp: " + label).callback() };
+        WARP_HOLD_IDS: holdIds,
+        WARP_CONFIG: { bindings, settings }, registerShortcut: (id, label, key, callback) => { shortcuts.set(label, { id, key, callback }); return true; } };
+    vm.runInNewContext(source, context);
+    return { workspace, window, left, right, shortcuts, calls, warp:context.Warp, trigger: (label) => shortcuts.get("Window Warp: " + label).callback() };
 }
 const push = { label: "Push", shortcut: "Ctrl+Alt+Right", action: "push-right", appMatch: "" };
 const pull = { label: "Pull", shortcut: "Ctrl+Alt+Down", action: "pull", appMatch: "" };
+
+test("native editor focus selects only this process's normal window and reports mapping delays", () => {
+    const owned = {pid:42,normalWindow:true};
+    let windows = [{pid:42,normalWindow:false},{pid:7,normalWindow:true},owned];
+    const focused = [], replies = [];
+    let dispatch;
+    vm.runInNewContext(controlSource, {
+        WARP_CONTROL:{service:"fixture",token:"owned",ownPid:42,action:"dispatch"},
+        Warp:{windows:()=>windows,focus:window=>focused.push(window)},
+        print:()=>{}, registerShortcut:(_id,_label,_key,callback)=>{dispatch=callback;return true;},
+        callDBus:(_service,_path,_interface,method,...args)=>{
+            if (method === "Next") args.at(-1)(JSON.stringify({id:1,expires:Date.now()+5000,command:{kind:"focus-editor"}}));
+            else replies.push(JSON.parse(args.at(-1)));
+        }
+    });
+    dispatch();
+    assert.deepEqual(focused,[owned]);
+    assert.deepEqual(replies.at(-1),{result:true});
+    windows = windows.slice(0,2);
+    dispatch();
+    assert.equal(focused.length,1);
+    assert.deepEqual(replies.at(-1),{result:false});
+});
+
+test("native hold binding captures its pointer and defers action to press/release handling", () => {
+    const binding = {label:"App",shortcut:"Ctrl+Alt+J",action:"pull-app",appMatch:"firefox"};
+    const f = fixture([binding],false,undefined,["owned-generation-0"]);
+    f.workspace.cursorPos = {x:-1800,y:200};
+    const original = clone(f.window.frameGeometry);
+    f.trigger("App");
+    assert.deepEqual(clone(f.window.frameGeometry),original);
+    assert.equal(f.shortcuts.get("Window Warp: App").id,"window-warp-hold-0-Ctrl+Alt+J");
+    assert.deepEqual(f.calls[0].slice(0,6),["fixture","/Control","com.windowwarp.Control","GesturePointer","test","owned-generation-0"]);
+    f.workspace.cursorPos.x = 500;
+    assert.deepEqual(JSON.parse(f.calls[0][6]),{x:-1800,y:200});
+    const resumed = fixture([binding],false,undefined,["next-generation-0"]);
+    assert.equal(resumed.shortcuts.get("Window Warp: App").id,f.shortcuts.get("Window Warp: App").id);
+    resumed.workspace.cursorPos = {x:1,y:2};
+    resumed.trigger("App");
+    assert.equal(resumed.calls[0][5],"next-generation-0");
+});
+
+for (const legacy of [false,true]) test(`held app pull tiles on main using portrait pointer halves on Plasma ${legacy ? 5 : 6}`, () => {
+    const binding = {label:"App",shortcut:"Ctrl+Alt+J",action:"pull-app",appMatch:"firefox",mainMonitorAction:"burner"};
+    const settings = {mainMonitor:2,burnerMonitor:1};
+    const f = fixture([],legacy,settings);
+    f.right.geometry.height = 1921;
+    f.warp.run(binding,settings,{x:-10000,y:1000});
+    assert.deepEqual(clone(f.window.frameGeometry),{x:0,y:40,width:1081,height:960});
+    f.warp.run(binding,settings,{x:10000,y:1001});
+    assert.deepEqual(clone(f.window.frameGeometry),{x:0,y:1000,width:1081,height:961});
+    assert.equal(legacy ? f.workspace.activeClient : f.workspace.activeWindow,f.window);
+});
 
 test("push scales placement across negative origins and portrait outputs; pull restores", () => {
     const f = fixture([push, pull]);

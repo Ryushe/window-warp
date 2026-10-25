@@ -77,11 +77,13 @@ test("hold settings migrate defaults, save edits and lock while shortcuts are ac
     assert.equal(e.document.querySelector("#hold-delay").value, "725");
 });
 
-test("KDE editor clearly identifies the pending native hold implementation", async () => {
+test("KDE editor offers the same hold settings as Windows", async () => {
     const e = await editor({platform:"linux"});
-    assert.equal(e.document.querySelector("#hold-enabled").disabled, true);
-    assert.equal(e.document.querySelector("#hold-delay").disabled, true);
-    assert.match(e.document.querySelector("#hold-hint").textContent, /KDE hold support/);
+    assert.equal(e.document.querySelector("#hold-enabled").disabled, false);
+    assert.equal(e.document.querySelector("#hold-delay").disabled, false);
+    e.input("#hold-delay", "550");
+    await e.click("#save");
+    assert.equal(e.calls.find(c => c.command === "save_config").args.config.settings.holdDelayMs, 550);
 });
 
 test("unsaved changes block activation; save and pause preserve editor state", async () => {

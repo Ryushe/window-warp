@@ -12,6 +12,7 @@ A standalone Tauri 2 application for Windows and **KDE Plasma 5.27 and 6**, with
 - Left/right half tiling using monitor work areas.
 - Focus/cycle existing app windows by executable name (Windows) or resource class/desktop ID (KDE).
 - Per-app pull to the main monitor, send to a burner display, and focus the previous app.
+- App-pull tap on release or hold to tile, with a configurable delay and disable switch.
 - Top/bottom tiling, maximize/restore, and graceful close actions.
 - Shortcut recording, search, and individual shortcut enable switches.
 - Startup registration controls (Windows user Run entry or KDE autostart).
@@ -65,7 +66,7 @@ For app identifiers, use the exact resource class or desktop file ID. KWin's win
 
 ## Scope and verification
 
-The full feature port is in progress; [PARITY.md](PARITY.md) tracks the source-derived requirements and verification gaps. INI import, tap/hold gestures, and radial selection remain pending. Terminal capture and new-window restoration have passed native cmd, WSL, and Konsole fixtures; additional profile variants remain to be verified. Workspace capture/reuse/launch, per-axis maximization/fullscreen, and Firefox tab restoration have passed native KDE tests. Startup registration passes native Windows and KDE toggle tests; actual login launches still need validation. Live Windows Firefox, mixed-DPI displays, desktop-imposed minimum sizes, and elevated Windows applications also need coverage. Existing Windows preview installers predate these ongoing changes.
+The full feature port is in progress; [PARITY.md](PARITY.md) tracks the source-derived requirements and verification gaps. INI import, radial selection, pointer centering and timed retiling remain pending. Tap/hold tiling is implemented on Windows and KDE; see the checklist for native coverage and remaining gesture cases. Terminal capture and new-window restoration have passed native cmd, WSL, and Konsole fixtures; additional profile variants remain to be verified. Workspace capture/reuse/launch, per-axis maximization/fullscreen, and Firefox tab restoration have passed native KDE tests. Startup registration passes native Windows and KDE toggle tests; actual login launches still need validation. Live Windows Firefox, mixed-DPI displays, desktop-imposed minimum sizes, and elevated Windows applications also need coverage. Existing Windows preview installers predate these ongoing changes.
 
 ```sh
 npm test

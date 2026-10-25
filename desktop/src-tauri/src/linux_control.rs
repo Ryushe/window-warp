@@ -28,6 +28,12 @@ struct Endpoint {
 }
 #[zbus::interface(name = "com.windowwarp.Control")]
 impl Endpoint {
+    fn gesture_pointer(&self, token: &str, id: &str, pointer: &str) {
+        if token == self.token {
+            crate::linux_gestures::pointer(id, pointer);
+        }
+    }
+
     fn action(&self, token: &str, action: &str) {
         if token == self.token && crate::app_actions::is_control(action) {
             crate::app_actions::dispatch(&self.app, action);

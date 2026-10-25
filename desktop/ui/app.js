@@ -24,7 +24,7 @@ function controls() {
     $("#add").disabled = busy || enabled || !config;
     $("#bindings").querySelectorAll("input, select, button").forEach((el) => { el.disabled = busy || enabled; });
     $("#main-monitor").disabled = $("#burner-monitor").disabled = busy || enabled || !config;
-    $("#hold-enabled").disabled = $("#hold-delay").disabled = busy || enabled || !config || platform !== "windows";
+    $("#hold-enabled").disabled = $("#hold-delay").disabled = busy || enabled || !config;
     $("#startup").disabled = busy || !startupKnown;
     $("#edit-hint").textContent = enabled ? "Pause shortcuts to make changes." : "Changes take effect after saving and enabling.";
     $("#save-status").textContent = dirty ? "Unsaved changes" : "Stored on this device";
@@ -99,9 +99,7 @@ function render() {
     $("#burner-monitor").value = config.settings?.burnerMonitor ?? 2;
     $("#hold-enabled").checked = config.settings?.holdTileEnabled ?? true;
     $("#hold-delay").value = config.settings?.holdDelayMs ?? 400;
-    $("#hold-hint").textContent = platform === "windows"
-        ? "Tap an app-pull shortcut to pull or send the app. Hold to tile it on the main monitor using the pointer position at key-down. Portrait monitors use top and bottom halves."
-        : "Hold tiling is currently available on Windows. KDE hold support and the radial picker are still being ported.";
+    $("#hold-hint").textContent = "Tap an app-pull shortcut to pull or send the app. Hold to tile it on the main monitor using the pointer position at key-down. Portrait monitors use top and bottom halves.";
     filterBindings();
     controls();
 }

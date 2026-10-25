@@ -3,10 +3,11 @@ mod app_actions;
 mod config;
 mod firefox;
 mod geometry;
-#[cfg(any(windows, test))]
 mod gesture;
 #[cfg(target_os = "linux")]
 mod linux_control;
+#[cfg(target_os = "linux")]
+mod linux_gestures;
 #[cfg(windows)]
 #[path = "windows.rs"]
 mod platform;
@@ -250,7 +251,17 @@ fn cancel_workspace_restore(app: AppHandle) {
 fn show(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
+        #[cfg(windows)]
         let _ = window.set_focus();
+        #[cfg(target_os = "linux")]
+        {
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                if let Err(error) = platform::focus_editor(&app) {
+                    let _ = app.emit("warp-error", error);
+                }
+            });
+        }
     }
 }
 fn main() {

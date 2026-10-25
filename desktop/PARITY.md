@@ -9,14 +9,14 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | --- | --- | --- |
 | Monitor push, wrap, relative placement, maximized state, history pull (`window_manager.ahk`) | Partial | Existing tests; maximize/restore and monitor removal live on both OSes |
 | Push and center pointer; pull centers primary; 1-second X/C retiling | Pending | Pointer and timeout tests on both OSes, including Wayland |
-| Four-way tiling; portrait mouse-aware tile choice | Partial | Four-way implemented; 18 live KDE checks cover vertical tiling; Windows mouse hold tiles natively and portrait/midpoint geometry has regression coverage; KDE mouse choice pending |
+| Four-way tiling; portrait mouse-aware tile choice | Partial | Four-way implemented; 18 live KDE checks cover vertical tiling; Windows mouse hold tiles natively and portrait/midpoint geometry has regression coverage; KDE native hold verifies key-down pointer choice; physical portrait acceptance remains |
 | Maximize/restore toggle (original “fullscreen”); graceful close | Partial | Implemented both OSes; live KDE verified; Windows owned-window action verification pending |
 | App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Implemented both OSes; tiled burner round trip live KDE verified; other layouts and Windows live checks pending |
 | App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE focus-last and minimized checks pass; Windows native behavior checks pending |
-| Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE path pending |
-| Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows mouse tile uses the key-down pointer position; KDE hold tile and both radial overlays remain pending |
+| Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE native key delivery verifies tap, hold, repeats, pause cancellation and disabled hold; resume before key release remains |
+| Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows mouse tile uses the key-down pointer position; KDE hold tile now passes native key delivery; both radial overlays remain pending |
 | Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed reassignment tested; native KDE current-app capture passes; Windows native current-app capture, key recording, reassignment and persistence pass |
-| Global pause/resume hotkey stays available while paused; editor/workspace/update hotkeys | Partial | Implemented with separate pause registration; native KDE KGlobalAccel action dispatch passes; Windows OS key delivery, lifecycle and registration-failure recovery pass; KDE key delivery beyond direct action dispatch remains |
+| Global pause/resume hotkey stays available while paused; editor/workspace/update hotkeys | Partial | Implemented with separate pause registration; native KDE KGlobalAccel action dispatch passes; Windows OS key delivery, lifecycle and registration-failure recovery pass; KDE native pause/app-pull key delivery passes; editor/workspace key delivery remains direct-dispatch coverage |
 | Settings persistence and startup registration | Partial | Windows Run entry and KDE autostart toggles pass; actual login/startup launches remain pending |
 | Workspace capture/create/update, best-match update selection, rename/delete/reorder/browser | Partial | Implemented; Rust matching/persistence model and Node editor tests pass; KDE native capture/save/browser pass; Windows capture/review/save and closest-match update draft now pass natively |
 | Workspace launch/reuse, exclude already-consumed windows, wait for new windows, restore placement/state | Partial | KDE native two-window reuse, forced new launch, placement, per-axis maximize/fullscreen pass; Windows owned-window placement/maximize/minimize pass; Windows two-window reuse and separate-process launch now pass natively; physical display-change acceptance remains |
@@ -247,3 +247,36 @@ regression `hoster-warp-gui-20261024-hold-shared` passes all 15 existing checks
 (exit 0); report and inspected update screenshot are under
 `src-tauri/target/kde-validation/hold-shared/`. This validates shared activation
 and UI behavior through KGlobalAccel action dispatch, not KDE hold or OS key input.
+
+
+## KDE tap/hold increment
+
+The KDE adapter listens to KGlobalAccel press/release signals and uses the
+KWin shortcut callback to capture the pointer. It shares the timing state with
+Windows, ignores repeats, and cancels pending work before pause completes.
+Native registration IDs remain stable across resume because KDE retains inactive
+key ownership; callback IDs remain unique per activation to reject stale callbacks.
+The editor exposes the same delay/disable settings on both platforms.
+
+KWin now focuses the app's own normal editor window after showing it. Native
+Wayland testing reproduced direct client activation being denied; the compositor
+focus path fixes current-app/workspace editor activation.
+
+`hoster-warp-build-20261024-kde-hold-stable` exits 0 with 39 Rust tests and
+40 Node tests, executable and Debian package. Local Node tests (40), syntax and
+Rust formatting checks pass. Windows retains the previous 48 Rust and 18 native
+checks; this increment changes the Linux adapter, shared KWin code and editor.
+
+`hoster-warp-gui-20261024-kde-hold-stable` exits 0 with all 20 native checks in
+Plasma 5.27. The five new checks use Wayland key events, not direct shortcut
+invocation: modifier-first tap, hold with original pointer and repeat suppression,
+pause cancellation, disabled long-press tap, and persistent pause/resume keys.
+Report, inspected settings screenshot and signal log are under
+`src-tauri/target/kde-validation/hold-native/`. Nested logs:
+`/tmp/window-warp-nested.yfjyU6` on Portafort.
+
+Still required: pause and resume before releasing the original held key;
+actual key delivery after reassigning a key between different binding IDs
+(KDE's retained inactive assignments warrant a regression); physical portrait
+outputs and Plasma 6. Both radial pickers and every other unfinished row remain
+in scope. The existing Windows installers are unchanged.

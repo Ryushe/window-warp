@@ -4,6 +4,20 @@ use tauri::{AppHandle, Manager};
 
 const SCRIPT_NAME: &str = "window-warp-session";
 
+pub fn focus_editor(app: &AppHandle) -> Result<(), String> {
+    // Mapping a previously hidden GTK window is asynchronous. Let KWin focus
+    // our own window; a background Wayland client cannot self-activate reliably.
+    for _ in 0..15 {
+        if crate::linux_control::request(app, serde_json::json!({"kind":"focus-editor"}))?
+            == serde_json::Value::Bool(true)
+        {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    Err("KWin could not find the Window Warp editor to focus it. Open it from the taskbar and try again.".into())
+}
+
 pub fn snapshot(app: &AppHandle) -> Result<Vec<crate::workspaces::WindowInfo>, String> {
     let value = crate::linux_control::request(app, serde_json::json!({"kind": "snapshot"}))?;
     let mut windows: Vec<crate::workspaces::WindowInfo> =
@@ -119,9 +133,27 @@ pub fn enable(app: &AppHandle, config: &Config) -> Result<(), String> {
     let mut active = config.clone();
     active.bindings.retain(|b| b.action != "toggle-pause");
     let source = shortcut_source(app, &active)?;
-    load_script(app, SCRIPT_NAME, "kwin-session.js", &source)
+    let ids = crate::linux_gestures::start(app, &active)?;
+    let source = format!(
+        "var WARP_HOLD_IDS = {};\n{source}",
+        serde_json::to_string(&ids).map_err(|e| e.to_string())?
+    );
+    let result = crate::linux_control::request(app, serde_json::json!({"kind":"reset-app-pulls"}))
+        .and_then(|_| load_script(app, SCRIPT_NAME, "kwin-session.js", &source));
+    if let Err(error) = result {
+        let cleanup = crate::linux_gestures::stop();
+        return Err(format!(
+            "{error}{}",
+            cleanup
+                .err()
+                .map(|e| format!("; hold cleanup failed: {e}"))
+                .unwrap_or_default()
+        ));
+    }
+    Ok(())
 }
 pub fn shutdown(app: &AppHandle) {
+    let _ = crate::linux_gestures::stop();
     let _ = unload_script("window-warp-pause-session");
     crate::linux_control::shutdown(app);
 }
@@ -176,6 +208,7 @@ pub fn load_script(
     Ok(())
 }
 pub fn disable(_: &AppHandle) -> Result<(), String> {
+    crate::linux_gestures::stop()?;
     unload_script(SCRIPT_NAME)
 }
 pub fn unload_script(name: &str) -> Result<(), String> {
