@@ -361,6 +361,12 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // A picker is dismissed when focus leaves it, including Windows'
+            // Alt+Escape window cycling while an Alt-based app chord is held.
+            // Such system shortcuts need not reach the webview's key handler.
+            if window.label() == "radial" && matches!(event, tauri::WindowEvent::Focused(false)) {
+                radial::cancel_visible();
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "radial" {
                     radial::cancel_visible();

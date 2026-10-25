@@ -184,6 +184,11 @@ try:
                     raise RuntimeError("Only fixture-held keys may be released")
                 send_keys(keys, release=True)
                 held_keys = [key for key in held_keys if key not in keys]
+            elif command == "foreground_state":
+                pid = w.DWORD()
+                hwnd = user.GetForegroundWindow()
+                user.GetWindowThreadProcessId(hwnd, c.byref(pid))
+                result = {"window": hwnd, "pid": pid.value}
             elif command in ("repeat", "held_tap"):
                 owned(user.GetForegroundWindow())
                 key = request["key"]

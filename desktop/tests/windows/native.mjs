@@ -279,6 +279,18 @@ try {
     assert.equal((await readSecond()).active,false,"radial selection must wait for release");
     const radialTarget = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.url.endsWith("/radial.html"));
     assert.ok(radialTarget,"Picker has a native webview");
+    const inspectRadial = async expression => {
+        const socket = new WebSocket(radialTarget.webSocketDebuggerUrl);
+        await new Promise((resolve,reject)=>{socket.addEventListener("open",resolve,{once:true});socket.addEventListener("error",reject,{once:true});});
+        try {
+            const result = await new Promise((resolve,reject)=>{
+                const timer=setTimeout(()=>reject(new Error("Picker inspection timed out")),10000);
+                socket.addEventListener("message",event=>{const reply=JSON.parse(event.data);if(reply.id===1){clearTimeout(timer);reply.error?reject(new Error(JSON.stringify(reply.error))):resolve(reply.result);}});
+                socket.send(JSON.stringify({id:1,method:"Runtime.evaluate",params:{expression,returnByValue:true}}));
+            });
+            return result.result?.value;
+        } finally {socket.close();}
+    };
     const radialSocket = new WebSocket(radialTarget.webSocketDebuggerUrl);
     await new Promise((resolve,reject)=>{radialSocket.addEventListener("open",resolve,{once:true});radialSocket.addEventListener("error",reject,{once:true});});
     try {
@@ -303,19 +315,26 @@ try {
     assert.equal((await readSecond()).active,false);
     checks.push("radial release inside the dead zone cancels without selecting or moving a window");
 
-    if (process.argv.includes("--skip-escape")) {
-        skipped.push("Known fast Escape cancellation failure: diagnostic --skip-escape run, not a complete native acceptance receipt");
-    } else {
     for (let attempt=0; attempt<5; attempt++) {
         await native("pointer",center); await native("hold_start",{key:0x7d}); await radialOpen();
         await native("pointer",{x:center.x,y:center.y+90});
         await until(()=>invoke("radial_view"),v=>v?.selected===1,"select before Escape");
-        await native("held_tap",{key:0x1b}); await radialClosed();
+        const beforeEscape = await inspectRadial(`(() => {window.escapeEvents=[];if(!window.escapeProbeInstalled){for(const name of ['keydown','keyup']) document.addEventListener(name,event=>{if(event.key==='Escape') window.escapeEvents.push({type:event.type,ctrl:event.ctrlKey,alt:event.altKey,shift:event.shiftKey});},{capture:true});window.escapeProbeInstalled=true;}return {focused:document.hasFocus(),view:current?.id};})()`);
+        await native("held_tap",{key:0x1b});
+        try { await radialClosed(); }
+        catch (error) {
+            report.escapeProbe = {attempt,before:beforeEscape,foreground:await native("foreground_state"),after:await inspectRadial("({focused:document.hasFocus(),view:current?.id,events:window.escapeEvents})")};
+            throw error;
+        }
+        // Alt+Escape may itself cycle to either fixture window. Verify the app
+        // dismisses before release and release adds no selection/placement action.
+        const cancelledFocus = await native("foreground_state");
+        const cancelledRects = [(await readOwned()).rect,(await readSecond()).rect];
         await native("key_up"); await sleep(100);
-        assert.equal((await readSecond()).active,false);
+        assert.deepEqual(await native("foreground_state"),cancelledFocus);
+        assert.deepEqual([(await readOwned()).rect,(await readSecond()).rect],cancelledRects);
     }
     checks.push("native Escape cancels a selected radial gesture without applying it on release");
-    }
 
     await native("pointer",center); await native("hold_start",{key:0x7d}); await radialOpen();
     await invoke("set_enabled",{enabled:false}); await radialClosed();

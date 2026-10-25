@@ -656,3 +656,37 @@ Recoverable implementation checkpoint: `9ccbaa77dd0fe475e995ae382a7b18abaecb54d8
 on `codex/cross-platform-app`, including migration commit `4a92065`. A following
 dossier-only commit records this SHA. Resume at the Windows rapid Escape issue
 above; the full feature-port goal remains active and incomplete.
+
+## Radial focus-loss cancellation verified
+
+Native focus loss now cancels the visible picker. The Windows failure above was
+Alt+Escape cycling windows while the app chord still held Alt: the webview lost
+focus without receiving Escape. This supersedes the missed-poll diagnosis; no
+keyboard hook or longer test key press is needed. Cancellation happens before
+chord release, and release must preserve the foreground and window positions
+left by the OS shortcut rather than asserting which window the OS should focus.
+
+The full Windows native fixture passes all 24 checks with no skips, including
+five immediate Escape taps. Receipt:
+`desktop/src-tauri/target/windows-validation/WARP-NATIVE-c09b5d09-8aa8-4f9c-9ea7-fa457955e8fd/`.
+The ordinary debug build restored successfully. The diagnostic skip option is
+removed. Current Windows Rust tests: 50 pass, two opt-in terminal tests ignored;
+Node tests: 53 pass. Both native binaries include the final import refinements.
+
+Linux build `hoster-warp-build-20261024-focusloss` is inactive/exit 0 with 46 Rust
+tests, executable and Debian package. Combined native KDE run
+`hoster-warp-gui-20261024-focusloss` is inactive/exit 0 with 29 checks using
+`--hold --resume-held --reassign-native --radial --import`. It verifies native
+Escape and focus-loss cancellation without later selection, plus migration and
+held-key lifecycle. Report and inspected radial/import screenshots:
+`desktop/src-tauri/target/kde-validation/focusloss/`. Nested logs:
+`/tmp/window-warp-nested.0d0Hbi` on Portafort.
+
+WSL reported a networking startup error. A temporary task-owned Windows TCP
+stdio transport lets WSL SSH retain its existing key and host verification while
+reaching Hoster's Tailscale IP. No networking/service settings or SSH keys changed.
+Both task units are terminal; no persistent transport or listener was started.
+
+Resume with pointer centering and the one-second X/C retile behavior, then every
+remaining PARITY requirement. Existing Windows installers are old. No merge,
+push, installation or user-session activation; this remains an incomplete port.

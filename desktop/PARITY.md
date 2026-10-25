@@ -14,7 +14,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Implemented both OSes; tiled burner round trip live KDE verified; other layouts and Windows live checks pending |
 | App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE focus-last and minimized checks pass; Windows native behavior checks pending |
 | Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE native key delivery verifies tap, hold, repeats, pause cancellation and disabled hold; resume before key release and reassignment while held now pass; overlapping distinct chords and live Plasma 6 remain |
-| Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows mouse tile uses the key-down pointer position; KDE hold tile and radial selection/cancellation pass native key delivery; shared eight-slot geometry/order and both overlays implemented; Windows release selection/dead-zone/pause pass; rapid Escape has an intermittent failure requiring correction |
+| Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows and KDE native selection/dead-zone/Escape/pause checks pass; focus loss cancels before release, including Windows Alt+Escape; shared eight-slot layout/order tested; physical portrait/mixed-DPI and Plasma 6 acceptance remain |
 | Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed reassignment tested; native KDE current-app capture and physical-key reassignment pass; Windows native current-app capture, key recording, reassignment and persistence pass |
 | Global pause/resume hotkey stays available while paused; editor/workspace/update hotkeys | Partial | Implemented with separate pause registration; native KDE KGlobalAccel action dispatch passes; Windows OS key delivery, lifecycle and registration-failure recovery pass; KDE native pause/app-pull key delivery passes; editor/workspace key delivery remains direct-dispatch coverage |
 | Settings persistence and startup registration | Partial | Windows Run entry and KDE autostart toggles pass; actual login/startup launches remain pending |
@@ -452,3 +452,37 @@ and kept WSL fields reachable while adapting to Konsole. Those refinements pass
 53 Node tests; native binaries above predate them. Existing Windows installers
 remain old. Resume with reliable Windows Escape cancellation, then pointer/retile,
 remaining migration/launch cases, platform acceptance and all unfinished rows.
+
+## Radial focus-loss cancellation verified
+
+Native focus loss now cancels the visible picker. The Windows failure above was
+Alt+Escape cycling windows while the app chord still held Alt: the webview lost
+focus without receiving Escape. This supersedes the missed-poll diagnosis; no
+keyboard hook or longer test key press is needed. Cancellation happens before
+chord release, and release must preserve the foreground and window positions
+left by the OS shortcut rather than asserting which window the OS should focus.
+
+The full Windows native fixture passes all 24 checks with no skips, including
+five immediate Escape taps. Receipt:
+`desktop/src-tauri/target/windows-validation/WARP-NATIVE-c09b5d09-8aa8-4f9c-9ea7-fa457955e8fd/`.
+The ordinary debug build restored successfully. The diagnostic skip option is
+removed. Current Windows Rust tests: 50 pass, two opt-in terminal tests ignored;
+Node tests: 53 pass. Both native binaries include the final import refinements.
+
+Linux build `hoster-warp-build-20261024-focusloss` is inactive/exit 0 with 46 Rust
+tests, executable and Debian package. Combined native KDE run
+`hoster-warp-gui-20261024-focusloss` is inactive/exit 0 with 29 checks using
+`--hold --resume-held --reassign-native --radial --import`. It verifies native
+Escape and focus-loss cancellation without later selection, plus migration and
+held-key lifecycle. Report and inspected radial/import screenshots:
+`desktop/src-tauri/target/kde-validation/focusloss/`. Nested logs:
+`/tmp/window-warp-nested.0d0Hbi` on Portafort.
+
+WSL reported a networking startup error. A temporary task-owned Windows TCP
+stdio transport lets WSL SSH retain its existing key and host verification while
+reaching Hoster's Tailscale IP. No networking/service settings or SSH keys changed.
+Both task units are terminal; no persistent transport or listener was started.
+
+Resume with pointer centering and the one-second X/C retile behavior, then every
+remaining PARITY requirement. Existing Windows installers are old. No merge,
+push, installation or user-session activation; this remains an incomplete port.
