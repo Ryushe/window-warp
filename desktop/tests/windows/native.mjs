@@ -7,8 +7,11 @@ import {spawn, spawnSync} from "node:child_process";
 import {createInterface} from "node:readline";
 import {createServer} from "node:net";
 import {randomUUID} from "node:crypto";
+import {testFirefox} from "./firefox.mjs";
 
 if (process.platform !== "win32") throw new Error("This fixture requires Windows");
+const firefoxOnly = process.argv.includes("--firefox-only");
+const runFirefox = firefoxOnly || process.argv.includes("--firefox");
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const marker = "WARP-NATIVE-" + randomUUID();
 const output = path.join(desktop, "src-tauri/target/windows-validation", marker);
@@ -108,7 +111,8 @@ try {
     assert.equal(status.shortcutError, null);
     checks.push("native WebView renders using isolated settings and browser state");
 
-    helper = spawn("python", [path.join(desktop,"tests/windows/fixture.py"), "--marker", marker, "--app-pid", String(app.pid)], {windowsHide:true, stdio:["pipe","pipe","pipe"]});
+    helper = spawn("python", [path.join(desktop,"tests/windows/fixture.py"), "--marker", marker, "--app-pid", String(app.pid),
+        "--lifetime",runFirefox ? "1200" : "180"], {windowsHide:true, stdio:["pipe","pipe","pipe"]});
     let helperError = "";
     helper.stderr.on("data", chunk => {helperError += chunk.toString();});
     const lines = createInterface({input:helper.stdout});
@@ -126,11 +130,12 @@ try {
     let commandId = 0;
     native = (command, args={}) => new Promise((resolve,reject) => {
         const id = ++commandId;
-        const timer = setTimeout(() => {replies.delete(id); reject(new Error(`Fixture timeout: ${command}`));},10000);
+        const timer = setTimeout(() => {replies.delete(id); reject(new Error(`Fixture timeout: ${command}`));},command.startsWith("firefox_") ? 30000 : 10000);
         replies.set(id,{resolve,reject,timer}); helper.stdin.write(JSON.stringify({id,command,...args})+"\n");
     });
     const press = f => native("press",{key:0x70 + f - 1});
     const paused = wanted => until(() => invoke("get_status"), s => s.enabled !== wanted, wanted ? "paused" : "active");
+    if (!firefoxOnly) {
     await press(18); await paused(false);
     await press(18); await paused(true);
     checks.push("Win32 keyboard input resumes and pauses while retaining the pause registration");
@@ -742,6 +747,12 @@ try {
         }
     }
     await invoke("save_workspaces",{store:previousStore});
+    } else {
+        skipped.push("General native checks omitted by --firefox-only");
+    }
+    if (runFirefox) {
+        await testFirefox({output,marker,native,invoke,evaluate,wait,click,screenshot,until,checks,report});
+    }
     report.passed = true;
 } catch (error) {
     report.error = String(error.stack || error);

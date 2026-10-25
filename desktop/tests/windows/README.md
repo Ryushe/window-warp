@@ -5,6 +5,10 @@ Node 22 or newer, Python 3, Rust, the project's dependencies and WebView2 instal
 
 ```powershell
 node desktop/tests/windows/native.mjs
+# Include real Firefox capture and restore with two temporary profiles:
+node desktop/tests/windows/native.mjs --firefox
+# Run only the browser acceptance checks while iterating:
+node desktop/tests/windows/native.mjs --firefox-only
 ```
 
 This opt-in fixture builds the production app with a unique application identity
@@ -51,8 +55,27 @@ belong to the fixture process. The settings screenshot is `hold-settings.png`.
 
 The test injects OS keyboard events; it does not substitute a direct callback for
 keyboard delivery. It does not prove elevated-window control, actual login
-launches, physical monitor removal, Firefox-specific restoration, or all terminal
+launches, physical monitor removal, or all terminal
 profile variants. Those remain separate acceptance checks in `../../PARITY.md`.
+
+`--firefox` additionally requires Firefox at its standard Program Files path, or
+`WARP_FIREFOX_BINARY` naming the installed executable. It creates two profiles
+and local HTML pages inside the run directory, verifies session capture, reused
+and newly launched windows, tab selection, floating placement, identical-title
+profile selection and the workspace editor. It retains diagnostics only for
+owned HWND/PID pairs after the production capture API returns. The production
+capture API itself still enumerates and enriches the desktop normally.
+
+The Firefox helper proves ownership using exact profile arguments, executable
+identity and retained process creation handles. Descendants must have been born
+within their proven parent's lifetime. Cleanup closes owned windows and, if
+necessary, terminates those exact process handles. It does not borrow existing
+profiles. These tests cover explicit-profile launches; default-started Firefox
+without a resolvable profile argument still uses ambiguous title/app matching.
+The fixture records the browser's actual initial selected page and requires the
+newly restored window to select that same URL. It does not inject a tab-selection
+shortcut to assist restoration. `--firefox-only` explicitly skips the general
+shortcut/workspace suite and retains app isolation and cleanup checks.
 
 
 Current receipt: all 22 checks pass with no skips in
@@ -80,3 +103,14 @@ The focused native hook test can also be run with `WARP_TEST_RETILE=1`:
 `cargo test --manifest-path desktop/src-tauri/Cargo.toml native_windows_retile_capture_and_release -- --ignored`.
 It captures all four retile chords in an owned edit window, checks that reserved
 Windows menus do not open, removes the hook and proves ordinary typing resumes.
+
+
+Latest Firefox receipt (2026-10-25):
+`WARP-NATIVE-2416cf83-8207-43da-b503-dbfeeb21cbbe` passes50 combined checks with
+no reported skips. Two Windows displays exercised cross-monitor push/retile;
+the single-monitor burner-fallback branch was not applicable. Separate focused
+receipt `WARP-NATIVE-7492a848-11d9-45aa-a3ad-ce0b508230a4` passes eight checks.
+The editor screenshot was inspected, all28 owned Firefox processes exited
+without forced termination, and the ordinary debug executable was restored.
+See PARITY.md for the earlier transient radial-focus assertion and remaining
+profile/display/installer coverage limits.

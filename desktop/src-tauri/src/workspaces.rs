@@ -383,7 +383,13 @@ pub fn restore(
                     if cancelled.load(Ordering::Relaxed) {
                         return Err("Workspace restore canceled.".into());
                     }
-                    let windows = crate::platform::snapshot(app)?;
+                    let mut windows = crate::platform::snapshot(app)?;
+                    if let Some(browser) = &item.browser {
+                        windows.retain(|w| {
+                            !crate::firefox::is_firefox(w)
+                                || browser_matcher.matches_new_window(w, browser)
+                        });
+                    }
                     let excluded: HashSet<_> = if item.launch.new_window
                         || item.browser.is_some()
                         || item.terminal.is_some()

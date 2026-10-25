@@ -5,6 +5,8 @@ from ctypes import wintypes as w
 import json
 import os
 import queue
+from pathlib import Path
+import subprocess
 import sys
 import threading
 import time
@@ -14,7 +16,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--marker", required=True)
 parser.add_argument("--app-pid", type=int, default=0)
 parser.add_argument("--standalone", action="store_true")
+parser.add_argument("--lifetime", type=int, default=180)
 args = parser.parse_args()
+if not 1 <= args.lifetime <= 1200:
+    raise ValueError("Fixture lifetime must be between 1 and 1200 seconds")
 user = c.WinDLL("user32", use_last_error=True)
 kernel = c.WinDLL("kernel32", use_last_error=True)
 # Match Tauri's per-monitor pixel coordinates when placing windows or the pointer.
@@ -88,6 +93,14 @@ kernel.GetSystemTimeAsFileTime.argtypes = [c.POINTER(w.FILETIME)]
 user.EnumChildWindows.argtypes = [w.HWND, ENUMWINDOWS, w.LPARAM]
 user.IsWindow.argtypes = [w.HWND]
 user.PostMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
+kernel.QueryFullProcessImageNameW.argtypes = [w.HANDLE, w.DWORD, w.LPWSTR, c.POINTER(w.DWORD)]
+kernel.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
+kernel.TerminateProcess.argtypes = [w.HANDLE, w.UINT]
+shell = c.WinDLL("shell32", use_last_error=True)
+shell.CommandLineToArgvW.argtypes = [w.LPCWSTR, c.POINTER(c.c_int)]
+shell.CommandLineToArgvW.restype = c.POINTER(w.LPWSTR)
+kernel.LocalFree.argtypes = [c.c_void_p]
+kernel.LocalFree.restype = c.c_void_p
 
 class PROCESSENTRY32(c.Structure):
     _fields_ = [("dwSize", w.DWORD), ("cntUsage", w.DWORD), ("th32ProcessID", w.DWORD),
@@ -201,6 +214,246 @@ def cleanup_calculator():
     calculator_baseline = None
     return len(closed)
 
+
+def process_times(handle):
+    times = [w.FILETIME() for _ in range(4)]
+    if not kernel.GetProcessTimes(handle, *(c.byref(t) for t in times)):
+        raise c.WinError(c.get_last_error())
+    return filetime(times[0]), filetime(times[1])
+
+
+def process_image(handle):
+    size = w.DWORD(32768)
+    text = c.create_unicode_buffer(size.value)
+    if not kernel.QueryFullProcessImageNameW(handle, 0, text, c.byref(size)):
+        raise c.WinError(c.get_last_error())
+    return os.path.normcase(os.path.realpath(text.value))
+
+
+def process_tree():
+    snapshot = kernel.CreateToolhelp32Snapshot(2, 0)
+    if snapshot == w.HANDLE(-1).value:
+        raise c.WinError(c.get_last_error())
+    rows = []
+    try:
+        entry = PROCESSENTRY32(dwSize=c.sizeof(PROCESSENTRY32))
+        more = kernel.Process32FirstW(snapshot, c.byref(entry))
+        if not more:
+            raise c.WinError(c.get_last_error())
+        while more:
+            rows.append((entry.th32ProcessID, entry.th32ParentProcessID))
+            more = kernel.Process32NextW(snapshot, c.byref(entry))
+        return rows
+    finally:
+        kernel.CloseHandle(snapshot)
+
+
+def command_arguments(command):
+    count = c.c_int()
+    values = shell.CommandLineToArgvW(command, c.byref(count))
+    if not values:
+        raise c.WinError(c.get_last_error())
+    try:
+        return [values[index] for index in range(count.value)]
+    finally:
+        kernel.LocalFree(c.cast(values, c.c_void_p))
+
+
+class FirefoxScope:
+    """Only this run's explicit profiles and birth-verified descendants belong here."""
+    def __init__(self, request):
+        self.root = Path(request["root"]).resolve()
+        expected = Path(__file__).resolve().parents[2] / "src-tauri" / "target" / "windows-validation" / args.marker
+        if self.root != expected.resolve() or not self.root.is_dir():
+            raise RuntimeError("Firefox output must be this marker's validation directory")
+        self.program = os.path.normcase(os.path.realpath(request["program"]))
+        if Path(self.program).name.lower() != "firefox.exe" or not Path(self.program).is_file():
+            raise RuntimeError("Firefox executable is unavailable")
+        self.profiles = [Path(value).resolve() for value in request["profiles"]]
+        self.pages = [Path(value).resolve() for value in request["pages"]]
+        if len(self.profiles) != 2 or len(set(self.profiles)) != 2 or len(self.pages) != 2:
+            raise RuntimeError("Firefox fixture requires two distinct profiles and two pages")
+        if any(p.parent != self.root or not p.is_dir() for p in self.profiles):
+            raise RuntimeError("Firefox profiles must be direct children of the owned output")
+        if any(p.parent != self.root or not p.is_file() or p.suffix != ".html" for p in self.pages):
+            raise RuntimeError("Firefox pages must be owned local HTML files")
+        self.baseline = {pid for pid, _ in process_tree()}
+        self.baseline_windows = set(all_windows())
+        now = w.FILETIME()
+        kernel.GetSystemTimeAsFileTime(c.byref(now))
+        self.started = filetime(now)
+        self.processes = {}
+        self.children = []
+        self.log = (self.root / "firefox.log").open("ab")
+
+    def remember(self, pid, profile, proof, parent=None):
+        if pid in self.processes or pid in self.baseline:
+            return False
+        handle = kernel.OpenProcess(0x1000 | 0x100000 | 0x1, False, pid)
+        if not handle:
+            return False  # A launcher/content process may already have exited.
+        try:
+            born, _ = process_times(handle)
+            image = process_image(handle)
+            if born < self.started:
+                return False
+            if parent:
+                parent_born, parent_exit = process_times(parent["handle"])
+                if born < parent_born or (parent_exit and born > parent_exit):
+                    return False  # A recycled parent PID is not ancestry proof.
+            elif image != self.program:
+                return False
+            self.processes[pid] = dict(handle=handle, born=born, profile=profile, proof=proof, image=image)
+            handle = None
+            return True
+        finally:
+            if handle:
+                kernel.CloseHandle(handle)
+
+    def track_children(self):
+        rows = process_tree()
+        # Resolve several generations from one bounded snapshot. Retained
+        # parent handles provide creation/exit times even after launcher exit.
+        for _ in range(16):
+            added = False
+            for pid, parent_pid in rows:
+                parent = self.processes.get(parent_pid)
+                if parent and pid not in self.processes:
+                    added |= self.remember(pid, parent["profile"], "descendant", parent)
+            if not added:
+                break
+
+    def refresh(self):
+        # Metadata only. Never print or retain another Firefox profile's argv.
+        query = "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process -Filter \"Name = 'firefox.exe'\" -ErrorAction Stop | Select-Object ProcessId,CommandLine)"
+        result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", query],
+                                capture_output=True, timeout=6, creationflags=0x08000000)
+        if result.returncode or len(result.stdout) > 4_000_000:
+            raise RuntimeError("Cannot verify Firefox process/profile ownership through CIM")
+        for row in json.loads(result.stdout.decode("utf-8-sig")):
+            pid = int(row["ProcessId"])
+            if pid in self.baseline or not row.get("CommandLine"):
+                continue
+            argv = command_arguments(row["CommandLine"])
+            for index, value in enumerate(argv[:-1]):
+                if value.lower() in ("-profile", "--profile"):
+                    profile = Path(argv[index + 1]).resolve()
+                    if profile in self.profiles:
+                        self.remember(pid, str(profile), "exact-profile")
+                    break
+        self.track_children()
+        return self.windows()
+
+    def launch(self, request):
+        profile = self.profiles[int(request["profile"])]
+        page = self.pages[int(request["page"])]
+        mode = request.get("mode", "initial")
+        if mode not in ("initial", "tab"):
+            raise RuntimeError("Unknown Firefox launch mode")
+        argv = [self.program, "--profile", str(profile)]
+        if mode == "initial":
+            argv.extend(["--new-instance", page.as_uri()])
+        else:
+            argv.extend(["--new-tab", page.as_uri()])
+        child = subprocess.Popen(argv, cwd=self.root, stdin=subprocess.DEVNULL,
+                                 stdout=self.log, stderr=self.log, creationflags=0x08000000)
+        self.children.append(child)
+        # This PID came directly from our explicit spawn; real browser roots
+        # are also discovered independently by exact profile argv in refresh().
+        self.remember(child.pid, str(profile), "owned-launch")
+        return {"launcherPid": child.pid}
+
+    def checked(self, hwnd):
+        pid = w.DWORD()
+        user.GetWindowThreadProcessId(hwnd, c.byref(pid))
+        record = self.processes.get(pid.value)
+        if not record or hwnd in self.baseline_windows or not user.IsWindow(hwnd):
+            raise RuntimeError("Firefox window is not proven owned by this fixture")
+        if kernel.WaitForSingleObject(record["handle"], 0) != 258 or process_times(record["handle"])[0] != record["born"]:
+            raise RuntimeError("Firefox process closed or changed identity")
+        # Opening the current PID independently checks HWND/PID reuse.
+        handle = kernel.OpenProcess(0x1000, False, pid.value)
+        if not handle:
+            raise c.WinError(c.get_last_error())
+        try:
+            if process_times(handle)[0] != record["born"]:
+                raise RuntimeError("Firefox window changed process identity")
+        finally:
+            kernel.CloseHandle(handle)
+        return pid.value, record
+
+    def windows(self):
+        result = []
+        for hwnd in all_windows():
+            if not user.IsWindowVisible(hwnd):
+                continue
+            pid = w.DWORD()
+            user.GetWindowThreadProcessId(hwnd, c.byref(pid))
+            if pid.value not in self.processes or hwnd in self.baseline_windows:
+                continue
+            if kernel.WaitForSingleObject(self.processes[pid.value]["handle"], 0) == 0:
+                continue
+            _, record = self.checked(hwnd)
+            result.append(dict(id=str(hwnd), pid=pid.value, profile=record["profile"],
+                               created=str(record["born"]), proof=record["proof"]))
+        return result
+
+    def cleanup(self):
+        errors, terminated = [], []
+        try:
+            try:
+                self.refresh()
+            except Exception as error:
+                errors.append(str(error))
+            try:
+                self.track_children()
+                for window in self.windows():
+                    hwnd = int(window["id"])
+                    if not user.IsWindow(hwnd) or kernel.WaitForSingleObject(self.processes[window["pid"]]["handle"], 0) == 0:
+                        continue
+                    self.checked(hwnd)
+                    if not user.PostMessageW(hwnd, 0x10, 0, 0):
+                        errors.append("Owned Firefox window refused WM_CLOSE")
+                until = time.monotonic() + 5
+                while time.monotonic() < until:
+                    self.track_children()
+                    if all(kernel.WaitForSingleObject(record["handle"], 0) == 0 for record in self.processes.values()):
+                        break
+                    time.sleep(0.1)
+                self.track_children()
+            except Exception as error:
+                errors.append("Graceful Firefox cleanup: " + str(error))
+            # Exact retained handles, never taskkill /IM or an inferred process
+            # tree. All data in these profiles was created by this fixture.
+            for pid, record in reversed(list(self.processes.items())):
+                try:
+                    if kernel.WaitForSingleObject(record["handle"], 0) == 258:
+                        if process_times(record["handle"])[0] != record["born"]:
+                            errors.append("Owned Firefox handle changed identity")
+                        elif not kernel.TerminateProcess(record["handle"], 0):
+                            errors.append(f"Could not stop owned Firefox process {pid}")
+                        else:
+                            terminated.append(pid)
+                except Exception as error:
+                    errors.append(f"Owned Firefox process {pid}: {error}")
+            until = time.monotonic() + 3
+            while time.monotonic() < until and any(kernel.WaitForSingleObject(record["handle"], 0) == 258 for record in self.processes.values()):
+                time.sleep(0.05)
+            for pid, record in self.processes.items():
+                if kernel.WaitForSingleObject(record["handle"], 0) != 0:
+                    errors.append(f"Owned Firefox process {pid} remained running")
+            return {"tracked": len(self.processes), "terminated": terminated, "errors": errors}
+        finally:
+            for record in self.processes.values():
+                kernel.CloseHandle(record["handle"])
+            self.processes.clear()
+            for child in self.children:
+                child.poll()
+            self.log.close()
+
+
+firefox_scope = None
+
 close_fixture = {"window": None, "requests": 0, "allow": False}
 
 @WNDPROC
@@ -250,11 +503,17 @@ def owned(hwnd):
     pid = w.DWORD()
     user.GetWindowThreadProcessId(hwnd, c.byref(pid))
     if pid.value not in (os.getpid(), args.app_pid):
-        raise RuntimeError("Refusing to interact with an unowned window")
+        if firefox_scope is None:
+            raise RuntimeError("Refusing to interact with an unowned window")
+        firefox_scope.checked(hwnd)
 
-deadline = time.monotonic() + 180
+deadline = time.monotonic() + args.lifetime
+next_firefox_scan = 0
 try:
     while time.monotonic() < deadline:
+        if firefox_scope is not None and time.monotonic() >= next_firefox_scan:
+            firefox_scope.track_children()
+            next_firefox_scan = time.monotonic() + 1
         message = w.MSG()
         while user.PeekMessageW(c.byref(message), None, 0, 0, 1):
             user.TranslateMessage(c.byref(message))
@@ -287,6 +546,29 @@ try:
                 result = begin_calculator()
             elif command == "calculator_cleanup":
                 result = cleanup_calculator()
+            elif command == "firefox_begin":
+                if firefox_scope is not None:
+                    raise RuntimeError("Firefox fixture already exists")
+                firefox_scope = FirefoxScope(request)
+            elif command == "firefox_launch":
+                if firefox_scope is None:
+                    raise RuntimeError("Firefox fixture has not been initialized")
+                result = firefox_scope.launch(request)
+            elif command == "firefox_refresh":
+                if firefox_scope is None:
+                    raise RuntimeError("Firefox fixture has not been initialized")
+                result = firefox_scope.refresh()
+            elif command == "firefox_windows":
+                if firefox_scope is None:
+                    raise RuntimeError("Firefox fixture has not been initialized")
+                firefox_scope.track_children()
+                result = firefox_scope.windows()
+            elif command == "firefox_cleanup":
+                if firefox_scope is None:
+                    result = {"tracked": 0, "terminated": [], "errors": []}
+                else:
+                    scope, firefox_scope = firefox_scope, None
+                    result = scope.cleanup()
             elif command == "close_fixture":
                 if close_fixture["window"] is not None:
                     raise RuntimeError("Close fixture already exists")
@@ -435,6 +717,13 @@ try:
         except Exception as error:
             print(json.dumps({"id": request["id"], "error": str(error)}), flush=True)
 finally:
+    if firefox_scope is not None:
+        try:
+            receipt = firefox_scope.cleanup()
+            if receipt["errors"]:
+                print("Firefox cleanup: " + json.dumps(receipt), file=sys.stderr, flush=True)
+        except Exception as error:
+            print("Firefox cleanup failed: " + str(error), file=sys.stderr, flush=True)
     if held_keys:
         send_keys(list(reversed(held_keys)), release=True)
     if original_pointer is not None:

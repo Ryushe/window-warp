@@ -7,7 +7,7 @@
 - Base commit: `7b907778f0022d73fb3527b82c0ab7ecedf8124d`
 - Intended eventual target: `main`; promotion/merge has not been requested
 - Last updated: 2026-10-25
-- Latest immutable recovery checkpoint: `db8a32f85086136750f6cfd38e737c76cafc03fc`
+- Latest immutable recovery checkpoint: `99418f684119389c71825f58a292ce8bc429d5e7` (new Firefox increment below pending checkpoint)
 - Feature implementation commits: `abfc95e` (desktop/workspace foundation), `ee7bee4` (Firefox profiles/tabs), `c09d79c` (terminal capture/editor/restore), `491a9d8` (KDE Firefox caption correction and complete 15-check native run), `5e6373d` (WSL distribution discovery and native directory restoration), `02d4e02` (reviewed shortcut reassignment and 12-check native KDE run), `b216f0c` (persistent pause and application control hotkeys, 15 native KDE checks), `d49e380` (14 native Windows application checks), `9794b75` (Windows tap/hold, activation deadlock correction, 18 Windows and 15 KDE native checks), `b63cb1d` (KDE native tap/hold, Wayland editor focus, 20 native KDE checks), `41fbc70` (KDE key reservation cleanup, 21 native KDE checks, held-key regression reproduced), `da23019` (held-key cancellation and deferred reassignment, verified script startup, 22 native KDE checks), `61233ff` (shared radial picker, 26 native KDE checks; initial 22 native Windows pass later superseded by rapid Escape regression), `4a92065` (reviewed INI migration and native import receipts), `9ccbaa7` (portable fixture line endings)
 - Canonical references: original root AHK files; `desktop/PARITY.md`
 
@@ -16,8 +16,9 @@
 Port all original features into a standalone Windows/KDE application. The user's
 explicit branch requirement is satisfied by this existing feature branch.
 Original AHK sources remain unchanged. Full parity is not achieved: the checklist
-is the completion gate, including remaining browser verification, terminal variants, INI migration,
-KDE gesture edge cases, radial selection, pointer movement, and remaining shortcut/editor paths.
+is the completion gate, including unresolved default-profile matching, terminal
+variants, remaining native edge cases, real Plasma6, physical display/login and
+final packaging acceptance. Later sections supersede historical receipts below.
 
 The current implementation includes the Tauri editor/tray, native Windows/KWin
 window actions, startup registration, and workspace capture/review/edit/restore.
@@ -76,16 +77,17 @@ parser; Linux uses `/proc`. Neither path invokes a shell for app launch.
 - Existing Windows installers predate this checkpoint; rebuild after remaining work.
 - Firefox KDE evidence: all 15 `tests/kde/nested.sh --gui ... --firefox` checks
   now pass, including geometry; the editor screenshot was inspected. Windows
-  Firefox UI and actual Plasma 6 still require native verification. The current
-  Portafort binary is the KDE hold build documented in the latest section.
+  explicit-profile Firefox UI is now verified as documented in the latest section.
+  Default-profile identity and actual Plasma6 remain open. The current isolated
+  Portafort binary is the Firefox polling build documented below.
 - Hoster cleanup sidecar inspected two unregistered live scopes, retained both,
   stopped none (`needs-attention`). No action on unrelated workloads is needed.
 
 ## Resume and gates
 
-Resume terminal variant coverage and INI migration, plus Windows Firefox native
-verification. Then gesture/radial,
-pointer, and outstanding editor/global-hotkey behavior. Preserve all checklist rows.
+Resume remaining terminal variants, burner/chord cases and unresolved default-
+profile matching, then final package/Plasma6/physical-display/login gates. Preserve
+all checklist rows and any newly recorded native regression.
 Native KDE fixture tests and local Node/Rust tests are ready for reuse.
 The implementation checkpoint is reachable from the owning branch; the subsequent
 dossier-only commit records its identity. The working tree was clean after the
@@ -1423,3 +1425,73 @@ Verified delayed-client implementation checkpoint:
 `99418f684119389c71825f58a292ce8bc429d5e7` on `codex/cross-platform-app`.
 This follow-up only records the immutable checkpoint. Resume Windows Firefox
 native acceptance using owned temporary profiles; preserve all PARITY.md gates.
+
+
+## Windows Firefox native acceptance and launch profile filtering (2026-10-25)
+
+Owning/lowest applicable branch remains `codex/cross-platform-app`; `main` has
+no desktop implementation. No descendant propagation is needed. Parent owns
+production code/docs/integration; `/root/packaged_native` implemented the three
+Windows fixture files; `/root/retile_review` independently reviewed production
+and fixture changes. No remaining actionable findings in the final scoped review.
+
+The restore loop previously filtered profiles only when reusing an existing
+window. A concurrently opened new window from a resolved different profile could
+win post-launch matching and be focused/repositioned. Firefox Matcher now shares
+an optional profile comparison between reuse and launch polling. Known mismatches
+are rejected; the full unfiltered pre-launch ID snapshot remains intact. Default
+launches lacking process-profile evidence retain existing title/app heuristics,
+so unknown-profile identity remains an explicit limitation, not a new rejection.
+A known path with an unresolved name is also unknown for name-only matching.
+Two tests cover known match/mismatch before the selected tab opens, missing
+process evidence, and unresolved names. No new configuration or metadata fields.
+
+Windows opt-in --firefox / --firefox-only acceptance uses two fresh profiles and
+local pages. Proven-owned process handles and creation times govern interaction
+and cleanup; descendants must fall within their parent's verified lifetime.
+Only owned HWND/PID diagnostics are retained after production capture returns.
+Production capture still enumerates/enriches the desktop normally. The final
+fixture captures the actual selected page, then requires unassisted new-window
+restore to preserve both URLs and the selected URL. It also verifies existing
+reuse, floating placement, an active competing explicit profile with identical
+title, and browser editor review/save. Geometry compares fields, not serialized
+object key order. Synthetic Ctrl+digit setup was removed after it failed to
+change the live selection; no production failure is inferred from those attempts.
+
+Evidence:
+- Windows Rust:66 passed, five opt-in ignored;
+  `desktop/src-tauri/target/firefox-windows-rust.log`.
+- Node:129 passed; `desktop/src-tauri/target/firefox-node.log`.
+- Windows focused native:8 checks pass, general suite explicitly skipped;
+  `WARP-NATIVE-7492a848-11d9-45aa-a3ad-ce0b508230a4`.
+- Final combined Windows native:50 checks pass, no reported skips;
+  `WARP-NATIVE-2416cf83-8207-43da-b503-dbfeeb21cbbe`. Two displays were available
+  for push/centering/maximized history/retile. Conditional single-monitor burner
+  fallback was not applicable and retains earlier acceptance. Firefox cleanup
+  tracked28 processes, all exited gracefully, errors0. Editor screenshot inspected;
+  normal debug binary rebuilt/restored. No unsupported portrait/mixed-DPI claim.
+- One intermediate general fixture observed null foreground during Alt+Escape,
+  then an owned window after release. Final unchanged assertion passes. Receipt
+  `WARP-NATIVE-00b3aaee-a6e0-4697-b080-6a97d0ccab83` remains; repeatable diagnosis
+  should resume if it recurs in later chord/display tests (recorded in PARITY).
+- Linux builder `hoster-warp-build-20261025-firefox-windows`: inactive/exit0,
+  62 Rust pass / one ignored,129 Node pass; executable and Debian bundle rebuilt.
+- Native KDE `portafort-warp-gui-20261025-firefox-windows`: inactive/exit0,
+  25 Firefox checks, including existing delayed-client tiles/fullscreen routes,
+  in a separate two-output Plasma5.27 compositor on Portafort. User seat untouched.
+  Local receipts: `desktop/src-tauri/target/kde-validation/firefox-windows/`
+  (`build-journal.log`, `browser-journal.log`, `browser-result.json`, `browser/`).
+- Syntax and diff checks pass. Reaper sidecar inspected two unregistered live
+  scopes, retained both, stopped0; no manual cleanup. All child packets terminal.
+
+Both Windows native runs use source from this worktree. Linux test binary at
+`~/.cache/window-warp-01a16f69/tile-browser/window-warp` contains the shared change.
+No installer installed, normal app activated, branch merged or pushed. Existing
+Windows preview installers remain old. Remote Git refresh remains an integration
+gate; no integration was attempted.
+
+Next: remaining terminal variants (PowerShell/custom Windows Terminal and KDE
+terminal editor binding-count refresh), burner/chord cases, default-profile
+identity, D-Bus/packaged variants, and final package/Plasma6/physical-display/login
+acceptance in PARITY.md. A concurrent wrong-profile native launch is not covered
+by this fixture; unit evidence covers its matcher behavior. Keep full goal active.

@@ -498,9 +498,9 @@ pub struct Matcher {
     processes: HashMap<u32, Option<Profile>>,
 }
 impl Matcher {
-    pub fn matches(&mut self, window: &WindowInfo, saved: &Browser) -> bool {
+    fn profile_match(&mut self, window: &WindowInfo, saved: &Browser) -> Option<bool> {
         if saved.profile_path.is_empty() && saved.profile_name.is_empty() {
-            return true;
+            return Some(true);
         }
         let profiles = self.profiles.get_or_insert_with(profiles);
         let current = self.processes.entry(window.pid).or_insert_with(|| {
@@ -510,13 +510,25 @@ impl Matcher {
         });
         if let Some(profile) = current {
             if !saved.profile_path.is_empty() {
-                return same_path(&profile.path, Path::new(&saved.profile_path));
+                return Some(same_path(&profile.path, Path::new(&saved.profile_path)));
             }
-            return profile.name == saved.profile_name;
+            return (!profile.name.is_empty()).then_some(profile.name == saved.profile_name);
         }
-        // Without process evidence, only an exact saved active-tab title can
-        // identify a candidate. Never borrow an arbitrary window from another profile.
-        score(window, saved) == 120
+        None
+    }
+
+    pub fn matches(&mut self, window: &WindowInfo, saved: &Browser) -> bool {
+        // Default-started Firefox often has no profile argument. Preserve the
+        // title heuristic for reuse; identical titles cannot prove identity.
+        self.profile_match(window, saved)
+            .unwrap_or_else(|| score(window, saved) == 120)
+    }
+
+    pub fn matches_new_window(&mut self, window: &WindowInfo, saved: &Browser) -> bool {
+        // Reject a known different profile even if it opens during our launch.
+        // Unknown profiles retain ordinary launch matching: the selected tab
+        // is opened later, so requiring its title here would prevent restore.
+        self.profile_match(window, saved).unwrap_or(true)
     }
 }
 
@@ -558,6 +570,86 @@ mod tests {
             path: PathBuf::from("/profiles/work"),
             name: "Work".into(),
         }
+    }
+    fn matcher_window(pid: u32, caption: &str) -> WindowInfo {
+        serde_json::from_value(serde_json::json!({
+            "id": pid.to_string(), "pid": pid, "title": caption,
+            "appId": "firefox", "desktopId": "", "path": "firefox",
+            "rect": {"x":0,"y":0,"width":800,"height":600},
+            "workArea": {"x":0,"y":0,"width":1920,"height":1080},
+            "monitor": 0, "monitorName": "fixture",
+            "maximizedHorizontal": false, "maximizedVertical": false,
+            "fullscreen": false, "minimized": false, "active": false
+        }))
+        .unwrap()
+    }
+    #[test]
+    fn new_window_rejects_known_other_profile_before_selected_tab_opens() {
+        let known = profile();
+        let browser = Browser {
+            profile_path: known.path.to_string_lossy().into_owned(),
+            tabs: vec![Tab {
+                url: "https://selected.test".into(),
+                title: "Selected".into(),
+            }],
+            active_tab: 1,
+            ..Default::default()
+        };
+        let other = profile_from_args(
+            &[
+                "firefox".into(),
+                "--profile".into(),
+                "/profiles/other".into(),
+            ],
+            &[],
+        )
+        .unwrap();
+        let mut matcher = Matcher {
+            profiles: Some(vec![known.clone(), other.clone()]),
+            processes: HashMap::from([(1, Some(other)), (2, Some(known))]),
+        };
+        // Another profile can open the exact saved title first. Our newly
+        // launched window has only its first (non-selected) tab at this point.
+        let wrong = matcher_window(1, "Selected — Mozilla Firefox");
+        let correct = matcher_window(2, "First — Mozilla Firefox");
+        assert!(!matcher.matches_new_window(&wrong, &browser));
+        assert!(!matcher.matches(&wrong, &browser));
+        assert!(matcher.matches_new_window(&correct, &browser));
+        assert!(matcher.matches(&correct, &browser));
+    }
+    #[test]
+    fn unresolved_profile_keeps_default_launch_and_reuse_compatibility() {
+        let mut browser = Browser {
+            profile_name: "Work".into(),
+            tabs: vec![Tab {
+                url: "https://selected.test".into(),
+                title: "Selected".into(),
+            }],
+            active_tab: 1,
+            ..Default::default()
+        };
+        let mut matcher = Matcher {
+            profiles: Some(Vec::new()),
+            processes: HashMap::from([
+                (1, None),
+                (
+                    2,
+                    Some(Profile {
+                        path: PathBuf::from("/unregistered/profile"),
+                        name: String::new(),
+                    }),
+                ),
+            ]),
+        };
+        for pid in [1, 2] {
+            let selected = matcher_window(pid, "Selected — Mozilla Firefox");
+            let first = matcher_window(pid, "First — Mozilla Firefox");
+            assert!(matcher.matches(&selected, &browser));
+            assert!(!matcher.matches(&first, &browser));
+            assert!(matcher.matches_new_window(&first, &browser));
+        }
+        browser.profile_name.clear();
+        assert!(matcher.matches(&matcher_window(1, "Any title"), &browser));
     }
     fn encoded(json: &Value) -> Vec<u8> {
         let mut bytes = b"mozLz40\0".to_vec();

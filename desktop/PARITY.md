@@ -7,8 +7,8 @@ have been exercised. Existing preview installers do not contain ongoing work.
 
 | Requirement / authoritative source | State | Evidence needed |
 | --- | --- | --- |
-| Monitor push, wrap, relative placement, maximized state, history pull (`window_manager.ahk`) | Partial | Windows maximized push/history pull passes; KDE two-output and real one-output tests verify direct maximized pull and restoring maximization after tiling; Windows and KDE pause/configuration reload retain history; physical Windows multi-monitor and monitor removal remain |
-| Push and center pointer; pull centers primary; 1-second X/C retiling | Partial | Native Windows and KDE retile chords, one-use consumption, expiry, renewal and pause cancellation pass; Windows one-display wrap/centering and KDE two-output centering pass; KDE permission refusal and X11 movement pass; physical Windows multi-monitor and live Plasma 6 acceptance remain |
+| Monitor push, wrap, relative placement, maximized state, history pull (`window_manager.ahk`) | Partial | Windows maximized push/history pull passes; KDE two-output and real one-output tests verify direct maximized pull and restoring maximization after tiling; Windows and KDE pause/configuration reload retain history; Windows two-display push/history now passes; portrait/mixed-DPI and monitor removal remain |
+| Push and center pointer; pull centers primary; 1-second X/C retiling | Partial | Native Windows and KDE retile chords, one-use consumption, expiry, renewal and pause cancellation pass; Windows one-display wrap/centering and KDE two-output centering pass; KDE permission refusal and X11 movement pass; Windows two-display push/centering/retile now passes; mixed-DPI and live Plasma6 acceptance remain |
 | Four-way tiling; portrait mouse-aware tile choice | Partial | Four-way implemented; 18 live KDE checks cover vertical tiling; Windows mouse hold tiles natively and portrait/midpoint geometry has regression coverage; KDE native hold verifies key-down pointer choice; physical portrait acceptance remains |
 | Maximize/restore toggle (original “fullscreen”); graceful close | Partial | Saved floating geometry survives maximized moves and history pull on Windows and KDE; KDE rapid double-toggle and same-script maximize/burner ordering pass, including real Portafort 5.27.11; Windows close honors an application's veto; KDE registration reload retains caches and shortcut/workspace actions share the persistent geometry queue; delayed Firefox tiling/fullscreen transitions pass; real Plasma 6 acceptance remains |
 | App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Tiled burner round trip live KDE verified; Windows native pull and all four one-monitor burner fallbacks pass; KDE left/right tiled and maximized burner layouts pass with delayed Firefox; floating burner and physical Windows two-monitor checks remain |
@@ -20,7 +20,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | Settings persistence and startup registration | Partial | Windows Run entry and KDE autostart toggles pass; actual login/startup launches remain pending |
 | Workspace capture/create/update, best-match update selection, rename/delete/reorder/browser | Partial | Implemented; Rust matching/persistence model and Node editor tests pass; KDE native capture/save/browser pass; Windows capture/review/save and closest-match update draft now pass natively |
 | Workspace launch/reuse, exclude already-consumed windows, wait for new windows, restore placement/state | Partial | KDE native two-window reuse, forced new launch, placement, per-axis maximize/fullscreen pass; Windows owned-window placement/maximize/minimize pass; Windows two-window reuse and separate-process launch now pass natively; physical display-change acceptance remains |
-| Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Partial | 15 native KDE checks pass on the caption-fix build, including tabs/selection, same-title profile isolation, floating geometry and editor; codec/profile/launch tests pass; live Windows browser path pending |
+| Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Partial | Native Windows Firefox158.0.1 and KDE Firefox158 capture/reuse/new-window, selected URL, explicit-profile isolation, floating geometry and editor pass; polling rejects resolved wrong profiles; default-started Firefox without profile arguments still has ambiguous title/app matching and needs separate acceptance |
 | Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native Ubuntu capture/directory restoration passes; legacy launchers, prompt fallback, and ambiguity have regression coverage; native PowerShell/custom-profile variants still required; refresh the terminal fixture's hard-coded five-binding editor assertion when running that path |
 | Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Partial | Executable launch passes native Windows/KDE fixtures; Calculator AUMID capture/activation/reuse and native KDE desktop-entry URL/document launch, working directory, reuse and missing-target errors pass; hosted UWP/packaged Win32 variants and D-Bus-activated desktop entries remain |
 | Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Partial | Review/import/save verified natively on Windows and KDE; disabled keys, terminal fields, Firefox tabs and geometry retained; legacy package paths resolve a single registered AUMID during unsaved review; missing/ambiguous families stay editable; title/class/exe/PID/HWND/active WinTitle rules now migrate to reviewed selectors; undefined groups/duplicate or unknown criteria remain visible for manual review; both center actions convert |
@@ -728,3 +728,52 @@ focused mocks separately reproduced delayed tile geometry loss. Both are fixed.
 No Windows source changed, and no installer was installed. Next: Windows Firefox
 capture/restore acceptance, remaining terminal/burner/chord cases, then package
 and real Plasma6/physical display/login/installer gates already listed above.
+
+
+## Windows Firefox capture and restore - verified (2026-10-25)
+
+The native Windows browser fixture uses two fresh profiles and local pages.
+It verifies two-tab capture, the live selected URL and executable, existing-window
+reuse, forced new-window restoration, floating placement, an active same-title
+window in a competing explicit profile, and editor review/save. It records the
+actual initial selected page and requires restoration to preserve it; restoration
+receives no injected tab-selection assistance. Geometry compares numeric fields.
+
+The shared restore poll now rejects windows whose resolved Firefox profile
+conflicts with the saved profile, including windows opened after the initial
+snapshot. Unknown profile evidence retains compatibility with ordinary default
+launches. That fallback is still ambiguous: neither title-based reuse nor generic
+new-window matching proves profile identity when arguments omit it. Default-
+profile identity and native concurrent wrong-profile launch acceptance remain
+open; explicit-profile fixture success does not close those gates.
+
+Focused Windows receipt: `src-tauri/target/windows-validation/WARP-NATIVE-7492a848-11d9-45aa-a3ad-ce0b508230a4/`
+passes eight checks, explicitly skipping the general suite. The editor screenshot
+was inspected. Cleanup tracked28 owned processes, all exited gracefully, errors0.
+Earlier runs assumed external --new-tab or synthetic Ctrl+2 selected the second
+tab; those setup assumptions failed and were removed. Their diagnostics remain
+in target; they do not establish a production capture failure.
+
+66 Windows Rust tests / five opt-in ignored, 129 Node tests and62 Linux Rust
+tests / one opt-in ignored pass. Linux build unit
+`hoster-warp-build-20261025-firefox-windows` completed inactive/exit0 and rebuilt
+its executable and Debian bundle. `portafort-warp-gui-20261025-firefox-windows`
+completed inactive/exit0 with25 Firefox/KDE checks in a private two-output
+Plasma5.27 compositor. Receipts: `src-tauri/target/kde-validation/firefox-windows/`.
+No installer was installed; real Plasma6, physical displays, terminal variants,
+login/tray and final packaging gates remain.
+
+Final combined Windows receipt:
+`src-tauri/target/windows-validation/WARP-NATIVE-2416cf83-8207-43da-b503-dbfeeb21cbbe/`
+passes50 checks with no reported skips. Two Windows displays were available,
+so cross-monitor push, centering, maximized history and retile ran; the conditional
+single-monitor burner-fallback check was not applicable (previously verified).
+28 Firefox processes exited gracefully, none required termination; the ordinary
+debug executable was restored. This does not prove portrait/mixed-DPI/removal.
+
+One intermediate general run (`WARP-NATIVE-00b3aaee-a6e0-4697-b080-6a97d0ccab83`)
+failed the rapid Alt+Escape fixture assertion when a transient null foreground
+became an owned window after release (`tests/windows/native.mjs`, cancelledFocus
+comparison). The final full run passes the unchanged assertion. Retain that
+receipt for repeatable focus-transition diagnosis if the assertion recurs during
+remaining chord/display tests; a product regression has not been established.
