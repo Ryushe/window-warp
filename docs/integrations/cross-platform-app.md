@@ -1330,3 +1330,8 @@ packaged-app/desktop-entry variants, physical mixed-DPI/portrait/disconnect case
 real Plasma 6, login/tray/installer validation and final independent release audit.
 Next: test direct unmaximize-and-tile with a delayed Wayland client, then continue
 the remaining PARITY.md gates. The full feature-port goal remains active.
+
+Verified implementation checkpoint: `346a4a02b7ec81f9f1c8803a5066dfde87649352`
+on `codex/cross-platform-app`. This follow-up changes only the dossier pointer.
+Resume from this checkpoint at delayed-client tile/retile acceptance, keeping
+the remaining full-port PARITY.md requirements active.
