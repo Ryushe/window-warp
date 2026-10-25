@@ -7,8 +7,8 @@
 - Base commit: `7b907778f0022d73fb3527b82c0ab7ecedf8124d`
 - Intended eventual target: `main`; promotion/merge has not been requested
 - Last updated: 2026-10-24
-- Latest immutable recovery checkpoint: `b216f0ce0374714e2d398511c328c84b21299596`
-- Feature implementation commits: `abfc95e` (desktop/workspace foundation), `ee7bee4` (Firefox profiles/tabs), `c09d79c` (terminal capture/editor/restore), `491a9d8` (KDE Firefox caption correction and complete 15-check native run), `5e6373d` (WSL distribution discovery and native directory restoration), `02d4e02` (reviewed shortcut reassignment and 12-check native KDE run), `b216f0c` (persistent pause and application control hotkeys, 15 native KDE checks)
+- Latest immutable recovery checkpoint: `d49e38035e20091084389615abc788ac507bbc40`
+- Feature implementation commits: `abfc95e` (desktop/workspace foundation), `ee7bee4` (Firefox profiles/tabs), `c09d79c` (terminal capture/editor/restore), `491a9d8` (KDE Firefox caption correction and complete 15-check native run), `5e6373d` (WSL distribution discovery and native directory restoration), `02d4e02` (reviewed shortcut reassignment and 12-check native KDE run), `b216f0c` (persistent pause and application control hotkeys, 15 native KDE checks), `d49e380` (14 native Windows application checks)
 - Canonical references: original root AHK files; `desktop/PARITY.md`
 
 ## Intent and implemented contract
