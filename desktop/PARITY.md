@@ -22,7 +22,7 @@ have been exercised. Bundles are rebuilt at the checkpoints below; installer exe
 | Workspace launch/reuse, exclude already-consumed windows, wait for new windows, restore placement/state | Partial | KDE native two-window reuse, forced new launch, placement, per-axis maximize/fullscreen pass; Windows owned-window placement/maximize/minimize pass; Windows two-window reuse and separate-process launch now pass natively; physical display-change acceptance remains |
 | Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Partial | Native Windows Firefox158.0.1 and KDE Firefox158 capture/reuse/new-window, selected URL, explicit-profile isolation, floating geometry and editor pass; polling rejects resolved wrong profiles; default-started Firefox without profile arguments still has ambiguous title/app matching and needs separate acceptance |
 | Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native Ubuntu capture/directory restoration passes; legacy launchers, prompt fallback, and ambiguity have regression coverage; Windows PowerShell and PowerShell7 custom portable-profile GUID, explicit executable, directory and new-window restoration pass; packaged cmd regression and refreshed18-check Konsole editor fixture pass; shared-process/multi-tab profile identity and concurrent terminal launch matching remain limited |
-| Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Partial | Executable launch passes native Windows/KDE fixtures; Calculator AUMID capture/activation/reuse and native KDE desktop-entry URL/document launch, working directory, reuse and missing-target errors pass; hosted UWP/packaged Win32 variants and D-Bus-activated desktop entries remain |
+| Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Partial | Executable launch passes native Windows/KDE fixtures; Calculator AUMID capture/activation/reuse and native KDE desktop-entry URL/document launch, working directory, reuse and missing-target errors pass; native D-Bus service autostart, Activate/Open URI delivery, forced new window, reuse and rejected activation now pass; hosted UWP/packaged Win32 variants remain |
 | Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Partial | Review/import/save verified natively on Windows and KDE; disabled keys, terminal fields, Firefox tabs and geometry retained; legacy package paths resolve a single registered AUMID during unsaved review; missing/ambiguous families stay editable; title/class/exe/PID/HWND/active WinTitle rules now migrate to reviewed selectors; undefined groups/duplicate or unknown criteria remain visible for manual review; both center actions convert |
 | Single instance, tray, settings failures, session cleanup, installers | Partial | Windows native single instance, registration failures and process-exit key release pass; fresh NSIS and Debian payloads inspected; Windows and Plasma5.27 tray handlers, close/reopen, and graceful shutdown pass; physical tray presentation, Plasma6 and installer execution checks remain |
 
@@ -886,3 +886,40 @@ Physical notification-area hit-testing/panel rendering remains separate.
 A native Plasma6 runtime image is being built from `tests/kde/Dockerfile.plasma6`
 by `hoster-warp-image-20261025-plasma6`. It has not yet supplied native acceptance
 evidence. The current Plasma5.27 overlapping-chord limitation remains unchanged.
+
+
+## D-Bus desktop activation and Debian prerequisites (2026-10-25)
+
+Portafort `portafort-warp-gui-20261025-dbus-activation` is inactive/exit0 and
+passes28 checks with `--desktop-entry --dbus-desktop-entry --tray`. The new
+four-check activation fixture starts with no bus owner. The private bus daemon
+starts the registered service; real org.freedesktop.Application Activate/Open
+creates visible owned windows. Capture records the desktop ID, Open receives the
+exact URL/file URI vector, forced new-window restore preserves the old window,
+and reuse invokes no new method. A deliberately rejected Open returns a bounded
+restore failure without consuming an existing window. GIO acknowledges dispatch
+asynchronously, so this rejection currently reports the existing12-second
+no-window error rather than the remote method's error text. Exec fallback is
+marked by a failing helper and must never run.
+
+`nested.sh` now creates its private XDG roots before starting its own session bus,
+so service autostart discovers only the fixture's registration in that root.
+Existing outer dbus-run-session wrappers remain compatible. Standalone Portafort
+`portafort-warp-live-20261025-private-bus-source` passes35 checks, including script
+unload, on Plasma5.27 Wayland. An earlier run lacked the standalone KWin source
+files in the GUI-only remote directory; that setup failure is retained separately.
+The application runtime did not change in this increment.
+
+Local receipts: `src-tauri/target/kde-validation/dbus-activation/`,
+`private-bus-live-source.log`, `qdbus-bundle.log`, `qdbus-apt-simulation.log`.
+All live KDE tests used WSL -> Hoster -> Portafort, in private KWin sessions.
+
+The Debian bundle now declares `qdbus-qt6 | qdbus-qt5 | qdbus` in addition to
+Tauri's GTK/WebKit/AppIndicator dependencies. Portafort's installed qdbus-qt5
+package depends on qtchooser, which owns its /usr/bin/qdbus shim. The rebuilt
+package's actual control metadata contains the alternatives, and apt-get -s on
+Portafort accepts it with only window-warp newly installed. This is a simulation,
+not installation/login acceptance. Builder unit
+`hoster-warp-bundle-20261025-qdbus` completed inactive/exit0. Updated Debian preview
+SHA256: `59b3b8761a0d75fb122dfcac5f3365fd0a442693158f00322d6314169c4dae7d`.
+Windows preview and runtime are unchanged; remaining parity gates still apply.

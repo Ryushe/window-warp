@@ -288,3 +288,25 @@ This image has private compositor/bus/runtime paths and no host display access.
 Its qdbus and kbuildsycoca aliases adapt the test scripts to Qt6 tools; they do
 not change the application's platform detection. An image build is not a native
 Plasma6 acceptance result. See PARITY.md for the current runtime evidence.
+
+
+### D-Bus desktop-entry activation
+
+Add `--dbus-desktop-entry` to the native GUI run. This requires python3-gi and
+uses dbus_app.py only as a private, daemon-started application fixture. nested.sh
+establishes private XDG roots before starting its session bus, so the daemon can
+discover the test's service registration without touching the login session.
+It now creates its own bus; older outer dbus-run-session wrappers still work.
+
+The test proves absent owner -> Activate autostart, native capture, exact Open
+URI payloads, separate-window placement, reuse without activation, and rejection
+without incorrectly reusing a window. An Exec fallback writes a failure marker.
+Cleanup verifies the helper's argv and process birth identity before signalling.
+The app's GIO dispatch is asynchronous; remote rejection can appear as the
+existing bounded12-second no-window restore error.
+
+Portafort `portafort-warp-gui-20261025-dbus-activation` passes28 combined checks
+with `--desktop-entry --dbus-desktop-entry --tray`. Receipts are in
+`src-tauri/target/kde-validation/dbus-activation/gui-dbus-activation/`, including
+gui-result.json and dbus-desktop-calls.json. The updated private bus also passes
+35 standalone KWin checks on Portafort. No login-session services were changed.

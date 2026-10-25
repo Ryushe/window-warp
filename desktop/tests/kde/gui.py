@@ -297,6 +297,134 @@ def test_tray(driver, environment, log, report):
     report["tray"] = proof
 
 
+def test_dbus_desktop_entry(environment, template, report):
+    from gi.repository import Gio, GLib
+
+    # nested.sh starts this bus only after establishing the private XDG roots.
+    data_home = Path(os.environ.get("WARP_PRIVATE_DBUS_DATA_HOME", "")).resolve()
+    runtime = Path(os.environ.get("XDG_RUNTIME_DIR", "")).resolve()
+    assert (runtime.parent.parent == Path("/tmp") and runtime.parent.name.startswith("window-warp-nested.")
+        and runtime.name == "runtime" and data_home == runtime.parent / "data"
+        and str(data_home) == os.environ.get("XDG_DATA_HOME")
+        and os.environ.get("WAYLAND_DISPLAY") == "warp-test" and (runtime / "warp-test").is_socket()), "D-Bus activation requires the private nested-session bus and data root"
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+
+    def daemon(method, signature, values):
+        return bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+            method, GLib.Variant(signature, values), None, Gio.DBusCallFlags.NONE, 3000, None).unpack()
+
+    def quoted(value):
+        value = str(value)
+        assert not any(char in value for char in '\n\r"\\%$`'), "Unsupported fixture path quoting"
+        return '"' + value + '"'
+
+    identity = "org.windowwarp.DBusFixture.p" + str(os.getpid())
+    helper = str(Path(__file__).with_name("dbus_app.py").resolve())
+    receipt_file = output / "dbus-desktop-calls.json"
+    diagnostic_file = output / "dbus-desktop-service.log"
+    fallback_file = output / "dbus-desktop-exec-fallback.json"
+    assert not any(p.exists() for p in [receipt_file, diagnostic_file, fallback_file]), "Use a fresh output directory for D-Bus activation receipts"
+    assert not daemon("NameHasOwner", "(s)", (identity,))[0], "Fixture identity already has an owner"
+    applications = Path(environment["XDG_DATA_HOME"]) / "applications"
+    services = data_home / "dbus-1/services"
+    applications.mkdir(parents=True, exist_ok=True)
+    services.mkdir(parents=True, exist_ok=True)
+    desktop = applications / (identity + ".desktop")
+    service = services / (identity + ".service")
+    assert not desktop.exists() and not service.exists(), "Refusing to overwrite a fixture registration"
+    desktop.write_text('[Desktop Entry]\nType=Application\nName=Window Warp D-Bus fixture\nDBusActivatable=true\nExec='
+        + ' '.join(quoted(v) for v in [sys.executable, helper, "--exec-fallback", fallback_file]) + ' %U\n')
+    service.write_text('[D-BUS Service]\nName=' + identity + '\nExec=/usr/bin/env QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=warp-test '
+        + ' '.join(quoted(v) for v in [sys.executable, helper, identity, receipt_file, diagnostic_file]) + '\n')
+    owned = None
+
+    def process_identity(pid):
+        stat = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        if stat[0] == "Z": raise ProcessLookupError("Fixture service has exited")
+        argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        assert argv[1:5] == [helper.encode(), identity.encode(), str(receipt_file).encode(), str(diagnostic_file).encode()], "D-Bus owner is not this fixture service"
+        return pid, stat[19]
+
+    def calls():
+        value = json.loads(receipt_file.read_text())
+        assert owned is not None and value["pid"] == owned[0] and value["applicationId"] == identity, value
+        assert not fallback_file.exists(), "GIO used desktop Exec fallback instead of D-Bus activation"
+        return value["calls"]
+
+    def windows():
+        assert owned is not None and process_identity(owned[0]) == owned
+        return [w for w in invoke("get_windows") if w["pid"] == owned[0] and w["desktopId"] == identity]
+
+    try:
+        daemon("ReloadConfig", "()", ())
+        item = json.loads(json.dumps(template["items"][0]))
+        item["window"].update({"id": "dbus-fixture-unstarted", "pid": 0, "appId": identity, "desktopId": identity, "title": "WARP-DBUS-1", "path": ""})
+        item["launch"] = {"kind": "desktop-entry", "program": identity, "args": [], "newWindow": True, "workingDirectory": ""}
+        profile = dict(template, id="dbus-desktop-launch", items=[item])
+        store = {"version": 1, "profiles": [profile]}
+        invoke("save_workspaces", {"store": store})
+        result = invoke("restore_workspace", {"id": profile["id"]})
+        assert len(result) == 1 and result[0]["restored"] and result[0]["launched"], result
+        pid = daemon("GetConnectionUnixProcessID", "(s)", (identity,))[0]
+        owned = process_identity(pid)
+        assert calls() == [{"method": "Activate", "uris": []}], calls()
+        first = windows()
+        assert len(first) == 1 and first[0]["rect"] == item["window"]["rect"], first
+        report["checks"].append("D-Bus desktop entry autostarts an absent owned service via Activate and restores its first visible window without Exec fallback")
+
+        capture = invoke("capture_workspace", {"name": "D-Bus fixture"})["profile"]
+        captured_items = [i for i in capture["items"] if i["window"]["pid"] == pid]
+        assert len(captured_items) == 1 and captured_items[0]["launch"]["kind"] == "desktop-entry" and captured_items[0]["launch"]["program"] == identity, captured_items
+        original_rect = dict(first[0]["rect"])
+        item["window"] = dict(first[0])
+        item["launch"]["args"] = ["https://example.test/a%20b?x=1&y=2", "file:///tmp/warp%20dbus%20document.txt"]
+        item["window"]["rect"] = dict(first[0]["rect"], x=first[0]["rect"]["x"] + 90)
+        invoke("save_workspaces", {"store": store})
+        result = invoke("restore_workspace", {"id": profile["id"]})
+        fresh = [w for w in windows() if w["id"] != first[0]["id"]]
+        assert result[0]["restored"] and result[0]["launched"] and len(fresh) == 1, result
+        assert calls() == [{"method": "Activate", "uris": []}, {"method": "Open", "uris": item["launch"]["args"]}], calls()
+        assert fresh[0]["rect"] == item["window"]["rect"], fresh
+        assert next(w for w in windows() if w["id"] == first[0]["id"])["rect"] == original_rect, "Forced-new activation moved the original window"
+        report["checks"].append("D-Bus desktop identity capture and Open preserve exact URI payloads and force a distinct owned window")
+
+        item["window"] = fresh[0]
+        item["launch"]["newWindow"] = False
+        invoke("save_workspaces", {"store": store})
+        result = invoke("restore_workspace", {"id": profile["id"]})
+        assert result[0]["restored"] and not result[0]["launched"] and len(windows()) == 2 and len(calls()) == 2, result
+        report["checks"].append("D-Bus desktop entry reuse restores an existing window without another activation")
+
+        item["launch"].update({"newWindow": True, "args": ["warp-fixture://reject"]})
+        invoke("save_workspaces", {"store": store})
+        result = invoke("restore_workspace", {"id": profile["id"]})
+        assert not result[0]["restored"] and result[0]["error"] and len(windows()) == 2, result
+        assert calls()[-1] == {"method": "Open", "uris": ["warp-fixture://reject"], "error": "org.windowwarp.Fixture.Rejected"} and len(calls()) == 3, calls()
+        # GIO can acknowledge dispatch before the remote method replies. In
+        # that case the real restore reports its bounded no-window failure.
+        report["dbusDesktopEntry"] = {"pid": pid, "applicationId": identity, "rejectedRestore": result[0], "execFallbackUsed": False}
+        report["checks"].append("a rejected D-Bus Open cannot falsely report a restored window or consume an existing one")
+    finally:
+        # The bus daemon owns this child, so prove exact argv and birth before
+        # signalling it; never kill a name owner based on its PID alone.
+        if owned is None and daemon("NameHasOwner", "(s)", (identity,))[0]:
+            owned = process_identity(daemon("GetConnectionUnixProcessID", "(s)", (identity,))[0])
+        if owned is not None:
+            try:
+                if process_identity(owned[0]) == owned:
+                    os.kill(owned[0], signal.SIGTERM)
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        if process_identity(owned[0]) != owned: break
+                        time.sleep(0.05)
+                    else:
+                        if process_identity(owned[0]) == owned: os.kill(owned[0], signal.SIGKILL)
+            except (FileNotFoundError, ProcessLookupError):
+                pass
+        service.unlink()
+        desktop.unlink()
+
+
 with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (output / "gui.log").open("w") as log:
     environment = os.environ.copy()
     environment.update({"TAURI_WEBVIEW_AUTOMATION": "true", "TAURI_AUTOMATION": "true", "GDK_BACKEND": "wayland", "XDG_CONFIG_HOME": temporary + "/config", "XDG_DATA_HOME": temporary + "/data", "XDG_CACHE_HOME": temporary + "/cache"})
@@ -520,6 +648,9 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             result = invoke("restore_workspace", {"id": desktop_profile["id"]})
             assert not result[0]["restored"] and not result[0]["launched"] and "not installed" in result[0]["error"], result
             report["checks"].append("missing desktop entry reports an activation error without starting a window")
+            invoke("save_workspaces", {"store": {"version": 1, "profiles": [captured, launched]}})
+        if "--dbus-desktop-entry" in sys.argv:
+            test_dbus_desktop_entry(environment, captured, report)
             invoke("save_workspaces", {"store": {"version": 1, "profiles": [captured, launched]}})
         click("#show-shortcuts")
         invoke("set_enabled", {"enabled": True})

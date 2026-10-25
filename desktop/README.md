@@ -58,7 +58,7 @@ Build outputs are under `src-tauri/target/release/`; installers are under its `b
 
 ## KDE setup
 
-Use a Plasma 5.27 or 6 session (Wayland or X11) and Qt's qdbus executable. Supported executable names are `qdbus6`, `qdbus-qt6`, `/usr/lib/qt6/bin/qdbus`, and `qdbus`. Package names differ by distribution; for example `qdbus` for Plasma 5, or `qdbus-qt6` / `qt6-tools` for Plasma 6. The app detects the script-object path and the script adapts to each version's window, desktop, and output APIs.
+Use a Plasma 5.27 or 6 session (Wayland or X11) and Qt's qdbus executable. Supported executable names are `qdbus6`, `qdbus-qt6`, `/usr/lib/qt6/bin/qdbus`, and `qdbus`. The Debian package declares `qdbus-qt6 | qdbus-qt5 | qdbus` as alternatives so the package manager can install the needed tool. For other distributions, package names vary: for example `qdbus-qt5` / `qdbus` for Plasma 5, or `qdbus-qt6` / `qt6-tools` for Plasma 6. The app detects the script-object path and the script adapts to each version's window, desktop, and output APIs.
 
 The application loads session-only KWin scripts via the session D-Bus service. KWin registers the shortcuts and performs window operations, so native Wayland windows do not depend on X11 automation. Pause unloads window actions and unheld app-gesture hooks. A cancelled held hook stays installed solely until release, so resuming cannot restart it from autorepeat. The pause/resume binding and workspace command bridge remain available. Quit removes the owned hooks; startup also reclaims hooks left by a crash. The shared scripts can be manually unloaded with your qdbus executable:
 

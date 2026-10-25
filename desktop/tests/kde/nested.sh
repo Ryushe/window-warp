@@ -1,14 +1,30 @@
 #!/usr/bin/env bash
-# Run with dbus-run-session. This creates a separate compositor and two outputs.
+# This creates a private session bus, compositor and two outputs.
 set -euo pipefail
+if [[ "${1:-}" == "--private-bus" ]]; then
+    shift
+    session_dir="${XDG_RUNTIME_DIR%/runtime}"
+    # This branch is entered only by our re-exec below. Keep activation services
+    # inside the same temporary root as the compositor and desktop metadata.
+    [[ "$session_dir" == /tmp/window-warp-nested.* && -d "$XDG_RUNTIME_DIR" &&
+       "$XDG_CONFIG_HOME" == "$session_dir/config" &&
+       "$XDG_DATA_HOME" == "$session_dir/data" &&
+       "$XDG_CACHE_HOME" == "$session_dir/cache" ]] || exit 1
+    export WARP_PRIVATE_DBUS_DATA_HOME="$XDG_DATA_HOME"
+else
+    test -d "${1:?Pass the desktop source directory}"
+    session_dir="$(mktemp -d /tmp/window-warp-nested.XXXXXX)"
+    export XDG_RUNTIME_DIR="$session_dir/runtime"
+    export XDG_CONFIG_HOME="$session_dir/config"
+    export XDG_DATA_HOME="$session_dir/data"
+    export XDG_CACHE_HOME="$session_dir/cache"
+    mkdir -m 700 "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
+    # dbus-daemon reads its activation search paths at startup. Start it after
+    # setting XDG roots so real service autostart cannot use the user's data.
+    exec dbus-run-session -- bash "$0" --private-bus "$@"
+fi
 root="$(cd "${1:?Pass the desktop source directory}" && pwd)"
 gui_output="${5:-}"
-session_dir="$(mktemp -d /tmp/window-warp-nested.XXXXXX)"
-export XDG_RUNTIME_DIR="$session_dir/runtime"
-export XDG_CONFIG_HOME="$session_dir/config"
-export XDG_DATA_HOME="$session_dir/data"
-export XDG_CACHE_HOME="$session_dir/cache"
-mkdir -m 700 "$XDG_RUNTIME_DIR"
 export QT_QPA_PLATFORM=offscreen KWIN_COMPOSE=Q XDG_CURRENT_DESKTOP=KDE
 unset DISPLAY WAYLAND_DISPLAY
 permission_checks=0

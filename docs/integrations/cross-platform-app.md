@@ -1746,3 +1746,72 @@ Final recheck confirms `hoster-warp-image-20261025-plasma6` remains active at
 package320/firefox-esr download. Resume by observing this exact unit; do not
 restart it merely because the large download has not emitted another log line.
 After it succeeds, sync the committed tests and run the native Plasma6 gates.
+
+
+## D-Bus activation and package prerequisites (2026-10-25)
+
+Branch/base/target unchanged; feature remains incomplete. This checkpoint changes
+Debian bundle dependencies and native fixture coverage, not application runtime.
+Lowest owner is this feature branch: main contains no desktop implementation.
+Parent handled private-bus setup, dependency metadata, remote dispatch, receipts
+and docs. /root/retile_review authored gui.py activation checks and dbus_app.py.
+/root/lifecycle_review owns the fresh read-only review; result is recorded below.
+Hoster cleanup sidecar inspected2, retained2 unregistered live scopes, stopped0.
+
+- Portafort live path reconfirmed: WSL SSH -> Hoster SSH -> Portafort, KWin5.27.11.
+  Unit portafort-warp-gui-20261025-dbus-activation is inactive/exit0,28 checks.
+  Flags --desktop-entry --dbus-desktop-entry --tray combine executable desktop
+  launch, real bus-daemon process autostart/Activate/Open, capture, URI vector,
+  new-window placement, reuse, rejection, and tray/single-instance/quit cleanup.
+  Four new D-Bus checks require absent initial name owner and no Exec fallback.
+  The rejected Open produces the existing12-second no-window restore failure;
+  the successful asynchronous GIO dispatch is still reported as launched=true.
+  No existing window is consumed. Receipts:
+  desktop/src-tauri/target/kde-validation/dbus-activation/gui-dbus-activation/.
+- nested.sh re-execs on a private bus after creating private XDG roots. This is
+  necessary for daemon service-file discovery. Its marker/inner branch validate
+  runtime/config/data/cache association; no normal session bus is used. Existing
+  outer dbus-run-session commands still work. Script identifiers and CLI remain
+  compatible; search found no consumer requiring the old inherited bus.
+- portafort-warp-live-20261025-private-bus-source is inactive/exit0:35 native
+  standalone checks pass, plasmaApi5, Wayland, scriptUnloaded=true. Prior unit
+  ...-private-bus failed/exit1 because this GUI-only remote root lacked standalone
+  src-tauri/kwin files. Synced the actual source and retried in a new owned unit;
+  this was fixture setup, not a runtime product defect. Logs under
+  target/kde-validation/private-bus-live{,-source}.log.
+- tauri.conf.json Debian depends now includes qdbus-qt6 | qdbus-qt5 | qdbus.
+  Actual bundle retains libayatana-appindicator3-1, libwebkit2gtk-4.1-0,libgtk-3-0.
+  Portafort qdbus-qt5 5.15.13-1 depends on qtchooser; /usr/bin/qdbus belongs to
+  qtchooser. hoster-warp-bundle-20261025-qdbus is inactive/exit0. The package was
+  copied locally and to Portafort's owned fixture directory; apt-get -s accepts
+  only window-warp as a new package. No installation occurred.
+  New local Deb size5020876, SHA256
+  59b3b8761a0d75fb122dfcac5f3365fd0a442693158f00322d6314169c4dae7d.
+  Actual control receipt target/release/bundle/deb/qdbus-control.txt;
+  build/apt simulation receipts target/kde-validation/qdbus-{bundle,apt-simulation}.log.
+  Windows NSIS and all runtime source remain at the previous verified checkpoint.
+
+Remote fetch was attempted again before edits; GitHub SSH host-key verification
+still fails. No merge/push or stable promotion is attempted; refresh is required
+before integration. All physical-display/login/install/Plasma6/overlap and
+remaining application identity requirements in PARITY.md remain active.
+
+
+Review closed: /root/lifecycle_review independently passed Python AST, JSON,
+Bash syntax and diff checks; inspected the actual28-check GUI and method-call
+receipts; no actionable findings. Tested qdbus-qt5 -> qtchooser dependency closes
+the path-discovery question on Ubuntu24; other distributions and actual package
+installation remain separate gates. Debian embedded executable SHA256 remains
+3347542378c9bb86acfd210aa69eae0bb25c45c994a8fa58cb7ee05c2958c437, identical to the
+previous preview payload (verified by streaming the actual usr/bin/window-warp
+archive member). Package metadata changed; executable behavior did not.
+
+Resume: hoster-warp-image-20261025-plasma6 is authoritatively ACTIVE under its
+bounded user service. Latest download log reached package436/libbluray2; download
+advanced from package320 during this turn. No restart. Current snapshot:
+target/kde-validation/plasma6/image-progress.log. Poll this exact unit. After
+terminal success, sync current tests (including nested.sh private bus and
+tray_host.py/dbus_app.py), record image/KWin/Qt versions, then run native Plasma6
+standalone and GUI/gesture/overlap checks. Portafort remains the live KDE machine
+via WSL -> Hoster -> Portafort; the container is supplemental Plasma6 acceptance.
+The known Plasma5.27 independent-overlap failure has not been changed or waived.
