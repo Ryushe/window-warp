@@ -7,7 +7,7 @@
 - Base commit: `7b907778f0022d73fb3527b82c0ab7ecedf8124d`
 - Intended eventual target: `main`; promotion/merge has not been requested
 - Last updated: 2026-10-25
-- Latest immutable recovery checkpoint: `d7976800cca251a4c8425cd7c32eee955cbbd627`
+- Latest immutable recovery checkpoint: `54f1901f049838971e876e28a584ddec442c94e5`
 - Feature implementation commits: `abfc95e` (desktop/workspace foundation), `ee7bee4` (Firefox profiles/tabs), `c09d79c` (terminal capture/editor/restore), `491a9d8` (KDE Firefox caption correction and complete 15-check native run), `5e6373d` (WSL distribution discovery and native directory restoration), `02d4e02` (reviewed shortcut reassignment and 12-check native KDE run), `b216f0c` (persistent pause and application control hotkeys, 15 native KDE checks), `d49e380` (14 native Windows application checks), `9794b75` (Windows tap/hold, activation deadlock correction, 18 Windows and 15 KDE native checks), `b63cb1d` (KDE native tap/hold, Wayland editor focus, 20 native KDE checks), `41fbc70` (KDE key reservation cleanup, 21 native KDE checks, held-key regression reproduced), `da23019` (held-key cancellation and deferred reassignment, verified script startup, 22 native KDE checks), `61233ff` (shared radial picker, 26 native KDE checks; initial 22 native Windows pass later superseded by rapid Escape regression), `4a92065` (reviewed INI migration and native import receipts), `9ccbaa7` (portable fixture line endings)
 - Canonical references: original root AHK files; `desktop/PARITY.md`
 
@@ -1964,3 +1964,9 @@ coordinates and app message, rerun bounded isolated6GUI, and distinguish
 asynchronous observation from a product positioning defect before patching.
 Then continue6overlap and the entire PARITY checklist. Keep the existing feature
 branch, no merge/push/stable activation; full goal remains active.
+
+Recovery checkpoint: `54f1901f049838971e876e28a584ddec442c94e5` contains the reviewed
+terminal identity fix, native regressions, private Plasma6 fixture authorization,
+and final receipts above. Staged diff/check passed; worktree was clean after
+that commit. This dossier-only follow-up records the immutable SHA. No remote
+publication, integration or installed runtime activation occurred.
