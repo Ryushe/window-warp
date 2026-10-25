@@ -2,6 +2,7 @@
 (() => {
     const shared = {
         "wm.move-left":"push-left", "wm.move-right":"push-right", "wm.pull-recent":"pull",
+        "wm.move-left-center":"push-left-center", "wm.move-right-center":"push-right-center",
         "wm.open-builder":"open-editor", "wm.open-opener":"open-workspaces",
         "wm.update-workspace":"update-workspace", "wm.toggle-suspend":"toggle-pause",
         "fullscreen.toggle":"toggle-maximize", "kill.close-active":"close-window"

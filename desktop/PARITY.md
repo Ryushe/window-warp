@@ -8,7 +8,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | Requirement / authoritative source | State | Evidence needed |
 | --- | --- | --- |
 | Monitor push, wrap, relative placement, maximized state, history pull (`window_manager.ahk`) | Partial | Existing tests; maximize/restore and monitor removal live on both OSes |
-| Push and center pointer; pull centers primary; 1-second X/C retiling | Pending | Pointer and timeout tests on both OSes, including Wayland |
+| Push and center pointer; pull centers primary; 1-second X/C retiling | Partial | Windows native app-pull centering passes; centered Windows push needs a second display; KDE native centered push/pull, permission refusal and X11 movement pass; timed X/C retiling remains unimplemented |
 | Four-way tiling; portrait mouse-aware tile choice | Partial | Four-way implemented; 18 live KDE checks cover vertical tiling; Windows mouse hold tiles natively and portrait/midpoint geometry has regression coverage; KDE native hold verifies key-down pointer choice; physical portrait acceptance remains |
 | Maximize/restore toggle (original “fullscreen”); graceful close | Partial | Implemented both OSes; live KDE verified; Windows owned-window action verification pending |
 | App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Implemented both OSes; tiled burner round trip live KDE verified; other layouts and Windows live checks pending |
@@ -23,7 +23,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Partial | 15 native KDE checks pass on the caption-fix build, including tabs/selection, same-title profile isolation, floating geometry and editor; codec/profile/launch tests pass; live Windows browser path pending |
 | Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native Ubuntu capture/directory restoration passes; legacy launchers, prompt fallback, and ambiguity have regression coverage; native PowerShell/custom-profile variants still required |
 | Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Partial | Ordinary executable launch and argument boundaries pass native Windows/KDE fixtures; packaged Windows and Linux desktop-entry launch remain |
-| Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Partial | Review/import/save verified natively on Windows and KDE; disabled keys, terminal fields, Firefox tabs and geometry retained; center actions, packaged launch and unsupported AHK matches still need conversion |
+| Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Partial | Review/import/save verified natively on Windows and KDE; disabled keys, terminal fields, Firefox tabs and geometry retained; packaged launch and unsupported AHK matches still need conversion; both center actions now convert |
 | Single instance, tray, settings failures, session cleanup, installers | Partial | Windows native single instance, registration failures and process-exit key release pass; final tray/graceful-exit and installer checks remain |
 
 ## Platform investigation

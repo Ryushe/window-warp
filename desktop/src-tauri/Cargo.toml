@@ -18,6 +18,10 @@ lz4_flex = "0.11"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5"
+wayland-client = "0.31"
+wayland-protocols-plasma = { version = "0.3", features = ["client"] }
+libc = "0.2"
+x11rb = "0.13"
 
 [target.'cfg(windows)'.dependencies]
 tauri-plugin-global-shortcut = "2"

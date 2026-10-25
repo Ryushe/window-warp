@@ -8,6 +8,8 @@ mod gesture;
 mod linux_control;
 #[cfg(target_os = "linux")]
 mod linux_gestures;
+#[cfg(target_os = "linux")]
+mod linux_pointer;
 #[cfg(windows)]
 #[path = "windows.rs"]
 mod platform;

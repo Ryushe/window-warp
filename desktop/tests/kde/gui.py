@@ -18,8 +18,10 @@ driver_binary = str(Path(sys.argv[2]).resolve())
 output = Path(sys.argv[3]).resolve()
 output.mkdir(parents=True, exist_ok=True)
 session = None
-if any(flag in sys.argv for flag in ["--resume-held", "--reassign-native", "--radial"]) and "--hold" not in sys.argv:
+if any(flag in sys.argv for flag in ["--resume-held", "--reassign-native", "--radial", "--pointer", "--pointer-denied"]) and "--hold" not in sys.argv:
     raise ValueError("Native gesture edge checks require --hold and the private compositor")
+if "--pointer" in sys.argv and "--pointer-denied" in sys.argv:
+    raise ValueError("Pointer authorization and refusal require separate compositor sessions")
 
 
 def kwin_loaded(name="window-warp-session"):
@@ -222,13 +224,13 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         assert all(w["rect"] == expected[w["id"]] for w in current), "New-window restore reused an existing fixture"
 
         # Verify metadata and restoration for all compositor state variants.
-        state_item = json.loads(json.dumps(captured["items"][0]))
+        state_item = json.loads(json.dumps(next(item for item in captured["items"] if item["window"]["title"] == "WARP-TEST-D")))
         for horizontal, vertical, fullscreen in [(True, False, False), (True, True, False), (False, False, True), (False, False, False)]:
             state_item["window"].update({"maximizedHorizontal": horizontal, "maximizedVertical": vertical, "fullscreen": fullscreen})
             state_profile = dict(captured, id="fixture-state", items=[state_item])
             invoke("save_workspaces", {"store": {"version": 1, "profiles": [state_profile]}})
             result = invoke("restore_workspace", {"id": state_profile["id"]})
-            assert result[0]["restored"], result
+            assert result[0]["restored"], {"restore":result,"desired":(horizontal, vertical, fullscreen),"actual":[{k:w[k] for k in ["id","title","maximizedHorizontal","maximizedVertical","fullscreen"]} for w in invoke("get_windows") if w["pid"] == fixture.pid or w["pid"] in launched_pids]}
             desired = (horizontal, vertical, fullscreen)
             actual = None
             for _ in range(30):
@@ -328,6 +330,8 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                 invoke_shortcut("open-workspaces")
                 wait_for("return !document.querySelector('#workspaces-page').hidden")
                 wait_window(lambda w:not w["active"],"editor takes focus before tap")
+                if "--pointer-denied" in sys.argv:
+                    keys.pointer(100,100)
                 chord(36)  # J
                 time.sleep(0.08)
                 assert not owned()["active"], "Tap ran before release"
@@ -336,6 +340,44 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                 assert owned()["rect"] == initial
                 keys.release()
                 report["checks"].append("Wayland key events deliver app tap on modifier-first release")
+
+                if "--pointer" in sys.argv or "--pointer-denied" in sys.argv:
+                    def read_pointer():
+                        return json.loads(subprocess.check_output([sys.executable, str(Path(__file__).with_name("pointer_probe.py"))], text=True))
+                if "--pointer-denied" in sys.argv:
+                    wait_for("return document.querySelector('#message').textContent.includes('pointer access')")
+                    assert read_pointer() == {"x":100,"y":100}
+                    report["checks"].append("KDE rejects undeclared pointer access, leaves cursor unchanged and shows the failure")
+                if "--pointer" in sys.argv:
+                    center = {"x":round(area["x"]+area["width"]/2),"y":round(area["y"]+area["height"]/2)}
+                    assert read_pointer() == center, "App pull must center on main"
+                    report["checks"].append("native Wayland app pull centers pointer with KDE desktop capability checks enabled")
+                    invoke("set_enabled", {"enabled":False})
+                    pointer_config = invoke("get_config")
+                    saved_config = json.loads(json.dumps(pointer_config))
+                    for index, action in enumerate(["push-right-center","push-left-center","pull"]):
+                        pointer_config["bindings"].append({"label":action,"action":action,"shortcut":f"Ctrl+Alt+Shift+F{8+index}","enabled":True,"appMatch":""})
+                    invoke("save_config", {"config":pointer_config})
+                    invoke("set_enabled", {"enabled":True})
+                    reset_window()
+                    keys.pointer(100,100)
+                    chord(66); keys.release()  # F8: real centered-push shortcut
+                    moved = wait_window(lambda w:w["monitor"] != target["monitor"],"center push changes monitor")
+                    expected = {"x":round(moved["workArea"]["x"]+moved["workArea"]["width"]/2),"y":round(moved["workArea"]["y"]+moved["workArea"]["height"]/2)}
+                    assert read_pointer() == expected
+                    chord(68); keys.release()  # F10: history pull
+                    wait_window(lambda w:w["rect"] == initial,"pull restores source placement")
+                    assert read_pointer() == center
+                    chord(67); keys.release()  # F9
+                    wait_window(lambda w:w["monitor"] != target["monitor"],"left center push wraps")
+                    assert read_pointer() == expected
+                    chord(68); keys.release()  # F10: history pull
+                    wait_window(lambda w:w["rect"] == initial,"second pull restores source placement")
+                    assert read_pointer() == center
+                    report["checks"].append("native KDE left/right centered push and history pull move pointer to the correct monitor")
+                    invoke("set_enabled", {"enabled":False})
+                    invoke("save_config", {"config":saved_config})
+                    invoke("set_enabled", {"enabled":True})
 
                 reset_window()
                 keys.pointer(area["x"]+20,area["y"]+20)

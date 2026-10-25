@@ -213,6 +213,8 @@ try {
     assert.deepEqual((await readOwned()).rect,initial);
     await native("key_up");
     checks.push("app-pull tap waits for release and accepts modifier-first release without tiling");
+    assert.deepEqual(await native("pointer_position"),{x:Math.round(area.x+area.width/2),y:Math.round(area.y+area.height/2)});
+    checks.push("native app pull centers the pointer on the configured main monitor");
 
     await placeOwned();
     await native("pointer",{x:area.x+20,y:area.y+20});
@@ -456,6 +458,31 @@ try {
     assert.equal(await exit(second,15000),0);
     assert.equal(app.exitCode,null);
     checks.push("second instance exits and preserves the existing app and settings");
+    const pointerConfig = await invoke("get_config");
+    const monitorAreas = await invoke("get_import_monitors");
+    if (monitorAreas.length > 1) {
+        await invoke("set_enabled",{enabled:false});
+        const centered = structuredClone(pointerConfig);
+        centered.bindings = ["push-left-center","push-right-center","pull"].map((action,i)=>({label:action,action,shortcut:`Ctrl+Alt+Shift+F${13+i}`,enabled:true,appMatch:""}));
+        await invoke("save_config",{config:centered});
+        await invoke("set_enabled",{enabled:true});
+        await placeOwned();
+        const before = await readOwned();
+        await native("pointer",{x:area.x+20,y:area.y+20});
+        const centerOf = r => ({x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)});
+        const primaryArea = monitorAreas.find(r=>r.x<=0 && r.x+r.width>0 && r.y<=0 && r.y+r.height>0) || monitorAreas.find(r=>r.x===0) || monitorAreas[0];
+        for (const key of [13,14]) {
+            await press(key);
+            const moved = await until(readOwned,w=>w.monitor !== before.monitor,"centered push reaches another monitor");
+            assert.deepEqual(await native("pointer_position"),centerOf(moved.workArea));
+            await press(15);
+            await until(readOwned,w=>w.monitor===before.monitor && w.rect.x===before.rect.x && w.rect.width===before.rect.width,"history pull restores owned window");
+            assert.deepEqual(await native("pointer_position"),centerOf(primaryArea));
+        }
+        await invoke("set_enabled",{enabled:false});
+        await invoke("save_config",{config:pointerConfig});
+        checks.push("native centered push in both directions and history pull use the destination and primary pointer centers");
+    } else skipped.push("Centered monitor push requires a second connected Windows monitor");
     report.passed = true;
 } catch (error) {
     report.error = String(error.stack || error);

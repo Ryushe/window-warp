@@ -248,3 +248,23 @@ test("application controls use the native bridge even when no desktop window is 
     f.trigger("Pause");
     assert.deepEqual(f.calls[0], ["fixture","/Control","com.windowwarp.Control","Action","test","toggle-pause"]);
 });
+
+for (const legacy of [false,true]) test(`pointer centers only on requested push and pull-to-main on Plasma ${legacy ? 5 : 6}`, () => {
+    const centerPush = {...push,action:"push-left-center"};
+    const f = fixture([centerPush,pull],legacy);
+    const centers = () => f.calls.filter(c=>c[3]==="CenterPointer").map(c=>JSON.parse(c[5]));
+    f.trigger("Push");
+    assert.deepEqual(centers(),[{x:541,y:1000}]);
+    f.trigger("Pull");
+    assert.deepEqual(centers().at(-1),{x:-960,y:540}); // no origin output: first sorted output
+    f.warp.run(push);
+    assert.equal(centers().length,2,"ordinary push leaves pointer alone");
+    const binding={action:"pull-app",appMatch:"firefox",shortcut:"Ctrl+J",mainMonitorAction:"burner",burnerLayout:"float"};
+    f.warp.run(binding,{mainMonitor:1,burnerMonitor:2});
+    assert.deepEqual(centers().at(-1),{x:-960,y:540});
+    assert.equal(centers().length,3);
+    f.warp.run(binding); // active on main: send to burner
+    assert.equal(centers().length,3);
+    f.warp.run(binding,undefined,{x:-1800,y:200}); // hold tile does not move pointer
+    assert.equal(centers().length,3);
+});

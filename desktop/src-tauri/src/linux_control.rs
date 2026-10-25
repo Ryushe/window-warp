@@ -9,7 +9,7 @@ use std::{
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 const SERVICE: &str = "com.windowwarp.Control";
 const PATH: &str = "/Control";
@@ -28,6 +28,28 @@ struct Endpoint {
 }
 #[zbus::interface(name = "com.windowwarp.Control")]
 impl Endpoint {
+    fn center_pointer(&self, token: &str, point: &str) {
+        if token != self.token {
+            return;
+        }
+        let Ok(point) = serde_json::from_str::<crate::radial::Point>(point) else {
+            return;
+        };
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let result = crate::linux_pointer::move_to(point).and_then(|_| {
+                let actual = crate::platform::pointer(&app)?;
+                if actual.x == point.x && actual.y == point.y {
+                    Ok(())
+                } else {
+                    Err("KDE did not move the pointer to the requested monitor center.".to_string())
+                }
+            });
+            if let Err(error) = result {
+                let _ = app.emit("warp-error", error);
+            }
+        });
+    }
     // The unguessable, one-use ticket acknowledges only a pending local load.
     // It grants no action or configuration authority.
     fn script_ready(&self, ticket: &str) {

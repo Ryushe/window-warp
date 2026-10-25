@@ -77,6 +77,14 @@ class Receiver(QObject):
         QTimer.singleShot(200, app.quit)
 
 
+class PointerReceiver(QObject):
+    Q_CLASSINFO("D-Bus Interface", "com.windowwarp.Control")
+    @pyqtSlot(str, str)
+    def CenterPointer(self, token, point):
+        result.setdefault("pointerRequests", []).append(json.loads(point))
+
+pointer_receiver = PointerReceiver()
+assert bus.registerObject("/Control", pointer_receiver, QDBusConnection.ExportAllSlots)
 receiver = Receiver()
 if not bus.registerService(service) or not bus.registerObject("/Smoke", receiver, QDBusConnection.ExportAllSlots):
     raise RuntimeError("Cannot register test result receiver on the session bus")
@@ -98,6 +106,7 @@ configuration = {"settings": {"mainMonitor": 1, "burnerMonitor": 2}, "bindings":
 ]}
 script = "var WARP_CONFIG = " + json.dumps(configuration) + ";\nvar testCallbacks = {};\nvar nativeRegisterShortcut = registerShortcut;\nvar registeredTestIds = [];\n"
 script += "(function(registerShortcut) {\n" + source + "\n})(function(id, label, key, callback) { testCallbacks[label] = callback; var testId = 'window-warp-smoke-' + id; registeredTestIds.push(testId); return nativeRegisterShortcut(testId, label, key, callback); });\n"
+script = "var WARP_APP = " + json.dumps({"service":service,"token":"fixture"}) + ";\n" + script
 script += harness
 temporary = tempfile.TemporaryDirectory(prefix="window-warp-live-")
 script_path = Path(temporary.name) / "live.js"

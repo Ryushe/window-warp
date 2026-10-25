@@ -13,7 +13,7 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const monitors = [{x:-1920,y:30,width:1920,height:1050},{x:0,y:0,width:1920,height:1080}];
 const workspace = extra => `[Meta]\ncount=1\n[Profile1]\nid=old-id\nname=Work\nitemCount=1\n[Profile1Item1]\nprocessName=WindowsTerminal.exe\npath=C:\\WindowsApps\\Terminal.exe\ntitle=Dev\nx=-1800\ny=120\nw=800\nh=600\nstate=1\nmonitorIndex=1\n${extra}`;
 
-test("real app/shared/settings INIs retain behavior and report unsupported center actions",()=>{
+test("real app/shared/settings INIs retain behavior including pointer-center actions",()=>{
     const read = name => decode(fs.readFileSync(new URL("./fixtures/legacy/"+name+".fixture",import.meta.url)));
     const apps = preview(read("window_manager_apps.ini"));
     assert.equal(apps.length,10);
@@ -22,10 +22,11 @@ test("real app/shared/settings INIs retain behavior and report unsupported cente
     assert.equal(apps[1].value.mainMonitorAction,"focus-last");
     const hotkeys = preview(read("hotkey_registry.ini"));
     assert.equal(hotkeys.length,11);
-    assert.equal(hotkeys.filter(e=>e.value).length,9);
-    assert.equal(hotkeys[2].value,null);
+    assert.equal(hotkeys.filter(e=>e.value).length,11);
+    assert.equal(hotkeys[2].value.action,"push-left-center");
+    assert.equal(hotkeys[3].value.action,"push-right-center");
     assert.match(hotkeys[2].raw,/wm.move-left-center/);
-    assert.match(hotkeys[2].problems[0],/not supported/);
+    assert.equal(hotkeys[2].problems.length,0);
     assert.deepEqual(plain(preview(read("windows_warp_settings.ini"))[0].value),{holdDelayMs:400,holdTileEnabled:true,holdMode:"radial"});
 });
 test("disabled shortcuts preserve their key; Linux app matches require explicit adaptation",()=>{

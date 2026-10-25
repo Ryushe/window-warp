@@ -24,6 +24,16 @@ var Warp = (function () {
     function area(output) {
         return workspace.clientArea(KWin.MaximizeArea, modern ? output : output.id, workspace.currentDesktop);
     }
+    function primary(all) {
+        return all.filter(function(s) { return s.geometry.x === 0 && s.geometry.y === 0; })[0] || all[0];
+    }
+    function centerPointer(output) {
+        var r = area(output);
+        function round(value) { return value < 0 ? -Math.round(-value) : Math.round(value); }
+        var point = {x:round(r.x + r.width/2), y:round(r.y + r.height/2)};
+        var endpoint = typeof WARP_CONTROL !== "undefined" ? WARP_CONTROL : WARP_APP;
+        callDBus(endpoint.service, "/Control", "com.windowwarp.Control", "CenterPointer", endpoint.token, JSON.stringify(point));
+    }
     function windows() { return Array.prototype.slice.call(modern ? workspace.stackingOrder : workspace.clientList()); }
     function active() { return modern ? workspace.activeWindow : workspace.activeClient; }
     function outputFor(window, all) { return modern ? window.output : all.filter(function (s) { return s.id === window.screen; })[0]; }
@@ -100,7 +110,7 @@ var Warp = (function () {
             focus(window);
             return;
         }
-        if (from !== main) { moveRelative(window, from || main, main); focus(window); return; }
+        if (from !== main) { moveRelative(window, from || main, main); focus(window); centerPointer(main); return; }
         if (wasActive && binding.mainMonitorAction === "focus-last") {
             var previous = windows().filter(function (w) { return !w.deleted && String(w.internalId) === previousWindows[binding.shortcut]; })[0];
             if (previous) focus(previous);
@@ -118,6 +128,7 @@ var Warp = (function () {
             } else moveRelative(window, main, burner);
         }
         focus(window);
+        if (!wasActive) centerPointer(main);
     }
     function run(binding, overrides, holdPointer, selected, previous) {
         if (["toggle-pause", "open-editor", "open-workspaces", "update-workspace"].indexOf(binding.action) >= 0) {
@@ -149,6 +160,7 @@ var Warp = (function () {
                 send(existing, output);
                 existing.frameGeometry = relative(previous.rect, previous.area, area(output));
                 focus(existing);
+                centerPointer(primary(all));
                 return;
             }
             return;
@@ -166,7 +178,7 @@ var Warp = (function () {
             return;
         }
         if (all.length < 2 || !window.moveableAcrossScreens) return;
-        var next = (current + (binding.action === "push-left" ? all.length-1 : 1)) % all.length;
+        var next = (current + (binding.action.indexOf("push-left") === 0 ? all.length-1 : 1)) % all.length;
         var original = copy(window.frameGeometry);
         if (history.length >= 100) history.shift();
         history.push({ id: String(window.internalId), rect: original, output: all[current].name, area: copy(source) });
@@ -174,6 +186,7 @@ var Warp = (function () {
         // KWin retains maximize/fullscreen state when sending to another output.
         // For floating windows, apply the same relative placement as Windows.
         window.frameGeometry = relative(original, source, area(all[next]));
+        if (binding.action === "push-left-center" || binding.action === "push-right-center") centerPointer(all[next]);
     }
     WARP_CONFIG.bindings.forEach(function (binding, index) {
         if (binding.enabled === false) return;

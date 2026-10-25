@@ -63,19 +63,12 @@ pub fn restore_window(
     let command = serde_json::json!({"kind":"restore", "window":{"id": current.id, "pid":current.pid}, "placement":saved});
     // Wayland clients acknowledge geometry asynchronously. In particular,
     // Firefox's unmaximize acknowledgement can supersede the first resize.
-    // Verify normal floating placement and retry that operation after the
-    // transition; there is no polling while the app is idle.
+    // Verify the requested state and normal floating placement, retrying after
+    // the transition; there is no polling while the app is idle.
     for _ in 0..3 {
         let requested: crate::geometry::Rect =
             serde_json::from_value(crate::linux_control::request(app, command.clone())?)
                 .map_err(|e| format!("Invalid KWin placement response: {e}"))?;
-        if saved.maximized_horizontal
-            || saved.maximized_vertical
-            || saved.fullscreen
-            || saved.minimized
-        {
-            return Ok(());
-        }
         for _ in 0..10 {
             std::thread::sleep(std::time::Duration::from_millis(40));
             let windows = snapshot(app)?;
@@ -83,16 +76,20 @@ pub fn restore_window(
                 .iter()
                 .find(|w| w.id == current.id && w.pid == current.pid)
                 .ok_or("The selected window closed while restoring its placement.")?;
-            if actual.rect == requested
-                && !actual.maximized_horizontal
-                && !actual.maximized_vertical
-                && !actual.fullscreen
-            {
+            let state_matches = actual.maximized_horizontal == saved.maximized_horizontal
+                && actual.maximized_vertical == saved.maximized_vertical
+                && actual.fullscreen == saved.fullscreen
+                && actual.minimized == saved.minimized;
+            let floating = !saved.maximized_horizontal
+                && !saved.maximized_vertical
+                && !saved.fullscreen
+                && !saved.minimized;
+            if state_matches && (!floating || actual.rect == requested) {
                 return Ok(());
             }
         }
     }
-    Err("The app did not accept the saved window size. It may enforce a minimum size or have changed its layout.".into())
+    Err("The app did not accept the saved window size or state. It may enforce a minimum size or have changed its layout.".into())
 }
 pub fn focus_window(app: &AppHandle, window: &crate::workspaces::WindowInfo) -> Result<(), String> {
     crate::linux_control::request(

@@ -169,6 +169,11 @@ try:
                 if not user.UnregisterHotKey(windows[0], key):
                     raise c.WinError(c.get_last_error())
                 reserved.discard(key)
+            elif command == "pointer_position":
+                point = w.POINT()
+                if not user.GetCursorPos(c.byref(point)):
+                    raise c.WinError(c.get_last_error())
+                result = {"x": point.x, "y": point.y}
             elif command == "pointer":
                 point = w.POINT()
                 if not user.GetCursorPos(c.byref(point)):

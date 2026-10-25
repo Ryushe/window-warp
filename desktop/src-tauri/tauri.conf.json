@@ -10,5 +10,6 @@
       { "label": "radial", "title": "Window Warp Picker", "url": "radial.html", "width": 260, "height": 260, "visible": false, "focus": false, "decorations": false, "resizable": false, "alwaysOnTop": true, "skipTaskbar": true }],
     "security": { "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost" }
   },
-  "bundle": { "active": true, "targets": "all", "icon": ["icons/icon.png", "icons/icon.ico"] }
+  "bundle": { "active": true, "targets": "all", "icon": ["icons/icon.png", "icons/icon.ico"],
+    "linux": {"deb": {"desktopTemplate": "linux.desktop.hbs"}, "rpm": {"desktopTemplate": "linux.desktop.hbs"}} }
 }

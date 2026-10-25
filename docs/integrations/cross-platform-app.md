@@ -6,7 +6,7 @@
 - Worktree: existing `hotkeyable_windows` checkout
 - Base commit: `7b907778f0022d73fb3527b82c0ab7ecedf8124d`
 - Intended eventual target: `main`; promotion/merge has not been requested
-- Last updated: 2026-10-24
+- Last updated: 2026-10-25
 - Latest immutable recovery checkpoint: `df6b28b772f91d4ea323f76550c269a0d1fd201f`
 - Feature implementation commits: `abfc95e` (desktop/workspace foundation), `ee7bee4` (Firefox profiles/tabs), `c09d79c` (terminal capture/editor/restore), `491a9d8` (KDE Firefox caption correction and complete 15-check native run), `5e6373d` (WSL distribution discovery and native directory restoration), `02d4e02` (reviewed shortcut reassignment and 12-check native KDE run), `b216f0c` (persistent pause and application control hotkeys, 15 native KDE checks), `d49e380` (14 native Windows application checks), `9794b75` (Windows tap/hold, activation deadlock correction, 18 Windows and 15 KDE native checks), `b63cb1d` (KDE native tap/hold, Wayland editor focus, 20 native KDE checks), `41fbc70` (KDE key reservation cleanup, 21 native KDE checks, held-key regression reproduced), `da23019` (held-key cancellation and deferred reassignment, verified script startup, 22 native KDE checks), `61233ff` (shared radial picker, 26 native KDE checks; initial 22 native Windows pass later superseded by rapid Escape regression), `4a92065` (reviewed INI migration and native import receipts), `9ccbaa7` (portable fixture line endings)
 - Canonical references: original root AHK files; `desktop/PARITY.md`
@@ -693,3 +693,80 @@ push, installation or user-session activation; this remains an incomplete port.
 
 Recoverable focus-loss implementation checkpoint: `df6b28b772f91d4ea323f76550c269a0d1fd201f`
 on `codex/cross-platform-app`. This dossier-only follow-up records its exact SHA.
+
+
+## Pointer-centering implementation — native Linux checks verified
+
+Added explicit push-left-center/push-right-center actions to the editor, validators
+and original shared-hotkey INI conversion. Ordinary push preserves pointer location;
+centered push uses the destination work area; history pull centers the primary;
+app pull centers main when bringing/focusing an inactive app there. Hold tiling,
+burner moves and focus-last retain their original pointer behavior.
+
+Windows uses SetCursorPos. KDE Wayland uses the declared fake-input capability
+through generated Rust protocol bindings, a fresh connection per operation and
+a two-second response deadline. X11 uses WarpPointer. The Debian/RPM desktop entry
+includes an absolute installed path and X-KDE-Wayland-Interfaces. The built Debian
+entry was inspected and resolves to /usr/bin/window-warp. No permission bypass is
+introduced in the application. Missing/refused access reaches the existing error UI.
+
+Current local checks: 55 Node tests, 50 Windows Rust tests (two existing terminal
+opt-ins ignored), formatting and syntax checks pass. Full Windows native receipt
+`desktop/src-tauri/target/windows-validation/WARP-NATIVE-91dccd23-8637-4a00-9166-3053af6527b8/`
+passes 25 checks. Its new centered push/history test explicitly skips because this
+Windows session exposes only one monitor. App-pull centering is verified. Normal
+debug build restoration passes. Do not count multi-monitor Windows pointer behavior
+as verified; rerun the same fixture when another display is connected.
+
+`hoster-warp-build-20261025-pointer` built successfully with 46 Rust and 55 Node
+tests, executable and Debian package. Additional timeout coverage passes in
+`hoster-warp-tests-20261025-pointer`: 47 Rust tests, one X11 native opt-in ignored.
+Portafort's configured 192.168.0.146 address became unreachable from Hoster before
+new tests could be synced. No matching named Tailscale peer was found. A question
+is pending with the user; there is no active Portafort pointer-test unit.
+
+A disposable Hoster KDE image now permits testing without the host seat or bus.
+The first run could not execute KWin's capability-marked binary under Docker's
+normal bounding set; the test image removes that unneeded resource capability
+for its virtual backend. No host capability or service setting changed. The next
+run reached native workspace restore and exposed an incomplete test desktop:
+without a working window decoration, KWin retained maximize state instead of
+entering fullscreen. Adding the standard Breeze decoration resolves this native
+fixture prerequisite. Linux restoration now also confirms requested minimized/
+maximize/fullscreen state rather than reporting success when the compositor
+refuses it. The original assertion is preserved, with richer failure diagnostics
+and an unambiguous owned window. This supersedes the initial race diagnosis.
+
+Build/47-test verification completed in `hoster-warp-pointer-20261025-statecheck`.
+Its Xvfb wrapper stalled as container PID 1 before executing the test. Inspection
+confirmed the X socket was ready and the wrapper was in sigsuspend; only that
+owned container/unit was stopped. Docker --init fixes the handshake. The native
+X11 opt-in then passed in `hoster-warp-native-20261025-pointer`.
+
+The earlier `hoster-warp-gui-20261025-pointer-keys` and `pointer-focus` runs are
+terminal failures: rewriting a desktop declaration and rebuilding sycoca did not
+revoke pointer access in that already-running compositor. The fixture now uses
+separate fresh compositor sessions for authorization and refusal; it does not
+weaken permissions or assume runtime capability revocation.
+
+`hoster-warp-gui-20261025-pointer-accepted` is inactive/exit 0, with 31 native
+checks using `--hold --pointer --resume-held --reassign-native --radial --import`.
+`hoster-warp-gui-20261025-pointer-denied` is inactive/exit 0, with 21 native
+checks using `--hold --pointer-denied`. The latter starts with no app capability
+declaration and verifies that the app still focuses its target, the pointer stays
+unchanged, and the editor reports missing access. Authorized app pulls, both
+centered pushes and history pulls verify actual compositor cursor coordinates.
+The pointer probe is restricted to the owned nested runtime. No test remains active.
+
+Reports, logs and screenshots were retrieved to
+`desktop/src-tauri/target/kde-validation/pointer-accepted/` and `pointer-denied/`.
+Radial and import screenshots were inspected. The accepted remote output is
+`~/.cache/window-warp-01a16f69/src-tauri/target/kde-container-pointer-accepted/`;
+the denied output uses `kde-container-pointer-denied/`. Node tests (55), JavaScript
+syntax, Rust formatting and Python syntax pass on the final source. Windows has
+12.7 GiB available of 31.6 GiB at this checkpoint, so memory does not block builds.
+
+Next: implement the one-second X/C retile lifecycle, then every other incomplete
+PARITY requirement. Windows two-display pointer acceptance and real Plasma 6
+remain required; the container checks establish Plasma 5.27 behavior only.
+No merge, push, installation or activation. Original AHK remains unchanged.

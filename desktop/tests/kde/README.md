@@ -181,3 +181,43 @@ review never saves, then explicitly saves a Windows-scoped terminal workspace.
 The baseline plus import passes 17 checks in `hoster-warp-gui-20261024-import`.
 Its screenshot is `window-warp-import-kde.png`. Windows separately verifies
 native selection of actual files from disk.
+
+
+### Pointer capability and isolated Linux test desktop
+
+Add `--pointer` with `--hold` to the native GUI invocation. The nested runner then
+uses normal KWin permission checks. It creates desktop capability declarations
+for the tested executable and keyboard fixture only inside the temporary XDG
+data directory. It checks app-pull centering, both centered push actions and history
+pull. Run a separate session with `--hold --pointer-denied` to check refusal with
+no app capability declaration from startup, including an unchanged pointer and
+the editor's error message. Do not test refusal by editing a declaration in an
+already-running compositor: the tested KWin session continued to authorize it.
+`pointer_probe.py` reads
+the private compositor's cursor through a temporary KWin script. It does not
+attach to the user's session. The combined pointer/hold/radial/reassignment/import
+run passes 31 native checks on Plasma 5.27; the separate refusal run passes 21.
+Reports: `src-tauri/target/kde-validation/pointer-{accepted,denied}/`.
+
+A disposable test image can run without an existing KDE desktop:
+
+```sh
+docker build -t window-warp-build:local -f tests/kde/Dockerfile .
+docker build -t window-warp-gui:local -f tests/kde/Dockerfile.gui .
+docker run --rm --init --network=none --cpus=2 --memory=3g --shm-size=256m \
+  --mount type=bind,source="$PWD",target=/work window-warp-gui:local
+```
+
+Build the application first using the builder. The GUI image uses its matching
+WebKit driver; it does not mount the host display socket or session bus. Its
+optional X11 test runs against a separate Xvfb server:
+
+```sh
+xvfb-run -a env WARP_TEST_X11=1 cargo test --release --locked \
+  --manifest-path src-tauri/Cargo.toml native_x11_pointer_round_trip -- --ignored
+```
+
+The installed Debian/RPM desktop entry declares
+`X-KDE-Wayland-Interfaces=org_kde_kwin_fake_input` and an absolute executable path.
+A standalone development executable needs a matching desktop entry to center the
+pointer on Wayland. Never disable KWin's permission checks on the user's desktop.

@@ -154,6 +154,8 @@ impl Config {
             if ![
                 "push-left",
                 "push-right",
+                "push-left-center",
+                "push-right-center",
                 "pull",
                 "tile-left",
                 "tile-right",

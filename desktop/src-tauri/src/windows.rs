@@ -109,6 +109,14 @@ unsafe fn focus(hwnd: HWND) -> Result<(), String> {
     }
     Ok(())
 }
+unsafe fn center_pointer(area: Rect) -> Result<(), String> {
+    let x = (f64::from(area.x) + f64::from(area.width) / 2.0).round() as i32;
+    let y = (f64::from(area.y) + f64::from(area.height) / 2.0).round() as i32;
+    if SetCursorPos(x, y) == 0 {
+        return Err(error("Cannot center the pointer"));
+    }
+    Ok(())
+}
 unsafe extern "system" fn collect_window(hwnd: HWND, data: LPARAM) -> BOOL {
     if IsWindowVisible(hwnd) != 0
         && GetWindow(hwnd, GW_OWNER).is_null()
@@ -473,7 +481,11 @@ unsafe fn pull_app_target(
             IsZoomed(hwnd) != 0,
         )?;
     }
-    focus(hwnd)
+    focus(hwnd)?;
+    if current != all[main].0 || !was_active {
+        center_pointer(all[main].1)?;
+    }
+    Ok(())
 }
 
 unsafe fn execute(binding: &Binding, settings: &Settings) -> Result<(), String> {
@@ -530,7 +542,14 @@ unsafe fn execute(binding: &Binding, settings: &Settings) -> Result<(), String> 
                 history.push(previous);
                 return Err(e);
             }
-            return focus(hwnd);
+            focus(hwnd)?;
+            let primary = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) as usize;
+            return center_pointer(
+                all.iter()
+                    .find(|(id, _)| *id == primary)
+                    .unwrap_or(&all[0])
+                    .1,
+            );
         }
         return Err("No pushed window to bring back.".into());
     }
@@ -567,7 +586,7 @@ unsafe fn execute(binding: &Binding, settings: &Settings) -> Result<(), String> 
     if all.len() < 2 {
         return Err("Connect a second monitor to push windows.".into());
     }
-    let next = if action == "push-left" {
+    let next = if action == "push-left" || action == "push-left-center" {
         (index + all.len() - 1) % all.len()
     } else {
         (index + 1) % all.len()
@@ -586,6 +605,9 @@ unsafe fn execute(binding: &Binding, settings: &Settings) -> Result<(), String> 
         rect: old,
         maximized,
     });
+    if action.ends_with("-center") {
+        center_pointer(all[next].1)?;
+    }
     Ok(())
 }
 
