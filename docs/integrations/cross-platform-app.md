@@ -423,3 +423,51 @@ INI migration and remaining platform acceptance. Physical portrait displays,
 Plasma 6, final installers and independent release review remain required.
 All `desktop/PARITY.md` rows stay in scope. No build or GUI unit from this
 increment remains active. No merge, push or user-session activation was made.
+
+
+## KDE native key reassignment
+
+Native regression `--hold --reassign-native` reproduced an inactive app-pull
+reservation blocking a new tile action on the same key. The old direct-dispatch
+UI test could not detect this. `linux.rs::unload_script` now forgets the unloaded
+script's own action family via KGlobalAccel `unregister(component, action)`.
+Window actions, persistent pause, and command transport have separate ownership
+predicates. Unknown/foreign action names are excluded; no whole-component cleanup
+or user shortcut file editing occurs. This feature branch owns all affected code;
+there is no ancestor implementation to patch or descendant to propagate to.
+
+The supported two-string `unregister` contract is verified against KDE's v5.115
+runtime source and current D-Bus XML. Avoid the deprecated `unRegister` variant,
+which expects a four-element action-ID array. Source records are in the ignored
+research quarantine: `20261025T033939Z-28363e9099` (runtime) and
+`20261025T033953Z-3b4ad2b845` (current XML). The actual implementation uses only
+the supported method. Native callback IDs/generation cancellation are unchanged.
+
+Linux build `hoster-warp-build-20261024-kde-unregister` is inactive, exit 0:
+41 Rust tests, 40 Node tests, release executable and Debian package. Two new Rust
+checks verify cleanup ownership boundaries. Rust formatting, Python syntax and
+`git diff --check` pass. No Windows production code changed.
+Native `hoster-warp-gui-20261024-kde-unregister` is inactive, exit 0, all 21 checks
+passing. It verifies the reassigned key performs its new action, old hold IDs are
+removed on pause, and pause/control/foreign IDs survive. Report, signal trace and
+screenshot: `desktop/src-tauri/target/kde-validation/reassign-native/`; remote
+`~/.cache/window-warp-01a16f69/gui-kde-unregister/`. Nested logs:
+`/tmp/window-warp-nested.NbMnIx`.
+
+A separate explicit regression now reproduces the remaining held-key bug:
+`nested.sh ... --gui BINARY DRIVER OUTPUT --hold --resume-held` pauses and resumes
+before releasing the original chord. Autorepeat revives a cancelled gesture.
+`hoster-warp-gui-20261024-kde-resume-red` failed on the prior checkpoint;
+`hoster-warp-gui-20261024-kde-resume-cleanup` fails the same assertion on this
+build (terminal exit 1). The regression is intentionally retained, optional and
+clearly documented as failing. Ordinary pause cancellation and later resume
+still pass. All jobs from this increment are terminal.
+
+Next: fix the native held-key release lifecycle and make `--resume-held` pass
+without time-based suppression. KGlobalAccel's unload signal cannot alone prove
+physical key release; preserve observation of an already-held chord through
+pause/resume, while ensuring unrelated paused keys are released. Then continue
+both radial pickers, pointer/retile behavior, INI migration and remaining platform
+checks. These requirements remain in `desktop/PARITY.md`; this checkpoint is
+partial feature work. No merge, push, user-session activation or final installer
+release is claimed.

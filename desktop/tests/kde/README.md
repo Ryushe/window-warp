@@ -138,3 +138,16 @@ separate acceptance checks.
 Implementation references: [KGlobalAccel signals](https://github.com/KDE/kglobalaccel/blob/v5.115.0/src/runtime/component.cpp),
 [KDE fake-input protocol](https://github.com/KDE/plasma-wayland-protocols/blob/master/src/protocols/fake-input.xml),
 and [KWin's test permission switch](https://github.com/KDE/kwin/blob/v5.27.11/src/wayland_server.cpp).
+
+
+Add `--reassign-native` alongside `--hold` to verify that moving a key from an
+app-pull binding to a tiling binding delivers the new native action. It also
+checks that pause removes old hold reservations while preserving the pause,
+control, and unrelated KDE action IDs. This is stronger evidence than invoking
+an action by ID through D-Bus.
+
+`--hold --resume-held` is the explicit cancellation regression: pause and resume
+before releasing the original chord, then assert neither tap nor hold runs.
+It currently reproduces a known KDE autorepeat bug and is not a passing parity
+gate. Keep it failing until the native release lifecycle is fixed; a timing
+workaround or removing the assertion does not satisfy the original behavior.

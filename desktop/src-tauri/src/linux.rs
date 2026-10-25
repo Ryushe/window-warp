@@ -226,5 +226,111 @@ pub fn unload_script(name: &str) -> Result<(), String> {
             return Err("KWin could not unload the shortcuts. Try pausing again.".into());
         }
     }
+    forget_script_shortcuts(name)
+}
+
+// Unloading a KWin script only marks its actions inactive. KDE keeps their
+// saved key reservations, which can block our own edited/reassigned bindings.
+// Remove only the action family belonging to the script we just unloaded.
+fn owns_shortcut(script: &str, id: &str) -> bool {
+    match script {
+        "window-warp-pause-session" => id.starts_with("window-warp-toggle-pause-"),
+        "window-warp-control-session" => id == "window-warp-control-dispatch",
+        SCRIPT_NAME => [
+            "hold",
+            "push-left",
+            "push-right",
+            "pull",
+            "tile-left",
+            "tile-right",
+            "tile-up",
+            "tile-down",
+            "focus-app",
+            "pull-app",
+            "toggle-maximize",
+            "close-window",
+            "open-editor",
+            "open-workspaces",
+            "update-workspace",
+        ]
+        .iter()
+        .any(|action| id.starts_with(&format!("window-warp-{action}-"))),
+        _ => false,
+    }
+}
+
+fn forget_script_shortcuts(script: &str) -> Result<(), String> {
+    let connection = zbus::blocking::connection::Builder::session()
+        .map_err(|e| e.to_string())?
+        .method_timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let component = zbus::blocking::Proxy::new(
+        &connection,
+        "org.kde.kglobalaccel",
+        "/component/kwin",
+        "org.kde.kglobalaccel.Component",
+    )
+    .map_err(|e| e.to_string())?;
+    let ids: Vec<String> = component
+        .call("shortcutNames", &())
+        .map_err(|e| format!("Cannot inspect KDE shortcut reservations: {e}"))?;
+    let registry = zbus::blocking::Proxy::new(
+        &connection,
+        "org.kde.kglobalaccel",
+        "/kglobalaccel",
+        "org.kde.KGlobalAccel",
+    )
+    .map_err(|e| e.to_string())?;
+    for id in ids.into_iter().filter(|id| owns_shortcut(script, id)) {
+        let _: bool = registry
+            .call("unregister", &("kwin", id.as_str()))
+            .map_err(|e| format!("Cannot release KDE shortcut {id}: {e}"))?;
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+
+    #[test]
+    fn action_cleanup_preserves_pause_control_and_foreign_shortcuts() {
+        for id in [
+            "window-warp-hold-2-Ctrl+Alt+J",
+            "window-warp-push-left-0-Ctrl-Alt-J",
+            "window-warp-pull-app-9-Ctrl-Alt-J",
+        ] {
+            assert!(owns_shortcut(SCRIPT_NAME, id));
+        }
+        for id in [
+            "window-warp-toggle-pause-0-Ctrl-Alt-P",
+            "window-warp-control-dispatch",
+            "window-warp-smoke-pull-1",
+            "Window Close",
+            "other-app-pull-1",
+        ] {
+            assert!(!owns_shortcut(SCRIPT_NAME, id));
+        }
+    }
+
+    #[test]
+    fn pause_and_control_cleanup_are_separate() {
+        assert!(owns_shortcut(
+            "window-warp-pause-session",
+            "window-warp-toggle-pause-0-Ctrl-Alt-P"
+        ));
+        assert!(!owns_shortcut(
+            "window-warp-pause-session",
+            "window-warp-pull-0-Ctrl-Alt-P"
+        ));
+        assert!(owns_shortcut(
+            "window-warp-control-session",
+            "window-warp-control-dispatch"
+        ));
+        assert!(!owns_shortcut(
+            "unrelated-script",
+            "window-warp-control-dispatch"
+        ));
+    }
 }

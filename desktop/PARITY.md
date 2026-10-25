@@ -13,9 +13,9 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | Maximize/restore toggle (original “fullscreen”); graceful close | Partial | Implemented both OSes; live KDE verified; Windows owned-window action verification pending |
 | App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Implemented both OSes; tiled burner round trip live KDE verified; other layouts and Windows live checks pending |
 | App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE focus-last and minimized checks pass; Windows native behavior checks pending |
-| Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE native key delivery verifies tap, hold, repeats, pause cancellation and disabled hold; resume before key release remains |
+| Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE native key delivery verifies tap, hold, repeats, pause cancellation and disabled hold; resume before key release has a reproduced cancellation bug |
 | Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows mouse tile uses the key-down pointer position; KDE hold tile now passes native key delivery; both radial overlays remain pending |
-| Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed reassignment tested; native KDE current-app capture passes; Windows native current-app capture, key recording, reassignment and persistence pass |
+| Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed reassignment tested; native KDE current-app capture and physical-key reassignment pass; Windows native current-app capture, key recording, reassignment and persistence pass |
 | Global pause/resume hotkey stays available while paused; editor/workspace/update hotkeys | Partial | Implemented with separate pause registration; native KDE KGlobalAccel action dispatch passes; Windows OS key delivery, lifecycle and registration-failure recovery pass; KDE native pause/app-pull key delivery passes; editor/workspace key delivery remains direct-dispatch coverage |
 | Settings persistence and startup registration | Partial | Windows Run entry and KDE autostart toggles pass; actual login/startup launches remain pending |
 | Workspace capture/create/update, best-match update selection, rename/delete/reorder/browser | Partial | Implemented; Rust matching/persistence model and Node editor tests pass; KDE native capture/save/browser pass; Windows capture/review/save and closest-match update draft now pass natively |
@@ -280,3 +280,26 @@ actual key delivery after reassigning a key between different binding IDs
 (KDE's retained inactive assignments warrant a regression); physical portrait
 outputs and Plasma 6. Both radial pickers and every other unfinished row remain
 in scope. The existing Windows installers are unchanged.
+
+
+## KDE key reservation cleanup
+
+Pausing/unloading now unregisters only the unloaded script's Window Warp action
+family through KGlobalAccel. This releases inactive reservations that otherwise
+prevent a different binding from taking the saved key. Pause/control registrations
+and unrelated KWin action IDs remain separate. Configured app keys are authoritative;
+edit them in Window Warp rather than relying on a KWin override to persist.
+
+`hoster-warp-build-20261024-kde-unregister` exits 0 with 41 Linux Rust tests and
+40 Node tests, executable and Debian package. Native
+`hoster-warp-gui-20261024-kde-unregister` exits 0 with 21 checks using
+`--hold --reassign-native`. It verifies real reassigned key delivery and preservation
+of other action IDs. Evidence is under `src-tauri/target/kde-validation/reassign-native/`;
+nested logs are `/tmp/window-warp-nested.NbMnIx` on Portafort.
+
+The separate `--hold --resume-held` regression fails both before and after this
+fix: pause/resume while the original chord remains held can restart the gesture
+from autorepeat. Latest receipt: `hoster-warp-gui-20261024-kde-resume-cleanup`
+(exit 1, expected cancellation assertion). This is a known incomplete behavior,
+not merely missing coverage. Preserve the assertion and fix the native release
+lifecycle before claiming gesture parity. Do not use a delay heuristic to mask it.

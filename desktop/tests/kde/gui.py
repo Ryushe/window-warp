@@ -18,6 +18,8 @@ driver_binary = str(Path(sys.argv[2]).resolve())
 output = Path(sys.argv[3]).resolve()
 output.mkdir(parents=True, exist_ok=True)
 session = None
+if any(flag in sys.argv for flag in ["--resume-held", "--reassign-native"]) and "--hold" not in sys.argv:
+    raise ValueError("Native gesture edge checks require --hold and the private compositor")
 
 
 def kwin_loaded(name="window-warp-session"):
@@ -375,6 +377,41 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                 wait_for("return document.querySelector('#status').textContent.includes('Paused')")
                 assert kwin_loaded("window-warp-pause-session") and not kwin_loaded()
                 report["checks"].append("Wayland key events resume and pause with persistent pause registration")
+
+                if "--resume-held" in sys.argv:
+                    config["settings"]["holdTileEnabled"] = True
+                    invoke("save_config", {"config":config})
+                    invoke("set_enabled", {"enabled":True})
+                    reset_window()
+                    chord(36)
+                    time.sleep(0.08)
+                    invoke("set_enabled", {"enabled":False})
+                    invoke("set_enabled", {"enabled":True})
+                    time.sleep(1.4)
+                    keys.release()
+                    time.sleep(0.15)
+                    assert owned()["active"] and owned()["rect"] == initial, "Resuming while the chord remains held must not restart a cancelled gesture"
+                    invoke("set_enabled", {"enabled":False})
+                    report["checks"].append("KDE pause/resume before release does not revive a cancelled gesture")
+
+                if "--reassign-native" in sys.argv:
+                    def shortcut_names():
+                        return set(subprocess.check_output(["qdbus", "org.kde.kglobalaccel", "/component/kwin", "org.kde.kglobalaccel.Component.shortcutNames"], text=True).splitlines())
+                    foreign_shortcuts = {name for name in shortcut_names() if not name.startswith("window-warp-")}
+                    config["bindings"][-1]["shortcut"] = "Ctrl+Alt+Shift+K"
+                    config["bindings"][1].update({"shortcut":"Ctrl+Alt+Shift+J", "action":"tile-left", "appMatch":""})
+                    invoke("save_config", {"config":config})
+                    invoke("set_enabled", {"enabled":True})
+                    chord(36)
+                    keys.release()
+                    wait_window(lambda w:w["rect"] == dict(area,width=area["width"]//2), "reassigned key reaches its new action")
+                    invoke("set_enabled", {"enabled":False})
+                    after = shortcut_names()
+                    assert foreign_shortcuts <= after, "Cleanup removed another app's shortcut"
+                    assert "window-warp-control-dispatch" in after
+                    assert any(name.startswith("window-warp-toggle-pause-") for name in after)
+                    assert not any(name.startswith("window-warp-hold-") for name in after)
+                    report["checks"].append("KDE native key ownership follows reassignment between actions without removing other shortcuts")
             evaluate("location.reload(); return true;")
             wait_for("return document.querySelectorAll('.binding').length === 10 && !document.querySelector('#toggle').disabled")
             evaluate("document.querySelector('#hold-delay').closest('details').open=true; document.querySelector('#hold-enabled').scrollIntoView({block:'center'}); return true;")

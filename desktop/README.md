@@ -60,7 +60,7 @@ qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript window-warp-p
 qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript window-warp-control-session
 ```
 
-KDE may retain or override shortcut assignments in **System Settings → Keyboard → Shortcuts → KWin**. Resolve conflicts there if a shortcut does not fire; loading the script does not prove every key is available. Runtime KWin messages can be found in the user journal (`journalctl --user -b`, search for `Window Warp`). The app requires access to the session bus and is not currently packaged as a sandboxed Flatpak.
+Window Warp removes its own inactive key reservations when pausing or reconfiguring, so saved key reassignments can take effect. Configure its keys in the app. Other desktop shortcuts can still conflict; inspect **System Settings → Keyboard → Shortcuts → KWin** if a key does not fire. Loading the script alone does not prove every key is available. Runtime KWin messages can be found in the user journal (`journalctl --user -b`, search for `Window Warp`). The app requires access to the session bus and is not currently packaged as a sandboxed Flatpak.
 
 For app identifiers, use the exact resource class or desktop file ID. KWin's window properties inspector can show these. Example: `firefox` or `org.kde.konsole`. On Windows use an executable filename such as `firefox.exe` or `WindowsTerminal.exe`.
 
