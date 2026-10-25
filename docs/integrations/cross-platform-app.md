@@ -1666,3 +1666,76 @@ Verified acceptance checkpoint:
 This follow-up records the immutable checkpoint. Resume native Plasma6 gesture
 acceptance and true tray/graceful exit before treating the refreshed preview
 packages as release-ready. Full PARITY.md scope remains active and unmerged.
+
+
+## Graceful lifecycle and Plasma 6 runtime preparation (2026-10-25)
+
+Branch/base/target unchanged. Runtime source remains at the terminal checkpoint;
+this increment closes native lifecycle acceptance and prepares a real Plasma6
+runtime. No schema/API changes, installation, activation, integration or push.
+
+Parent handled native runs, container provisioning, evidence and documentation.
+/root/packaged_native authored Windows fixture changes; /root/retile_review
+authored KDE tray acceptance and the private protocol host. A fresh read-only
+/root/lifecycle_review independently reviewed all six fixture/container paths,
+ran JS/Python syntax and diff checks, and found no actionable issues. All child
+packets are terminal and reopenable by their names. Hoster reaper inspected2,
+retained2 unregistered live scopes, stopped0.
+
+Verified results:
+- Windows WARP-NATIVE-7a7dd86b-41bb-4649-9f64-2c4e5bbc96a6: 54 checks pass,
+  no skips. Close hides the same HWND/PID; second instance reopens it and leaves
+  settings/workspaces unchanged. Exact fixture process creation identity, image
+  path, tray HWND class and actual popup labels/IDs guard native messages.
+  tray-icon callback6002 opens the real menu; observed WM_COMMAND IDs reach the
+  real Tauri handlers. Open/Pause/Quit pass; Quit exits0 and action/pause keys
+  become available before force-cleanup fallback. Ordinary debug build restored.
+  Receipt target/lifecycle-windows-native-fixed.log and the native result.json.
+- KDE portafort-warp-gui-20261025-tray-host: inactive/exit0, 21 checks pass
+  (15 existing plus six lifecycle checks). A minimal standard-protocol host
+  enables the app's real StatusNotifierItem export on the private bus. Menu
+  discovery follows advertised endpoints and proves exact executable/PID and
+  ancestry to WebDriver. Native Alt+F4 closes to tray; second launch reopens;
+  Open/Pause/Quit work. App/bus disappearance and all known KWin action, pause,
+  control, retile and per-binding gesture script removals are checked before
+  fallback teardown. Local receipt target/kde-validation/tray-host/gui/.
+  The app is WebDriver's child, so Linux does not claim a reaped app exit code.
+- These checks exercise real handlers, not physical tray-icon hit-testing/panel
+  rendering. The watcher exports no fabricated app menu and cannot attach
+  outside the private nested Wayland runtime. Its owned process is cleaned.
+- Earlier setup diagnostics are retained, not claimed as baseline product bugs:
+  Windows WARP-NATIVE-9a827371-af21-4067-b216-0049cc9182b3 hit a fixture global
+  class-name collision (fixed by a distinct lifecycle variable). KDE units
+  ...-tray, ...-tray-discovery and ...-tray-proc exposed client-only D-Bus
+  introspection timeout, unreadable unrelated proc entries, and the missing
+  panel watcher respectively. All are terminal/exit1. Current source follows
+  advertised endpoints, rejects unproven identities and supplies the test host.
+
+Plasma6 work is still running, not verified:
+- Added tests/kde/Dockerfile.plasma6 from debian:trixie. Official package
+  investigation: https://packages.debian.org/trixie/kwin-wayland (6.3.6 source
+  listing); sanitized provenance in target/research/plasma6/. The old separate
+  kwin-wayland-backend-virtual package is absent in trixie and is not requested.
+- Existing unit hoster-warp-image-20261025-plasma6 is ACTIVE. It runs legacy
+  docker build with a Dockerfile-only context, 3G memory and two-CPU quota,
+  beneath a 4G bounded user service. Latest observation was downloading
+  package320/firefox-esr (79.9MB); no failure or restart occurred. Continue to
+  poll THIS unit, not start another build. Log snapshot:
+  target/kde-validation/plasma6/image-progress.log. Intended image:
+  window-warp-plasma6:local. Build source on Hoster:
+  /home/ryushe/.cache/window-warp-01a16f69/tests/kde/Dockerfile.plasma6.
+- The image includes Qt6 qdbus/KWin, Qt5 native test windows, WebKitGTK, Firefox,
+  Konsole and GI; test-only qdbus/kbuildsycoca aliases keep existing scripts usable.
+  No host seat/bus is mounted. Once build is terminal-success, record image/version
+  metadata, sync current tests, then run standalone live checks in a bounded
+  networkless two-output container before GUI/gesture/overlap/tray acceptance.
+  Actual Plasma6 runtime behavior is still unknown; do not infer it from mocks.
+- Plasma5 Dockerfile.gui now explicitly declares python3-gi for --tray. Existing
+  window-warp-gui:local was NOT rebuilt; rebuild before using its new tray option.
+  Current KDE lifecycle evidence instead used Portafort's installed GI runtime.
+
+Next: finish/reuse the running Plasma6 image build, run live native6 checks and
+resolve actual failures; preserve the confirmed Plasma5.27 overlap limitation.
+Then package install/login, qdbus dependency handling, remaining app-launch and
+terminal/default-browser cases in PARITY.md. Fresh NSIS/Deb artifacts from the
+prior checkpoint still contain this unchanged runtime. Full goal stays active.

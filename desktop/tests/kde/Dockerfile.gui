@@ -4,7 +4,7 @@ FROM window-warp-build:local
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
     kwin-wayland kwin-wayland-backend-virtual qdbus-qt5 qtwayland5 \
-    python3-pyqt5 dbus-x11 webkit2gtk-driver procps libgl1-mesa-dri \
+    python3-pyqt5 python3-gi dbus-x11 webkit2gtk-driver procps libgl1-mesa-dri \
     fonts-dejavu-core xvfb xauth && rm -rf /var/lib/apt/lists/*
 # The virtual backend needs no resource-limit privilege. File capabilities would
 # prevent execution under Docker's normal capability bounding set.

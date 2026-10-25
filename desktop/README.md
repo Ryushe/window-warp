@@ -162,5 +162,6 @@ The current feature-branch builds are available locally after validation:
 
 Their embedded executables and package metadata were inspected without installing
 them. The preview includes the recent terminal, Firefox, tiling and gesture
-changes. Full parity, actual installer behavior and graceful tray shutdown remain
-under validation; see PARITY.md, especially the KDE overlapping-shortcut limit.
+changes. Tray handlers and graceful shutdown pass on Windows and Plasma5.27. Full parity,
+installer behavior and Plasma6 runtime remain under validation; see PARITY.md,
+especially the KDE overlapping-shortcut limit.

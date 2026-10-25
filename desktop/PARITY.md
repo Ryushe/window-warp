@@ -24,7 +24,7 @@ have been exercised. Bundles are rebuilt at the checkpoints below; installer exe
 | Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native Ubuntu capture/directory restoration passes; legacy launchers, prompt fallback, and ambiguity have regression coverage; Windows PowerShell and PowerShell7 custom portable-profile GUID, explicit executable, directory and new-window restoration pass; packaged cmd regression and refreshed18-check Konsole editor fixture pass; shared-process/multi-tab profile identity and concurrent terminal launch matching remain limited |
 | Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Partial | Executable launch passes native Windows/KDE fixtures; Calculator AUMID capture/activation/reuse and native KDE desktop-entry URL/document launch, working directory, reuse and missing-target errors pass; hosted UWP/packaged Win32 variants and D-Bus-activated desktop entries remain |
 | Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Partial | Review/import/save verified natively on Windows and KDE; disabled keys, terminal fields, Firefox tabs and geometry retained; legacy package paths resolve a single registered AUMID during unsaved review; missing/ambiguous families stay editable; title/class/exe/PID/HWND/active WinTitle rules now migrate to reviewed selectors; undefined groups/duplicate or unknown criteria remain visible for manual review; both center actions convert |
-| Single instance, tray, settings failures, session cleanup, installers | Partial | Windows native single instance, registration failures and process-exit key release pass; fresh NSIS and Debian payloads inspected; real tray/graceful-exit and installer execution checks remain |
+| Single instance, tray, settings failures, session cleanup, installers | Partial | Windows native single instance, registration failures and process-exit key release pass; fresh NSIS and Debian payloads inspected; Windows and Plasma5.27 tray handlers, close/reopen, and graceful shutdown pass; physical tray presentation, Plasma6 and installer execution checks remain |
 
 ## Platform investigation
 
@@ -860,6 +860,29 @@ build succeeded; Linux package comes from the successful terminal-variants
 builder. Static extraction/inspection confirms the built payloads differ only
 by Tauri's documented UNK→NSS/DEB bundle tags. Debian executable permissions,
 desktop entry, icon and pointer capability are present. Nothing was installed.
-Actual tray/graceful quit, install/uninstall, startup login and Plasma6 checks
+Actual install/uninstall, startup login and Plasma6 checks
 remain open; Debian currently relies on the documented external KDE/qdbus
 prerequisite rather than declaring qdbus in package dependencies.
+
+
+## Native tray lifecycle (2026-10-25)
+
+Windows `WARP-NATIVE-7a7dd86b-41bb-4649-9f64-2c4e5bbc96a6` passes 54 checks
+with no skips. Closing hides the original HWND; a second instance exits and
+reopens that same HWND/PID without changing configuration/workspaces. The real
+tray callback and observed native menu IDs exercise Open/Pause/Quit. Quit exits
+with code0, releases action/pause keys and preserves saved files before any
+fallback force cleanup. Source code for the runtime did not change.
+
+Portafort `portafort-warp-gui-20261025-tray-host` is inactive/exit0 and passes
+21 checks. A private StatusNotifier protocol host supplies the missing panel
+service; the app's real exported menu performs Pause/Open/Quit. Native Alt+F4
+hides the editor, a second instance reopens it, and Quit removes the app's bus
+owner and KWin scripts before teardown. Receipts are under
+`src-tauri/target/kde-validation/tray-host/`. The app is WebDriver's child, so
+this Linux check observes process disappearance rather than reaping its status.
+Physical notification-area hit-testing/panel rendering remains separate.
+
+A native Plasma6 runtime image is being built from `tests/kde/Dockerfile.plasma6`
+by `hoster-warp-image-20261025-plasma6`. It has not yet supplied native acceptance
+evidence. The current Plasma5.27 overlapping-chord limitation remains unchanged.

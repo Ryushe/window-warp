@@ -93,6 +93,16 @@ kernel.GetSystemTimeAsFileTime.argtypes = [c.POINTER(w.FILETIME)]
 user.EnumChildWindows.argtypes = [w.HWND, ENUMWINDOWS, w.LPARAM]
 user.IsWindow.argtypes = [w.HWND]
 user.PostMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
+user.GetClassNameW.argtypes = [w.HWND, w.LPWSTR, c.c_int]
+user.GetWindowTextW.argtypes = [w.HWND, w.LPWSTR, c.c_int]
+user.GetMenuItemCount.argtypes = [w.HMENU]
+user.GetMenuItemID.argtypes = [w.HMENU, c.c_int]
+user.GetMenuItemID.restype = w.UINT
+user.GetMenuStringW.argtypes = [w.HMENU, w.UINT, w.LPWSTR, c.c_int, w.UINT]
+user.GetMenuState.argtypes = [w.HMENU, w.UINT, w.UINT]
+user.GetMenuState.restype = w.UINT
+user.SendMessageTimeoutW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM, w.UINT, w.UINT, c.POINTER(c.c_size_t)]
+user.SendMessageTimeoutW.restype = LRESULT
 kernel.QueryFullProcessImageNameW.argtypes = [w.HANDLE, w.DWORD, w.LPWSTR, c.POINTER(w.DWORD)]
 kernel.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
 kernel.TerminateProcess.argtypes = [w.HANDLE, w.UINT]
@@ -453,6 +463,113 @@ class FirefoxScope:
 
 
 firefox_scope = None
+app_process_handle = None
+app_process_created = None
+
+
+def checked_app_window(hwnd, expected_class=None):
+    global app_process_handle, app_process_created
+    if app_process_handle is None:
+        handle = kernel.OpenProcess(0x1000 | 0x100000, False, args.app_pid)
+        if not handle:
+            raise c.WinError(c.get_last_error())
+        try:
+            expected = Path(__file__).resolve().parents[2] / "src-tauri/target/windows-validation" / args.marker / "window-warp-fixture.exe"
+            if process_image(handle) != os.path.normcase(os.path.realpath(expected)):
+                raise RuntimeError("Lifecycle target is not this run's fixture executable")
+            app_process_created = process_times(handle)[0]
+            app_process_handle = handle
+            handle = None
+        finally:
+            if handle:
+                kernel.CloseHandle(handle)
+    if kernel.WaitForSingleObject(app_process_handle, 0) != 258 or process_times(app_process_handle)[0] != app_process_created:
+        raise RuntimeError("Lifecycle fixture process closed or changed identity")
+    pid = w.DWORD()
+    user.GetWindowThreadProcessId(hwnd, c.byref(pid))
+    if not user.IsWindow(hwnd) or pid.value != args.app_pid:
+        raise RuntimeError("Lifecycle window is not owned by the fixture app")
+    name = c.create_unicode_buffer(256)
+    if not user.GetClassNameW(hwnd, name, len(name)):
+        raise c.WinError(c.get_last_error())
+    if expected_class and name.value != expected_class:
+        raise RuntimeError("Lifecycle window class changed")
+    return name.value
+
+
+def owned_app_windows(class_name, visible=False):
+    found = []
+    for hwnd in all_windows():
+        pid = w.DWORD()
+        user.GetWindowThreadProcessId(hwnd, c.byref(pid))
+        if pid.value != args.app_pid or (visible and not user.IsWindowVisible(hwnd)):
+            continue
+        if checked_app_window(hwnd) == class_name:
+            found.append(hwnd)
+    return found
+
+
+def tray_menu(action):
+    labels = {"open": "Open Window Warp", "pause": "Pause shortcuts", "quit": "Quit"}
+    if action not in labels:
+        raise RuntimeError("Unsupported fixture tray action")
+    trays = owned_app_windows("tray_icon_app")
+    if len(trays) != 1 or owned_app_windows("#32768", visible=True):
+        raise RuntimeError("Expected one fixture tray and no existing fixture popup")
+    tray = trays[0]
+    checked_app_window(tray, "tray_icon_app")
+    # tray-icon 0.25.1: callback 6002 + WM_RBUTTONUP invokes the real
+    # TrackPopupMenu path. No Explorer HWND or notification-area click is used.
+    if not user.PostMessageW(tray, 6002, 0, 0x205):
+        raise c.WinError(c.get_last_error())
+    try:
+        deadline = time.monotonic() + 3
+        while True:
+            popups = owned_app_windows("#32768", visible=True)
+            if popups:
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Fixture tray callback did not open an owned native menu")
+            time.sleep(0.025)
+        if len(popups) != 1:
+            raise RuntimeError("Fixture tray opened multiple native menus")
+        popup = popups[0]
+        checked_app_window(popup, "#32768")
+        menu = c.c_size_t()
+        # MN_GETHMENU returns the displayed native menu's handle.
+        if not user.SendMessageTimeoutW(popup, 0x1e1, 0, 0, 2, 1000, c.byref(menu)) or not menu.value:
+            raise RuntimeError("Cannot read the owned popup menu handle")
+        count = user.GetMenuItemCount(menu.value)
+        if count != 3:
+            raise RuntimeError(f"Unexpected fixture tray item count: {count}")
+        items = []
+        for position in range(count):
+            label = c.create_unicode_buffer(256)
+            if not user.GetMenuStringW(menu.value, position, label, len(label), 0x400):
+                raise RuntimeError("Cannot read an owned tray menu label")
+            item_id = user.GetMenuItemID(menu.value, position)
+            state = user.GetMenuState(menu.value, position, 0x400)
+            if item_id == 0xffffffff or state == 0xffffffff or state & 3:
+                raise RuntimeError("Fixture tray item is unavailable")
+            items.append({"label": label.value.replace("&", "").split("\t")[0], "id": item_id})
+        if [item["label"] for item in items] != list(labels.values()):
+            raise RuntimeError("Owned popup does not contain the expected fixture tray actions")
+        selected = next(item for item in items if item["label"] == labels[action])
+    finally:
+        checked_app_window(tray, "tray_icon_app")
+        if not user.PostMessageW(tray, 0x1f, 0, 0):  # WM_CANCELMODE ends this owner's menu loop.
+            raise c.WinError(c.get_last_error())
+    deadline = time.monotonic() + 2
+    while owned_app_windows("#32768", visible=True):
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Owned tray popup did not dismiss before menu dispatch")
+        time.sleep(0.025)
+    checked_app_window(tray, "tray_icon_app")
+    # muda 0.20.0 resolves this observed native ID via its WM_COMMAND handler,
+    # delivering the production Tauri menu event, just as menu selection does.
+    if not user.PostMessageW(tray, 0x111, selected["id"], 0):
+        raise c.WinError(c.get_last_error())
+    return {"tray": tray, "popup": popup, "items": items, "selected": action}
 
 close_fixture = {"window": None, "requests": 0, "allow": False}
 
@@ -542,6 +659,19 @@ try:
                 if len(found) != 1:
                     raise RuntimeError(f"Expected one visible app-sized fixture window; found {len(found)}")
                 result = found[0]
+            elif command in ("app_state", "app_close"):
+                hwnd = int(request["window"])
+                app_class_name = checked_app_window(hwnd)
+                title = c.create_unicode_buffer(256)
+                user.GetWindowTextW(hwnd, title, len(title))
+                if title.value != args.marker:
+                    raise RuntimeError("Lifecycle operation requires the fixture's exact main-window title")
+                if command == "app_close" and not user.PostMessageW(hwnd, 0x10, 0, 0):
+                    raise c.WinError(c.get_last_error())
+                result = {"window": hwnd, "pid": args.app_pid, "className": app_class_name,
+                          "visible": bool(user.IsWindowVisible(hwnd)), "foreground": user.GetForegroundWindow() == hwnd}
+            elif command == "tray_menu":
+                result = tray_menu(request["action"])
             elif command == "calculator_begin":
                 result = begin_calculator()
             elif command == "calculator_cleanup":
@@ -717,6 +847,8 @@ try:
         except Exception as error:
             print(json.dumps({"id": request["id"], "error": str(error)}), flush=True)
 finally:
+    if app_process_handle is not None:
+        kernel.CloseHandle(app_process_handle)
     if firefox_scope is not None:
         try:
             receipt = firefox_scope.cleanup()

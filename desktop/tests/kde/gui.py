@@ -92,6 +92,211 @@ def click(selector):
     request("POST", f"/session/{session}/element/{element_id}/click", {})
 
 
+def test_tray(driver, environment, log, report):
+    """Use the app's exported native menu, scoped to this driver's app child."""
+    from gi.repository import Gio, GLib
+    from xml.etree import ElementTree
+    from wayland_input import Input
+
+    assert os.environ.get("WAYLAND_DISPLAY") == "warp-test", "Tray acceptance requires the private compositor"
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+
+    def call(owner, path, interface, method, signature=None, arguments=()):
+        return bus.call_sync(owner, path, interface, method,
+            GLib.Variant(signature, arguments) if signature else None, None,
+            Gio.DBusCallFlags.NONE, 3000, None).unpack()
+
+    def bus_call(method, signature=None, arguments=()):
+        return call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", method, signature, arguments)
+
+    def process(pid):
+        try:
+            fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+            return dict(pid=pid, parent=int(fields[1]), started=fields[19], state=fields[0])
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            return None
+
+    driver_identity = process(driver.pid)
+    assert driver_identity and driver.poll() is None
+
+    def app_child(pid):
+        identity = process(pid)
+        if not identity or identity["state"] == "Z": return None
+        try:
+            if Path(f"/proc/{pid}/exe").resolve(strict=True) != Path(binary): return None
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            return None
+        ancestor = identity
+        for _ in range(32):
+            if ancestor["pid"] == driver.pid:
+                return identity if ancestor["started"] == driver_identity["started"] else None
+            ancestor = process(ancestor["parent"])
+            if not ancestor: break
+        return None
+
+    def vanished(error):
+        return Gio.DBusError.get_remote_error(error) in [
+            "org.freedesktop.DBus.Error.NameHasNoOwner",
+            "org.freedesktop.DBus.Error.ServiceUnknown",
+        ]
+
+    names = bus_call("ListNames")[0]
+    owned_connections = {}
+    for owner in names:
+        if not owner.startswith(":"): continue
+        try:
+            pid = bus_call("GetConnectionUnixProcessID", "(s)", (owner,))[0]
+        except GLib.Error as error:
+            if vanished(error): continue
+            raise
+        identity = app_child(pid)
+        if identity: owned_connections[owner] = identity
+
+    def owner_of(name):
+        try:
+            return name if name.startswith(":") else bus_call("GetNameOwner", "(s)", (name,))[0]
+        except GLib.Error as error:
+            if vanished(error): return None
+            raise
+
+    owned_names = []
+    endpoints = set()
+    for name in names:
+        owner = owner_of(name)
+        if owner not in owned_connections: continue
+        owned_names.append(dict(name=name,owner=owner,pid=owned_connections[owner]["pid"]))
+        if name.startswith("org.kde.StatusNotifierItem-"):
+            endpoints.add((owner,"/StatusNotifierItem"))
+    watcher = "org.kde.StatusNotifierWatcher"
+    discovery = dict(watcherPresent=bus_call("NameHasOwner", "(s)", (watcher,))[0],ownedNames=owned_names,ownedEndpoints=[])
+    discovery_path = output / "tray-discovery.json"
+    discovery_path.write_text(json.dumps(discovery,indent=2))
+    if discovery["watcherPresent"]:
+        registered = call(watcher,"/StatusNotifierWatcher","org.freedesktop.DBus.Properties","Get",
+            "(ss)",("org.kde.StatusNotifierWatcher","RegisteredStatusNotifierItems"))[0]
+        for item in registered:
+            name,separator,suffix = item.partition("/")
+            owner = owner_of(name)
+            if owner in owned_connections:
+                endpoints.add((owner,"/"+suffix if separator else "/StatusNotifierItem"))
+    discovery["ownedEndpoints"] = [dict(owner=owner,path=path) for owner,path in sorted(endpoints)]
+    discovery_path.write_text(json.dumps(discovery,indent=2))
+    # Never introspect arbitrary app-owned client connections: a connection
+    # without an exported object need not dispatch incoming calls at all.
+    candidates = []
+    for owner,path in sorted(endpoints):
+        xml = call(owner,path,"org.freedesktop.DBus.Introspectable","Introspect")[0]
+        assert any(interface.get("name") == "org.kde.StatusNotifierItem"
+            for interface in ElementTree.fromstring(xml).findall("interface")), "Advertised tray endpoint lacks StatusNotifierItem"
+        candidates.append((owner,path,owned_connections[owner]))
+    assert len(candidates) == 1, f"Expected one owned native tray item, found {len(candidates)}; discovery: {discovery}"
+    owner, item_path, identity = candidates[0]
+    menu_path = call(owner, item_path, "org.freedesktop.DBus.Properties", "Get", "(ss)", ("org.kde.StatusNotifierItem", "Menu"))[0]
+    assert isinstance(menu_path, str) and menu_path.startswith("/")
+    layout = call(owner, menu_path, "com.canonical.dbusmenu", "GetLayout", "(iias)", (0, -1, ["label", "enabled", "visible"]))[1]
+    menu = {}
+
+    def read_menu(node):
+        if isinstance(node, GLib.Variant): node = node.unpack()
+        identifier, properties, children = node
+        label = properties.get("label", "").replace("_", "")
+        if label:
+            assert label not in menu, f"Duplicate native menu label: {label}"
+            menu[label] = dict(id=identifier, enabled=properties.get("enabled", True), visible=properties.get("visible", True))
+        for child in children: read_menu(child)
+
+    read_menu(layout)
+    for label in ["Open Window Warp", "Pause shortcuts", "Quit"]:
+        assert label in menu and menu[label]["enabled"] and menu[label]["visible"], menu
+    proof = dict(pid=identity["pid"], owner=owner, itemPath=item_path, menuPath=menu_path, menu=menu,
+        host="private StatusNotifier protocol fixture; physical panel rendering not tested", checks=[])
+
+    def record(label):
+        proof["checks"].append(label)
+        (output / "tray-observations.json").write_text(json.dumps(proof, indent=2))
+        report["checks"].append(label)
+
+    def current_app():
+        current = process(identity["pid"])
+        return current is not None and current["started"] == identity["started"] and current["state"] != "Z"
+
+    def event(label):
+        assert current_app() and bus_call("GetConnectionUnixProcessID", "(s)", (owner,))[0] == identity["pid"]
+        call(owner, menu_path, "com.canonical.dbusmenu", "Event", "(isvu)",
+            (menu[label]["id"], "clicked", GLib.Variant("s", ""), 0))
+
+    def window_action(method):
+        value = request("POST", f"/session/{session}/execute/async", {
+            "script":"const done=arguments[arguments.length-1]; window.__TAURI__.window.getCurrentWindow()[arguments[0]]().then(result=>done({result}),error=>done({error:String(error)}));",
+            "args":[method]})
+        assert "error" not in value, value
+        return value.get("result")
+
+    def visible(wanted):
+        deadline = time.monotonic()+5
+        while time.monotonic()<deadline:
+            if window_action("isVisible") == wanted: return
+            time.sleep(0.1)
+        raise AssertionError(f"Tray editor visibility did not become {wanted}")
+
+    def close_editor():
+        # Core window.close is intentionally outside the app's default IPC
+        # permissions. Exercise KWin's real close request instead, after the
+        # owned menu has focused this exact WebDriver window.
+        event("Open Window Warp")
+        deadline = time.monotonic()+5
+        while time.monotonic()<deadline and not window_action("isFocused"):
+            time.sleep(0.1)
+        assert current_app() and window_action("isFocused"), "Owned editor must have focus before Alt+F4"
+        with Input() as keys:
+            keys.key(56,True)  # Alt
+            keys.key(62,True)  # F4
+            keys.release()
+        visible(False)
+
+    saved_config = invoke("get_config")
+    script_names = ["window-warp-session", "window-warp-pause-session", "window-warp-control-session", "window-warp-retile-session"]
+    script_names.extend("window-warp-gesture-"+binding["shortcut"].encode().hex()
+        for binding in saved_config["bindings"] if binding["enabled"] and binding["action"] == "pull-app")
+    invoke("set_enabled", {"enabled":True})
+    assert kwin_loaded() and kwin_loaded("window-warp-pause-session")
+    record("native StatusNotifierItem and menu belong to the owned WebDriver app process")
+    event("Pause shortcuts")
+    wait_for("return document.querySelector('#status').textContent.includes('Paused')")
+    assert not invoke("get_status")["enabled"] and not kwin_loaded() and kwin_loaded("window-warp-pause-session")
+    record("native tray Pause disables actions and retains the resume shortcut")
+    close_editor()
+    assert current_app() and bus_call("NameHasOwner", "(s)", (owner,))[0]
+    record("closing the editor hides it while the owned app and tray stay alive")
+    second = subprocess.Popen([binary], env=environment, stdout=log, stderr=log, start_new_session=True)
+    try:
+        assert second.wait(timeout=10) == 0, "Second instance did not exit successfully"
+    finally:
+        if second.poll() is None:
+            os.killpg(second.pid,signal.SIGTERM)
+            second.wait(timeout=5)
+    visible(True)
+    assert current_app() and invoke("get_config") == saved_config
+    record("a second instance exits and reopens the same editor without changing settings")
+    close_editor()
+    event("Open Window Warp")
+    visible(True)
+    assert current_app() and invoke("get_config") == saved_config
+    record("native tray Open reopens the hidden editor without changing settings")
+    invoke("set_enabled", {"enabled":True})
+    assert kwin_loaded() and kwin_loaded("window-warp-pause-session")
+    event("Quit")
+    deadline = time.monotonic()+10
+    while time.monotonic()<deadline:
+        if not current_app() and not bus_call("NameHasOwner", "(s)", (owner,))[0]: break
+        time.sleep(0.1)
+    assert not current_app() and not bus_call("NameHasOwner", "(s)", (owner,))[0], "Tray Quit did not terminate the owned app gracefully"
+    remaining = [name for name in script_names if kwin_loaded(name)]
+    assert not remaining, f"Graceful tray exit left KWin scripts loaded before fixture cleanup: {remaining}"
+    record("native tray Quit exits the owned app and releases action, pause, control and gesture scripts before fixture cleanup")
+    report["tray"] = proof
+
+
 with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (output / "gui.log").open("w") as log:
     environment = os.environ.copy()
     environment.update({"TAURI_WEBVIEW_AUTOMATION": "true", "TAURI_AUTOMATION": "true", "GDK_BACKEND": "wayland", "XDG_CONFIG_HOME": temporary + "/config", "XDG_DATA_HOME": temporary + "/data", "XDG_CACHE_HOME": temporary + "/cache"})
@@ -115,7 +320,29 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
     terminal_fixture = None
     terminal_launched = []
     launched_pids = set()
+    tray_host = None
     try:
+        if "--tray" in sys.argv:
+            tray_host = subprocess.Popen([sys.executable, str(Path(__file__).with_name("tray_host.py"))],
+                env=environment, stdout=log, stderr=log)
+            from gi.repository import Gio, GLib
+            tray_bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            deadline = time.monotonic()+5
+            while time.monotonic()<deadline:
+                assert tray_host.poll() is None, "Private tray protocol host exited; inspect gui.log"
+                try:
+                    watcher_pid = tray_bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus",
+                        "org.freedesktop.DBus", "GetConnectionUnixProcessID",
+                        GLib.Variant("(s)", ("org.kde.StatusNotifierWatcher",)), None,
+                        Gio.DBusCallFlags.NONE, 1000, None).unpack()[0]
+                except GLib.Error as error:
+                    if Gio.DBusError.get_remote_error(error) != "org.freedesktop.DBus.Error.NameHasNoOwner": raise
+                    time.sleep(0.05)
+                    continue
+                assert watcher_pid == tray_host.pid, "Tray watcher must belong to this fixture's helper"
+                break
+            else:
+                raise AssertionError("Private tray protocol host did not acquire its bus name")
         for _ in range(50):
             try:
                 request("GET", "/status")
@@ -1258,9 +1485,16 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             assert saved["platform"] == "windows" and saved["id"] != "legacy-id"
             assert saved["items"][0]["terminal"]["wslDistro"] == "Ubuntu"
             report["checks"].append("native KDE imported Windows workspace preserves terminal identity, requires Save and remains platform scoped")
+        if "--tray" in sys.argv:
+            test_tray(driver, environment, log, report)
         (output / "gui-result.json").write_text(json.dumps(report, indent=2))
         print(json.dumps(report, indent=2), flush=True)
     finally:
+        if tray_host is not None:
+            if tray_host.poll() is None: tray_host.terminate()
+            try: tray_host.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                tray_host.kill(); tray_host.wait(timeout=5)
         for pid in terminal_launched:
             try:
                 args = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")

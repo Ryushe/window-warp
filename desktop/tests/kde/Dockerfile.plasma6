@@ -1,0 +1,20 @@
+# Disposable Plasma 6 runtime. The application is built by the Ubuntu 24.04
+# builder and mounted read-only or from its owned validation workspace at /work.
+FROM debian:trixie
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    kwin-wayland kwin-style-breeze \
+    qdbus-qt6 qt6-wayland qtwayland5 python3-pyqt5 python3-gi \
+    dbus-x11 webkit2gtk-driver libwebkit2gtk-4.1-0 libayatana-appindicator3-1 \
+    procps libgl1-mesa-dri fonts-dejavu-core firefox-esr konsole \
+    && rm -rf /var/lib/apt/lists/*
+# Only the private virtual compositor runs here, with no host display or bus.
+RUN if getcap /usr/bin/kwin_wayland | grep -q .; then setcap -r /usr/bin/kwin_wayland; fi \
+    && test -x /usr/lib/qt6/bin/qdbus && test -x /usr/bin/kbuildsycoca6 \
+    && ln -s /usr/lib/qt6/bin/qdbus /usr/local/bin/qdbus \
+    && ln -s /usr/bin/kbuildsycoca6 /usr/local/bin/kbuildsycoca5 \
+    && useradd --uid 1000 --create-home warp
+USER 1000:1000
+ENV HOME=/tmp
+WORKDIR /work
+CMD ["dbus-run-session", "--", "bash", "tests/kde/nested.sh", "/work", "--gui", "/work/src-tauri/target/release/window-warp", "/usr/bin/WebKitWebDriver", "/work/src-tauri/target/kde-plasma6", "--hold", "--radial"]

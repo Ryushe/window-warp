@@ -253,3 +253,38 @@ that ordinary typing resumes before window I/O finishes. The fault injection
 replaces and restores only the private compositor's control script. Receipt:
 `src-tauri/target/kde-validation/retile-cleanup/`, remote service
 `hoster-warp-gui-20261025-retile-cleanup` (exit 0). Plasma 6 remains a native acceptance gap.
+
+
+### Tray lifecycle acceptance
+
+Add `--tray` to a private `nested.sh --gui` run. It requires the distro's
+`python3-gi` package. `tray_host.py` supplies a minimal StatusNotifierWatcher on
+that private session bus because a standalone compositor has no Plasma panel.
+The app still exports its real tray item and menu. Discovery verifies the
+service PID, executable and ancestry to the fixture WebDriver process.
+
+The test invokes the exported Open/Pause/Quit menu items, closes the focused
+editor using Alt+F4, checks second-instance reopening, then verifies app/bus
+disappearance and KWin script removal before fallback teardown. It does not
+claim physical panel rendering or a reaped application exit code.
+
+Portafort's `portafort-warp-gui-20261025-tray-host` passes 21 checks, including
+six lifecycle checks. Local receipts: `src-tauri/target/kde-validation/tray-host/`.
+The Plasma5 GUI Dockerfile now declares python3-gi; rebuild that image before
+using this option if it predates the dependency addition.
+
+### Plasma 6 runtime
+
+`Dockerfile.plasma6` uses Debian trixie's native Qt6/KWin packages and the same
+Ubuntu24.04-built application. Build it with a Dockerfile-only context:
+
+```sh
+docker build -t window-warp-plasma6:local - < tests/kde/Dockerfile.plasma6
+docker run --rm --init --network=none --cpus=2 --memory=3g --shm-size=256m \
+  --mount type=bind,source="$PWD",target=/work window-warp-plasma6:local
+```
+
+This image has private compositor/bus/runtime paths and no host display access.
+Its qdbus and kbuildsycoca aliases adapt the test scripts to Qt6 tools; they do
+not change the application's platform detection. An image build is not a native
+Plasma6 acceptance result. See PARITY.md for the current runtime evidence.

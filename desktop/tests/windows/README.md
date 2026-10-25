@@ -39,7 +39,8 @@ The test covers:
 - Closest-match workspace update review without automatic persistence.
 - Separate placements for reused windows and forced launch of a new process.
 - Startup registration/removal, only when no existing `WindowWarp` Run entry exists.
-- Single-instance behavior and release of the pause key after process exit.
+- Closing the editor hides it; a second instance reopens the same HWND/PID and preserves settings.
+- Native tray Open/Pause/Quit handlers, successful graceful process exit, shortcut release and saved-file preservation before fallback cleanup.
 - Push then X/C or Super+X/C retiling, including changed focus, one-use consumption,
   expiry, deadline renewal and pause/resume cancellation. A single-monitor run
   verifies wrap-in-place; cross-monitor geometry is explicitly skipped without
@@ -155,3 +156,12 @@ restoration. Receipt: `terminal-876c1d4a-fec4-46f2-99db-f6bdefa71666`.
 An earlier interactive setup stalled before its receipt command; automated setup
 uses `-NonInteractive` and retains startup/timeout diagnostics. The packaged cmd
 opt-in regression also passes. Windows Rust suite:68 pass, six opt-in ignored.
+
+
+Lifecycle receipt (2026-10-25):
+`WARP-NATIVE-7a7dd86b-41bb-4649-9f64-2c4e5bbc96a6` passes 54 checks with no
+skips. The helper targets the fixture PID's `tray_icon_app` HWND, opens its
+native popup through the tray callback, reads the actual item labels/IDs, then
+dispatches the observed menu command. It verifies successful Quit before any
+forced cleanup. This covers the production menu handlers, not physical clicking
+on Explorer's notification-area icon. The ordinary debug build was restored.

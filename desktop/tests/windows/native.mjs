@@ -527,10 +527,21 @@ try {
         startupTouched = false;
         checks.push("Windows startup toggle creates and removes its owned Run entry");
     } else skipped.push("Startup toggle: an existing WindowWarp Run entry was preserved");
+    const instanceWindow = await native("app_window");
+    const instanceConfig = await invoke("get_config"), instanceStore = await invoke("get_workspaces");
+    await native("app_close",{window:instanceWindow});
+    await until(()=>native("app_state",{window:instanceWindow}),s=>!s.visible,"closing the editor hides the same owned main window");
+    assert.equal(app.exitCode,null);
+    checks.push("native close-to-tray hides the editor while its owned process and main HWND survive");
     second = spawn(binary,[],{cwd:output,windowsHide:true,stdio:"ignore"});
     assert.equal(await exit(second,15000),0);
     assert.equal(app.exitCode,null);
-    checks.push("second instance exits and preserves the existing app and settings");
+    const reopened = await until(()=>native("app_state",{window:instanceWindow}),s=>s.visible&&s.foreground,"second instance reopens and focuses the original main HWND");
+    assert.equal(reopened.pid,app.pid);
+    assert.equal(await native("app_window"),instanceWindow);
+    assert.deepEqual(await invoke("get_config"),instanceConfig);
+    assert.deepEqual(await invoke("get_workspaces"),instanceStore);
+    checks.push("second instance exits, reopens the same owned HWND/PID and preserves settings and workspaces");
     const pointerConfig = await invoke("get_config");
     const monitorAreas = await invoke("get_import_monitors");
     {
@@ -881,6 +892,34 @@ try {
     if (runFirefox) {
         await testFirefox({output,marker,native,invoke,evaluate,wait,click,screenshot,until,checks,report});
     }
+    // Exercise the real native tray callback/menu route before failure-only
+    // process cleanup below. This does not click Explorer's notification area.
+    const lifecycleWindow = await native("app_window");
+    const lifecycleConfig = await invoke("get_config"), lifecycleStore = await invoke("get_workspaces");
+    await invoke("set_enabled",{enabled:true});
+    await native("app_close",{window:lifecycleWindow});
+    await until(()=>native("app_state",{window:lifecycleWindow}),s=>!s.visible,"hide editor before tray Open");
+    report.tray = [await native("tray_menu",{action:"open"})];
+    await until(()=>native("app_state",{window:lifecycleWindow}),s=>s.visible&&s.foreground,"native tray Open restores the same editor");
+    assert.deepEqual(await invoke("get_config"),lifecycleConfig);
+    assert.deepEqual(await invoke("get_workspaces"),lifecycleStore);
+    checks.push("owned native tray callback and observed Open menu item reopen the same editor");
+    await assert.rejects(()=>native("reserve",{key:0x7c})); // Active F13 action.
+    report.tray.push(await native("tray_menu",{action:"pause"}));
+    await paused(true);
+    await native("reserve",{key:0x7c}); await native("release",{key:0x7c});
+    await assert.rejects(()=>native("reserve",{key:0x81})); // Pause F18 remains registered.
+    checks.push("native tray Pause releases action keys while preserving the pause key");
+    await invoke("set_enabled",{enabled:true});
+    await assert.rejects(()=>native("reserve",{key:0x7c}));
+    const persisted = ["settings.json","workspaces.json"].map(name=>{
+        const file=path.join(state,name); return {file,bytes:fs.existsSync(file)?fs.readFileSync(file):null};
+    });
+    report.tray.push(await native("tray_menu",{action:"quit"}));
+    assert.equal(await exit(app,15000),0,"Tray Quit must complete a graceful successful process exit");
+    for (const key of [0x7c,0x81]) {await native("reserve",{key});await native("release",{key});}
+    for (const {file,bytes} of persisted) assert.deepEqual(fs.existsSync(file)?fs.readFileSync(file):null,bytes);
+    checks.push("native tray Quit exits gracefully, releases action and pause keys, and preserves saved files before fallback cleanup");
     report.passed = true;
 } catch (error) {
     report.error = String(error.stack || error);
