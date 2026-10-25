@@ -21,7 +21,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | Workspace capture/create/update, best-match update selection, rename/delete/reorder/browser | Partial | Implemented; Rust matching/persistence model and Node editor tests pass; KDE native capture/save/browser pass; full Windows editor workflow pending |
 | Workspace launch/reuse, exclude already-consumed windows, wait for new windows, restore placement/state | Partial | KDE native two-window reuse, forced new launch, placement, per-axis maximize/fullscreen pass; Windows owned-window placement/maximize/minimize pass; Windows multi-window launch workflow pending |
 | Firefox profile/session capture (Mozilla LZ4), URLs/active tab/title matching, profile-aware restore | Partial | 15 native KDE checks pass on the caption-fix build, including tabs/selection, same-title profile isolation, floating geometry and editor; codec/profile/launch tests pass; live Windows browser path pending |
-| Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native WSL/profile variants, legacy distro launchers/prompt fallback, and multi-window ambiguity cases still required |
+| Windows Terminal shell/profile/WSL distro detection and restore; Linux terminal equivalent | Partial | Native Windows cmd capture/new-window launch and KDE Konsole named-profile capture/reuse/new-window restoration pass; terminal editor tested; native Ubuntu capture/directory restoration passes; legacy launchers, prompt fallback, and ambiguity have regression coverage; native PowerShell/custom-profile variants still required |
 | Packaged Windows apps, ordinary executable launch, Linux desktop app launch | Pending | Argument-safe launch tests and native fixtures |
 | Import existing apps/shared hotkeys/settings/workspaces INIs with review and migration | Pending | Fixtures including disabled keys, legacy terminal fields, browser tabs |
 | Single instance, tray, settings failures, session cleanup, installers | Partial | Preview verified; repeat for final implementation |
@@ -132,3 +132,22 @@ review note render without clipping. Native receipt and screenshot are under
 `src-tauri/target/kde-validation/firefox-caption-before/`. The Linux binary and
 Debian package come from `hoster-warp-build-20261024-firefox-caption` (exit 0).
 This verifies the Plasma 5.27 path; Windows Firefox and live Plasma 6 remain open.
+
+## WSL distribution discovery
+
+Capture decodes WSL's UTF-16 distribution output, resolves legacy launcher
+versions to installed names, and uses an unambiguous user/hostname prompt when
+process metadata is inconclusive. Conflicting identities remain a review error.
+An explicit process distribution survives changed SSH/custom titles. Discovery
+uses bounded noninteractive queries shared across one capture/restore operation.
+Known cmd/PowerShell titles avoid querying other tabs' WSL launchers.
+
+40 Windows Rust tests and 27 Node tests pass. Both opt-in native tests pass:
+`native_terminal_capture_and_new_window_launch` and, with
+`WARP_TEST_WSL_DISTRO=Ubuntu`, `native_wsl_capture_and_directory_restore`. The latter
+checks installed distribution/identity discovery, owned-window capture, and a
+new terminal whose shell reports `/tmp` after directory restoration. Both close
+only their owned windows. Additional PowerShell/custom-profile variants remain.
+Linux build `hoster-warp-build-20261024-wsl` passed 32 Rust tests and built the
+executable and Debian package (exit 0). The existing Portafort native binary
+remains the Firefox caption checkpoint; no new KDE GUI behavior changed.

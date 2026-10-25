@@ -149,6 +149,8 @@ pub fn kind(window: &WindowInfo) -> Option<Kind> {
 pub struct Capture {
     #[cfg(windows)]
     processes: Result<Vec<crate::process_info::Process>, String>,
+    #[cfg(windows)]
+    wsl: crate::wsl::Discovery,
     #[cfg(target_os = "linux")]
     connection: Result<zbus::blocking::Connection, String>,
 }
@@ -158,6 +160,8 @@ impl Capture {
         Self {
             #[cfg(windows)]
             processes: crate::process_info::snapshot(),
+            #[cfg(windows)]
+            wsl: crate::wsl::Discovery::default(),
             #[cfg(target_os = "linux")]
             connection: zbus::blocking::connection::Builder::session()
                 .and_then(|b| b.method_timeout(std::time::Duration::from_secs(2)).build())
@@ -205,6 +209,12 @@ pub fn enrich(items: &mut [WorkspaceItem]) {
         item.launch.args.clear();
         match capture.read(&item.window, &windows) {
             Ok(terminal) => {
+                if terminal.kind == Kind::WindowsTerminal
+                    && terminal.shell == "wsl.exe"
+                    && terminal.wsl_distro.is_empty()
+                {
+                    item.capture_note = "Review terminal launch settings: the WSL distribution was not identified. Select it to avoid relying on the current default distribution.".into();
+                }
                 if terminal.kind == Kind::Konsole
                     && !terminal.profile_name.is_empty()
                     && terminal.profile_path.is_empty()
@@ -244,6 +254,13 @@ fn option(args: &[String], names: &[&str]) -> String {
 #[cfg(any(windows, test))]
 fn from_shell(program: &str, args: &[String]) -> Option<Terminal> {
     let name = basename(program);
+    if let Some(hint) = crate::wsl::launcher_hint(program) {
+        return Some(Terminal {
+            shell: "wsl.exe".into(),
+            wsl_distro: hint,
+            ..Default::default()
+        });
+    }
     if ![
         "wsl.exe",
         "pwsh.exe",
@@ -274,7 +291,12 @@ impl Capture {
         window: &WindowInfo,
         windows: &[WindowInfo],
     ) -> Result<Terminal, String> {
-        let processes = self.processes.as_ref().map_err(Clone::clone)?;
+        // Keep the original title fallback when process metadata is unavailable.
+        let processes = self
+            .processes
+            .as_ref()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         let mut descendants = std::collections::HashSet::from([window.pid]);
         loop {
             let count = descendants.len();
@@ -285,17 +307,6 @@ impl Capture {
             }
             if count == descendants.len() {
                 break;
-            }
-        }
-        let mut choices: Vec<Terminal> = Vec::new();
-        for p in processes
-            .iter()
-            .filter(|p| p.pid != window.pid && descendants.contains(&p.pid))
-        {
-            if let Some(spec) = from_shell(&p.name, &p.args) {
-                if !choices.contains(&spec) {
-                    choices.push(spec);
-                }
             }
         }
         let title = window
@@ -309,6 +320,23 @@ impl Capture {
             "command prompt" | "cmd" | "cmd.exe" => Some("cmd.exe"),
             _ => None,
         };
+        let mut choices: Vec<Terminal> = Vec::new();
+        for p in processes
+            .iter()
+            .filter(|p| p.pid != window.pid && descendants.contains(&p.pid))
+        {
+            if let Some(mut spec) = from_shell(&p.name, &p.args) {
+                if title_shell.is_some_and(|shell| spec.shell != shell) {
+                    continue;
+                }
+                if let Some(hint) = crate::wsl::launcher_hint(&p.name) {
+                    spec.wsl_distro = self.wsl.resolve_name(&hint)?.ok_or("The distribution launcher does not identify one installed WSL distribution. Review its distribution setting.")?;
+                }
+                if !choices.contains(&spec) {
+                    choices.push(spec);
+                }
+            }
+        }
         if let Some(shell) = title_shell {
             choices.retain(|s| s.shell == shell);
             if choices.is_empty() {
@@ -316,6 +344,64 @@ impl Capture {
                     shell: shell.into(),
                     ..Default::default()
                 });
+            }
+        }
+        if title_shell.is_none()
+            && (choices.iter().any(|s| s.shell == "wsl.exe")
+                || (choices.is_empty() && crate::wsl::looks_like_title(&title)))
+        {
+            let hint = crate::wsl::looks_like_title(&title);
+            if hint {
+                choices.retain(|s| s.shell == "wsl.exe");
+            }
+            // One explicit process distribution is stronger evidence than a
+            // prompt changed by SSH or a custom title.
+            let known = choices.len() == 1 && !choices[0].wsl_distro.is_empty();
+            if !known {
+                let mut distro = self.wsl.resolve_title(&title)?;
+                if distro.is_none() && crate::wsl::prompt_identity(&title).is_some() {
+                    let candidates: Vec<_> = if choices.iter().any(|s| s.wsl_distro.is_empty()) {
+                        vec![]
+                    } else {
+                        choices
+                            .iter()
+                            .filter(|s| s.shell == "wsl.exe")
+                            .map(|s| s.wsl_distro.clone())
+                            .collect::<std::collections::HashSet<_>>()
+                            .into_iter()
+                            .collect()
+                    };
+                    distro = self.wsl.resolve_prompt(&title, &candidates)?;
+                }
+                if let Some(distro) = distro {
+                    choices.retain(|s| {
+                        s.shell == "wsl.exe"
+                            && (s.wsl_distro.is_empty()
+                                || s.wsl_distro.eq_ignore_ascii_case(&distro))
+                    });
+                    for spec in &mut choices {
+                        spec.wsl_distro = distro.clone();
+                    }
+                    if choices.is_empty() {
+                        choices.push(Terminal {
+                            shell: "wsl.exe".into(),
+                            wsl_distro: distro,
+                            ..Default::default()
+                        });
+                    }
+                } else if choices.is_empty() && hint {
+                    choices.push(Terminal {
+                        shell: "wsl.exe".into(),
+                        ..Default::default()
+                    });
+                }
+                let mut unique = Vec::new();
+                for spec in choices {
+                    if !unique.contains(&spec) {
+                        unique.push(spec);
+                    }
+                }
+                choices = unique;
             }
         }
         if choices.len() != 1 {
@@ -531,6 +617,10 @@ mod tests {
             "monitor":1,"monitorName":"main","maximizedHorizontal":false,"maximizedVertical":false,"fullscreen":false,"minimized":false,"active":true
         })).unwrap();
         let capture = Capture {
+            wsl: crate::wsl::Discovery::fixture(&[
+                ("Ubuntu", "user", "host"),
+                ("Debian", "user", "host"),
+            ]),
             processes: Ok(vec![
                 Process {
                     pid: 10,
@@ -571,6 +661,66 @@ mod tests {
             "pwsh.exe"
         );
     }
+    #[cfg(windows)]
+    #[test]
+    fn title_fallback_and_legacy_launchers_use_installed_distribution_names() {
+        use crate::process_info::Process;
+        let mut window: WindowInfo = serde_json::from_value(serde_json::json!({
+            "id":"1", "pid":10, "title":"Ubuntu-22.04 - project", "appId":"windowsterminal.exe", "desktopId":"", "path":"WindowsTerminal.exe",
+            "rect":{"x":0,"y":0,"width":800,"height":600}, "workArea":{"x":0,"y":0,"width":1920,"height":1080},
+            "monitor":1,"monitorName":"main","maximizedHorizontal":false,"maximizedVertical":false,"fullscreen":false,"minimized":false,"active":true
+        })).unwrap();
+        let mut capture = Capture {
+            processes: Err("CIM unavailable".into()),
+            wsl: crate::wsl::Discovery::fixture(&[
+                ("Ubuntu", "alice", "dev"),
+                ("Ubuntu-22.04", "bob", "dev"),
+            ]),
+        };
+        let read = |capture: &Capture, window: &WindowInfo| {
+            capture.read(window, std::slice::from_ref(window))
+        };
+        assert_eq!(read(&capture, &window).unwrap().wsl_distro, "Ubuntu-22.04");
+        window.title = "PowerShell 7".into();
+        assert_eq!(read(&capture, &window).unwrap().shell, "pwsh.exe");
+        capture.processes = Ok(vec![Process {
+            pid: 11,
+            parent: 10,
+            name: "ubuntu2204.exe".into(),
+            args: vec![],
+        }]);
+        window.title = "alice@remote:~".into();
+        assert_eq!(read(&capture, &window).unwrap().wsl_distro, "Ubuntu-22.04");
+        capture.processes = Ok(vec![
+            Process {
+                pid: 11,
+                parent: 10,
+                name: "wsl.exe".into(),
+                args: ["wsl.exe", "-d", "Ubuntu"].map(String::from).to_vec(),
+            },
+            Process {
+                pid: 12,
+                parent: 10,
+                name: "wsl.exe".into(),
+                args: ["wsl.exe", "-d", "Ubuntu-22.04"].map(String::from).to_vec(),
+            },
+        ]);
+        window.title = "bob@dev:~/work".into();
+        assert_eq!(read(&capture, &window).unwrap().wsl_distro, "Ubuntu-22.04");
+        window.title = "alice@remote:~".into();
+        assert!(read(&capture, &window).is_err());
+        // Known shell titles must not attempt discovery for another tab's launcher.
+        capture.wsl = crate::wsl::Discovery::fixture(&[]);
+        capture.processes = Ok(vec![Process {
+            pid: 11,
+            parent: 10,
+            name: "ubuntu2204.exe".into(),
+            args: vec![],
+        }]);
+        window.title = "Command Prompt".into();
+        assert_eq!(read(&capture, &window).unwrap().shell, "cmd.exe");
+    }
+
     #[test]
     fn wsl_capture_keeps_distribution_user_and_linux_directory_without_replaying_command() {
         let args = [

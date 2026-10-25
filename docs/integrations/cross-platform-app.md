@@ -171,3 +171,29 @@ and restoration assertions passed. Both service handles are terminal.
 
 No Windows Firefox or Plasma 6 native claim is made. The full parity checklist
 remains the completion gate; this correction closes the observed KDE failure.
+
+## WSL capture and restoration
+
+The Windows terminal path now resolves installed distribution names from legacy
+launchers and window titles and can compare prompt user/hostname against bounded
+noninteractive WSL probes. UTF-16 list output is decoded before matching; shared
+identities produce an explicit review error. CIM failure retains known-shell
+title fallback. Explicit WSL commands are captured as shell identity only, never
+as commands to replay. Known cmd/PowerShell titles bypass other tabs' launchers.
+
+40 Windows Rust tests, 27 Node tests and JavaScript syntax checks pass. Native
+`native_terminal_capture_and_new_window_launch` passed again after the metadata
+helper extraction. `WARP_TEST_WSL_DISTRO=Ubuntu cargo test --manifest-path
+desktop/src-tauri/Cargo.toml --offline native_wsl_capture_and_directory_restore
+-- --ignored --nocapture` passed installed-name/identity discovery, capture and a
+new-window launch whose shell reports its restored `/tmp` directory. Fixtures
+close only their owned HWNDs after checking PIDs. These tests require ordinary
+Windows process/WSL access and ran outside the restricted sandbox.
+
+Linux build `hoster-warp-build-20261024-wsl` passed 32 Rust tests and 27 Node tests,
+then built the executable and Debian package (service inactive, exit 0). The
+Portafort native binary remains the Firefox caption checkpoint.
+The user-approved incremental build cache was removed again; no source or
+unrelated files were deleted. Builds run with `CARGO_INCREMENTAL=0`.
+Next: remaining terminal profile variants and the other open PARITY requirements.
+No merge, push, installation or activation was performed.

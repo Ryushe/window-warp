@@ -24,7 +24,7 @@ Normal launches start **paused**. Save changes, then click **Enable shortcuts**.
 
 Open **Workspaces → Capture current**, choose which windows to keep, and save a name. Capture creates a review draft. Each app has editable launch arguments and an option to always open a new window. **Open workspace** reuses matching windows or launches missing apps, then restores placement.
 
-Firefox captures its profile, tab URLs, and selected tab from its last readable session file. Review them under **Firefox profile and tabs**. If the browser has not written its session yet, or the window cannot be matched reliably, the editor shows a note and allows manual entry. Restore opens the selected tab last, matching the original app's behavior. Existing profile windows are reused unless **Always open a new window** is checked. Capture does not modify browser profiles. Terminal shell specialization remains in progress.
+Firefox captures its profile, tab URLs, and selected tab from its last readable session file. Review them under **Firefox profile and tabs**. If the browser has not written its session yet, or the window cannot be matched reliably, the editor shows a note and allows manual entry. Restore opens the selected tab last, matching the original app's behavior. Existing profile windows are reused unless **Always open a new window** is checked. Capture does not modify browser profiles. Windows Terminal and Konsole entries also expose shell, profile, arguments, and working directory. WSL capture recognizes explicit distributions, legacy launchers, and unambiguous user/hostname prompts. Ambiguous terminals show a review note; select their distribution before saving. Capturing a terminal does not replay its running command.
 
 ## Development
 
@@ -61,7 +61,7 @@ For app identifiers, use the exact resource class or desktop file ID. KWin's win
 
 ## Scope and verification
 
-The full feature port is in progress; [PARITY.md](PARITY.md) tracks the source-derived requirements and verification gaps. INI import, tap/hold gestures, radial selection, and terminal specialization remain pending. Workspace capture/reuse/launch, per-axis maximization/fullscreen, and Firefox tab restoration have passed native KDE tests. Startup registration passes a KDE toggle test; actual login launches and Windows registration still need validation. Live Windows Firefox, mixed-DPI displays, desktop-imposed minimum sizes, and elevated Windows applications also need coverage. Existing Windows preview installers predate these ongoing changes.
+The full feature port is in progress; [PARITY.md](PARITY.md) tracks the source-derived requirements and verification gaps. INI import, tap/hold gestures, and radial selection remain pending. Terminal capture and new-window restoration have passed native cmd, WSL, and Konsole fixtures; additional profile variants remain to be verified. Workspace capture/reuse/launch, per-axis maximization/fullscreen, and Firefox tab restoration have passed native KDE tests. Startup registration passes a KDE toggle test; actual login launches and Windows registration still need validation. Live Windows Firefox, mixed-DPI displays, desktop-imposed minimum sizes, and elevated Windows applications also need coverage. Existing Windows preview installers predate these ongoing changes.
 
 ```sh
 npm test
@@ -84,6 +84,7 @@ Manual acceptance on each OS: enable the app; push a floating window across two 
 - `src-tauri/src/linux_control.rs`: session-bus command bridge for workspace capture and restore.
 - `src-tauri/src/workspaces.rs`: workspace storage, matching, launch, restore, and cancellation.
 - `src-tauri/src/firefox.rs`: profile discovery and Mozilla LZ4 session capture, tab selection, and profile launch commands.
+- `src-tauri/src/terminal.rs` and `wsl.rs`: terminal identity, profile/directory restoration, bounded WSL discovery.
 - `src-tauri/src/process_info.rs`: argument boundaries from `/proc` or Windows CIM and `CommandLineToArgvW`.
 - `src-tauri/kwin/warp.js`: compositor-side window management and shortcuts.
 

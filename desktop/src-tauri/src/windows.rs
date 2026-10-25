@@ -543,6 +543,22 @@ pub fn disable(app: &AppHandle) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    struct OwnedTerminals(Vec<crate::workspaces::WindowInfo>);
+    impl Drop for OwnedTerminals {
+        fn drop(&mut self) {
+            for window in &self.0 {
+                unsafe {
+                    let hwnd = window.id.parse::<usize>().unwrap() as HWND;
+                    let mut pid = 0;
+                    GetWindowThreadProcessId(hwnd, &mut pid);
+                    if pid == window.pid {
+                        PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     #[ignore = "opens and closes two owned Windows Terminal fixture windows"]
     fn native_terminal_capture_and_new_window_launch() {
@@ -551,21 +567,6 @@ mod tests {
             collections::HashSet,
             time::{Duration, Instant},
         };
-        struct OwnedTerminals(Vec<workspaces::WindowInfo>);
-        impl Drop for OwnedTerminals {
-            fn drop(&mut self) {
-                for window in &self.0 {
-                    unsafe {
-                        let hwnd = window.id.parse::<usize>().unwrap() as HWND;
-                        let mut pid = 0;
-                        GetWindowThreadProcessId(hwnd, &mut pid);
-                        if pid == window.pid {
-                            PostMessageW(hwnd, WM_CLOSE, 0, 0);
-                        }
-                    }
-                }
-            }
-        }
         let before: HashSet<_> = unsafe { snapshot_native(true).unwrap() }
             .into_iter()
             .map(|w| w.id)
@@ -625,6 +626,98 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(100));
         }
+    }
+
+    #[test]
+    #[ignore = "requires WARP_TEST_WSL_DISTRO; opens and closes owned WSL Terminal windows"]
+    fn native_wsl_capture_and_directory_restore() {
+        use crate::{terminal, workspaces, wsl};
+        use std::{
+            collections::HashSet,
+            time::{Duration, Instant},
+        };
+        let distro = std::env::var("WARP_TEST_WSL_DISTRO").expect("Choose a fixture distribution");
+        let discovery = wsl::Discovery::default();
+        assert!(discovery.installed().unwrap().contains(&distro));
+        let identity = discovery.identity(&distro).unwrap();
+        assert_eq!(
+            discovery
+                .resolve_prompt(
+                    &format!("{}@{}:~", identity.user, identity.host),
+                    std::slice::from_ref(&distro)
+                )
+                .unwrap(),
+            Some(distro.clone())
+        );
+        let before: HashSet<_> = unsafe { snapshot_native(true).unwrap() }
+            .into_iter()
+            .map(|w| w.id)
+            .collect();
+        let marker = format!("{distro} - Window Warp {}", uuid::Uuid::new_v4());
+        let mut owned = OwnedTerminals(Vec::new());
+        assert!(std::process::Command::new("wt.exe")
+            .args([
+                "-w",
+                "new",
+                "new-tab",
+                "--title",
+                &marker,
+                "--suppressApplicationTitle",
+                "wsl.exe",
+                "--distribution",
+                &distro,
+                "--exec",
+                "/bin/sh",
+                "-c",
+                "sleep 60"
+            ])
+            .status()
+            .unwrap()
+            .success());
+        let wait = |title: &str| {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            loop {
+                if let Some(window) =
+                    unsafe { snapshot_native(true).unwrap() }
+                        .into_iter()
+                        .find(|w| {
+                            !before.contains(&w.id)
+                                && w.title == title
+                                && terminal::kind(w) == Some(terminal::Kind::WindowsTerminal)
+                        })
+                {
+                    return window;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "Owned WSL terminal did not show expected title: {title}"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        };
+        owned.0.push(wait(&marker));
+        let mut profile = workspaces::capture(owned.0.clone(), "WSL fixture".into());
+        terminal::enrich(&mut profile.items);
+        let item = &profile.items[0];
+        assert!(item.capture_note.is_empty(), "{}", item.capture_note);
+        let mut terminal = item.terminal.clone().unwrap();
+        assert_eq!(terminal.shell, "wsl.exe");
+        assert_eq!(terminal.wsl_distro, distro);
+        assert!(
+            terminal.shell_args.is_empty(),
+            "Do not replay the captured command"
+        );
+        terminal.working_directory = "/tmp".into();
+        let restored = format!("Window Warp WSL {}", uuid::Uuid::new_v4());
+        terminal.shell_args = vec![
+            "--exec".into(),
+            "/bin/sh".into(),
+            "-c".into(),
+            format!("printf '\\033]0;{restored}:%s\\007' \"$PWD\"; sleep 60"),
+        ];
+        workspaces::launch(&terminal.launch_command(&item.launch).unwrap()).unwrap();
+        owned.0.push(wait(&format!("{restored}:/tmp")));
+        assert_ne!(owned.0[0].id, owned.0[1].id);
     }
 
     #[test]

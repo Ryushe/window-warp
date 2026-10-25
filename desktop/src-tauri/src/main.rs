@@ -14,6 +14,8 @@ mod process_info;
 mod startup;
 mod terminal;
 mod workspaces;
+#[cfg(any(windows, test))]
+mod wsl;
 
 use config::Config;
 use std::{fs, path::PathBuf, sync::Mutex};

@@ -54,11 +54,27 @@ pub fn snapshot() -> Result<Vec<Process>, String> {
 
 #[cfg(windows)]
 fn cim_query(query: &str) -> Result<String, String> {
-    use std::os::windows::process::CommandExt;
     let script = format!("[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); {query}");
-    let mut child = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+    metadata_output(
+        "powershell.exe",
+        &["-NoProfile", "-NonInteractive", "-Command", &script],
+        std::time::Duration::from_secs(5),
+    )
+    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Bounded, noninteractive metadata queries used by CIM and WSL discovery.
+#[cfg(windows)]
+pub fn metadata_output(
+    program: &str,
+    args: &[&str],
+    timeout: std::time::Duration,
+) -> Result<Vec<u8>, String> {
+    use std::os::windows::process::CommandExt;
+    let mut child = std::process::Command::new(program)
+        .args(args)
         .creation_flags(0x08000000)
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -72,13 +88,12 @@ fn cim_query(query: &str) -> Result<String, String> {
         let mut bytes = Vec::new();
         stdout.read_to_end(&mut bytes).map(|_| bytes)
     });
-    // CIM normally finishes quickly; an unavailable provider must not hang capture.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + timeout;
     while child.try_wait().map_err(|e| e.to_string())?.is_none() {
         if std::time::Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            return Err("Timed out reading application arguments.".into());
+            return Err(format!("Timed out reading metadata from {program}."));
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
@@ -88,9 +103,9 @@ fn cim_query(query: &str) -> Result<String, String> {
         .map_err(|_| "Cannot read process metadata.")?
         .map_err(|e| e.to_string())?;
     if !status.success() {
-        return Err("Cannot read application arguments.".into());
+        return Err(format!("Cannot read metadata from {program}."));
     }
-    Ok(String::from_utf8_lossy(&output).into_owned())
+    Ok(output)
 }
 
 #[cfg(windows)]
