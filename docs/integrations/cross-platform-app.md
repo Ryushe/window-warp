@@ -7,7 +7,7 @@
 - Base commit: `7b907778f0022d73fb3527b82c0ab7ecedf8124d`
 - Intended eventual target: `main`; promotion/merge has not been requested
 - Last updated: 2026-10-25
-- Latest immutable recovery checkpoint: `4827d302eebad18ebdecbc3acb21f6db3630095d`
+- Latest immutable recovery checkpoint: `7727de3a2472b358d970f6af1c49e4d3be2fd538`
 - Feature implementation commits: `abfc95e` (desktop/workspace foundation), `ee7bee4` (Firefox profiles/tabs), `c09d79c` (terminal capture/editor/restore), `491a9d8` (KDE Firefox caption correction and complete 15-check native run), `5e6373d` (WSL distribution discovery and native directory restoration), `02d4e02` (reviewed shortcut reassignment and 12-check native KDE run), `b216f0c` (persistent pause and application control hotkeys, 15 native KDE checks), `d49e380` (14 native Windows application checks), `9794b75` (Windows tap/hold, activation deadlock correction, 18 Windows and 15 KDE native checks), `b63cb1d` (KDE native tap/hold, Wayland editor focus, 20 native KDE checks), `41fbc70` (KDE key reservation cleanup, 21 native KDE checks, held-key regression reproduced), `da23019` (held-key cancellation and deferred reassignment, verified script startup, 22 native KDE checks), `61233ff` (shared radial picker, 26 native KDE checks; initial 22 native Windows pass later superseded by rapid Escape regression), `4a92065` (reviewed INI migration and native import receipts), `9ccbaa7` (portable fixture line endings)
 - Canonical references: original root AHK files; `desktop/PARITY.md`
 
@@ -957,6 +957,13 @@ No merge, push, installer activation, or user-session startup change was perform
 
 
 ## Legacy package migration (2026-10-25)
+
+Verified implementation checkpoint: `7727de3a2472b358d970f6af1c49e4d3be2fd538`
+on `codex/cross-platform-app`. The subsequent dossier-only commit records this
+pointer. Resume with the AHK window-match fidelity work below; all tests/builds
+for this increment are terminal and the checkout is clean after checkpointing.
+Final independent review inspected the corrected fixture and passing 33-check
+Windows receipt and found no remaining actionable issues in this increment.
 
 Import review now resolves a saved WindowsApps package full name to its family,
 queries current-user registered versions, and selects one distinct actual AUMID.
