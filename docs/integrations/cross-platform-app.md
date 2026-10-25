@@ -7,7 +7,7 @@
 - Base commit: `7b907778f0022d73fb3527b82c0ab7ecedf8124d`
 - Intended eventual target: `main`; promotion/merge has not been requested
 - Last updated: 2026-10-24
-- Latest immutable recovery checkpoint: `9ccbaa77dd0fe475e995ae382a7b18abaecb54d8`
+- Latest immutable recovery checkpoint: `df6b28b772f91d4ea323f76550c269a0d1fd201f`
 - Feature implementation commits: `abfc95e` (desktop/workspace foundation), `ee7bee4` (Firefox profiles/tabs), `c09d79c` (terminal capture/editor/restore), `491a9d8` (KDE Firefox caption correction and complete 15-check native run), `5e6373d` (WSL distribution discovery and native directory restoration), `02d4e02` (reviewed shortcut reassignment and 12-check native KDE run), `b216f0c` (persistent pause and application control hotkeys, 15 native KDE checks), `d49e380` (14 native Windows application checks), `9794b75` (Windows tap/hold, activation deadlock correction, 18 Windows and 15 KDE native checks), `b63cb1d` (KDE native tap/hold, Wayland editor focus, 20 native KDE checks), `41fbc70` (KDE key reservation cleanup, 21 native KDE checks, held-key regression reproduced), `da23019` (held-key cancellation and deferred reassignment, verified script startup, 22 native KDE checks), `61233ff` (shared radial picker, 26 native KDE checks; initial 22 native Windows pass later superseded by rapid Escape regression), `4a92065` (reviewed INI migration and native import receipts), `9ccbaa7` (portable fixture line endings)
 - Canonical references: original root AHK files; `desktop/PARITY.md`
 
@@ -690,3 +690,6 @@ Both task units are terminal; no persistent transport or listener was started.
 Resume with pointer centering and the one-second X/C retile behavior, then every
 remaining PARITY requirement. Existing Windows installers are old. No merge,
 push, installation or user-session activation; this remains an incomplete port.
+
+Recoverable focus-loss implementation checkpoint: `df6b28b772f91d4ea323f76550c269a0d1fd201f`
+on `codex/cross-platform-app`. This dossier-only follow-up records its exact SHA.
