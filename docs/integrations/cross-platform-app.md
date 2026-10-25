@@ -1096,3 +1096,44 @@ Next: remaining native Windows maximize/close, focus-last/minimized and burner
 behavior, then Firefox/terminal variants and overlapping physical global chords.
 Retain the full checklist, real Plasma 6/physical display/login/installer gates,
 and independent final release review. No merge, push or installation occurred.
+
+## Windows action acceptance — 2026-10-25
+
+The owned Win32 helper now preserves maximized windows during shortcut delivery.
+Normal-window activation retains its existing behavior. The helper can minimize
+its own targets and create a disposable window that counts WM_CLOSE requests,
+vetoes the first request, then accepts the second without terminating siblings.
+
+The application fixture now verifies simple maximize/restore floating geometry,
+maximized push and history pull, focus-last toggling, minimized pull/focus recovery,
+all four single-monitor burner fallbacks, and graceful close. Push completion is
+observed through its pointer-centering transition before re-reading maximization;
+the no-op burner checks first prove that binding can pull the target, allow the
+second tap to settle, and reject error events. No production code changed.
+
+Final exact-source command: `node desktop/tests/windows/native.mjs`, 42 pass,
+one physical second-display skip. Receipt:
+`desktop/src-tauri/target/windows-validation/WARP-NATIVE-8c15db1d-5a19-48c9-a944-ed3edb336cb6/result.json`.
+JavaScript and Python syntax checks and `git diff --check` pass. The first run
+`c344db4e-cbb9-462a-8d8e-d507f9669ab9` timed out at the existing editor shortcut
+before new assertions. Retaining normal-window ShowWindow activation while
+skipping restoration for maximized targets produced subsequent complete passing
+runs. Final cleanup exited the fixture processes and restored the normal debug
+binary. Shared/Linux source is unchanged; no redundant Linux build was run.
+
+Independent review: `/root/packaged_native` identified initially weak asynchronous
+push/no-op assertions, reviewed the corrections, and returned no remaining test
+or safety finding. Parent implemented the tests and reconciled this dossier and
+the canonical `desktop/PARITY.md`. The child is terminal and can be resumed by
+that task path; evidence and review are summarized here.
+
+Next concrete port gap: `fullscreen.ahk` lines 26–47 stores a floating rectangle
+independently of subsequent maximized moves. Windows currently uses SW_RESTORE
+and KDE slotWindowMaximize, so the simple toggle receipt does not prove compound
+restore parity. Add a regression for toggle-maximize → push/move → toggle-restore
+and implement the saved-rectangle contract on both backends. Also verify KDE
+push/history restores maximization after an intervening tile: `warp.js` history
+currently stores geometry/output but no explicit maximization state. Continue
+with remaining burner, Firefox/terminal, overlapping-chord, real Plasma 6,
+physical-display, login and installer gates. Full parity remains incomplete.
+No merge, push, installation or user-session activation occurred.

@@ -52,6 +52,8 @@ user.CreateWindowExW.argtypes = [w.DWORD, w.LPCWSTR, w.LPCWSTR, w.DWORD, c.c_int
                                c.c_int, c.c_int, c.c_int, w.HWND, w.HMENU, w.HINSTANCE, c.c_void_p]
 user.CreateWindowExW.restype = w.HWND
 user.ShowWindow.argtypes = [w.HWND, c.c_int]
+user.IsIconic.argtypes = [w.HWND]
+user.IsZoomed.argtypes = [w.HWND]
 user.SetForegroundWindow.argtypes = [w.HWND]
 user.GetForegroundWindow.restype = w.HWND
 ENUMWINDOWS = c.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
@@ -199,8 +201,14 @@ def cleanup_calculator():
     calculator_baseline = None
     return len(closed)
 
+close_fixture = {"window": None, "requests": 0, "allow": False}
+
 @WNDPROC
 def procedure(hwnd, message, wp, lp):
+    if message == 0x10 and hwnd == close_fixture["window"]:
+        close_fixture["requests"] += 1
+        if not close_fixture["allow"]:
+            return 0
     return user.DefWindowProcW(hwnd, message, wp, lp)
 
 instance = kernel.GetModuleHandleW(None)
@@ -279,6 +287,25 @@ try:
                 result = begin_calculator()
             elif command == "calculator_cleanup":
                 result = cleanup_calculator()
+            elif command == "close_fixture":
+                if close_fixture["window"] is not None:
+                    raise RuntimeError("Close fixture already exists")
+                hwnd = user.CreateWindowExW(0, class_name, args.marker + "-close", 0x10CF0000,
+                                            160, 130, 500, 320, None, None, instance, None)
+                if not hwnd:
+                    raise c.WinError(c.get_last_error())
+                windows.append(hwnd)
+                close_fixture["window"] = hwnd
+                result = hwnd
+            elif command == "close_status":
+                if "allow" in request:
+                    close_fixture["allow"] = bool(request["allow"])
+                result = {"requests": close_fixture["requests"],
+                          "exists": bool(user.IsWindow(close_fixture["window"]))}
+            elif command == "minimize":
+                hwnd = int(request.get("window", windows[0]))
+                owned(hwnd)
+                user.ShowWindow(hwnd, 6)
             elif command == "startup_value":
                 try:
                     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as key:
@@ -335,7 +362,10 @@ try:
             elif command in ("focus", "press", "plain_press", "hold_start", "place"):
                 hwnd = int(request.get("window", windows[0]))
                 owned(hwnd)
-                user.ShowWindow(hwnd, 9)
+                # Activating or typing into a maximized window must preserve
+                # that state, otherwise the helper masks toggle/push defects.
+                if command == "place" or not user.IsZoomed(hwnd):
+                    user.ShowWindow(hwnd, 9)
                 if command == "place":
                     rect = request["rect"]
                     if not user.SetWindowPos(hwnd, None, rect["x"], rect["y"], rect["width"], rect["height"], 0x14):

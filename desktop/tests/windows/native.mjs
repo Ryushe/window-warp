@@ -557,6 +557,96 @@ try {
     await until(()=>invoke("get_windows"),ws=>ws.some(w=>w.title.startsWith(marker)&&w.active),"full executable path focuses an owned matching window");
     checks.push("native full-path app identifiers work without requiring an advanced selector");
     await invoke("set_enabled",{enabled:false});
+
+    // Reuse the fixture's private F24 binding for each action. Keep the typed
+    // HWND/PID selector narrow so no unrelated application can be targeted.
+    const actionConfig = structuredClone(matchConfig);
+    const actionBinding = actionConfig.bindings.at(-1);
+    actionBinding.windowsMatch = {windowId:ownedWindow.id,processId:fixture.pid};
+    actionBinding.mainMonitorAction = "focus-last";
+    actionConfig.bindings[0].action = "push-left-center";
+    actionConfig.settings.holdTileEnabled = false;
+    const selectAction = async action => {
+        await invoke("set_enabled",{enabled:false});
+        actionBinding.action = action;
+        await invoke("save_config",{config:actionConfig});
+        await invoke("set_enabled",{enabled:true});
+    };
+    const actionPress = window => native("press",{key:0x87,window});
+    const isMaximized = w => w.maximizedHorizontal && w.maximizedVertical;
+    await selectAction("toggle-maximize");
+    await placeOwned();
+    await actionPress(fixture.windows[0]);
+    await until(readOwned,isMaximized,"maximize shortcut");
+    await actionPress(fixture.windows[0]);
+    await until(readOwned,w=>!isMaximized(w),"restore shortcut");
+    assert.deepEqual((await readOwned()).rect,initial);
+    checks.push("native maximize/restore shortcut preserves the original floating rectangle");
+
+    await actionPress(fixture.windows[0]);
+    await until(readOwned,isMaximized,"maximize before push");
+    await native("pointer",{x:area.x+25,y:area.y+25});
+    await press(13);
+    await until(async()=>({window:await readOwned(),pointer:await native("pointer_position")}),
+        ({window:w,pointer:p})=>p.x===Math.round(w.workArea.x+w.workArea.width/2)&&p.y===Math.round(w.workArea.y+w.workArea.height/2),
+        "push finishes placement before centering the pointer");
+    assert.ok(isMaximized(await readOwned()),"Push must preserve maximization before history pull");
+    // Changing the state before pull makes restoration observable even when
+    // this machine has a single monitor and a push wraps to that monitor.
+    await placeOwned();
+    await press(15);
+    await until(readOwned,w=>isMaximized(w)&&w.active,"history pull restores maximized state");
+    checks.push("native push and history pull preserve a maximized window");
+    await placeOwned();
+    await selectAction("pull-app");
+    await actionPress(fixture.windows[1]);
+    await until(readOwned,w=>w.active,"focus-last pulls the selected app");
+    await actionPress(fixture.windows[0]);
+    await until(readSecond,w=>w.active,"focus-last returns to previous window");
+    await actionPress(fixture.windows[1]);
+    await until(readOwned,w=>w.active,"focus-last returns to selected app again");
+    checks.push("native app pull focus-last toggles between the selected and previous windows");
+
+    for (const action of ["pull-app","focus-app"]) {
+        await selectAction(action);
+        await native("minimize",{window:fixture.windows[0]});
+        await until(readOwned,w=>w.minimized,"minimized target is still discoverable");
+        await actionPress(fixture.windows[1]);
+        await until(readOwned,w=>w.active&&!w.minimized,action+" restores a minimized window");
+        assert.deepEqual((await readOwned()).rect,initial);
+    }
+    checks.push("native pull-app and focus-app recover minimized windows without changing their floating rectangle");
+
+    if (monitorAreas.length === 1) {
+        actionBinding.mainMonitorAction = "burner";
+        await evaluate("window.__warpActionErrors=[]; window.__TAURI__.event.listen('warp-error',e=>window.__warpActionErrors.push(e.payload))");
+        for (const layout of ["float","tile-left","tile-right","fullscreen"]) {
+            actionBinding.burnerLayout = layout;
+            await selectAction("pull-app");
+            await actionPress(fixture.windows[1]);
+            await until(readOwned,w=>w.active,"burner binding pulls the target before its second tap");
+            await actionPress(fixture.windows[0]);
+            // The successful single-monitor second tap deliberately has no
+            // visible transition; allow key-release dispatch to settle.
+            await sleep(250);
+            assert.equal((await readOwned()).active,true);
+            assert.deepEqual((await readOwned()).rect,initial);
+            assert.equal(isMaximized(await readOwned()),false);
+        }
+        assert.deepEqual(await evaluate("window.__warpActionErrors"),[]);
+        checks.push("all burner layouts retain the active window on a single-monitor desktop");
+    }
+    const closeWindow = await native("close_fixture");
+    await selectAction("close-window");
+    await actionPress(closeWindow);
+    const vetoed = await until(()=>native("close_status"),s=>s.requests===1,"graceful close sends WM_CLOSE");
+    assert.equal(vetoed.exists,true,"The application may refuse a close request");
+    await native("close_status",{allow:true});
+    await actionPress(closeWindow);
+    await until(()=>native("close_status"),s=>s.requests===2&&!s.exists,"accepted graceful close destroys only its window");
+    assert.ok(await readOwned(),"Other windows in the same process must survive graceful close");
+    checks.push("native graceful close respects a veto and leaves sibling windows running after acceptance");
+    await invoke("set_enabled",{enabled:false});
     await invoke("save_config",{config:matchConfig});
     const previousStore = await invoke("get_workspaces");
     const packaged = structuredClone(store.profiles[0]);
