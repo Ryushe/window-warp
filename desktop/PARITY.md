@@ -14,7 +14,7 @@ have been exercised. Existing preview installers do not contain ongoing work.
 | App pull to primary; active app to burner with float/left/right/maximized layout | Partial | Implemented both OSes; tiled burner round trip live KDE verified; other layouts and Windows live checks pending |
 | App focus-last toggle; minimized windows; exact executable/class matching | Partial | Live KDE focus-last and minimized checks pass; Windows native behavior checks pending |
 | Tap vs hold, configurable 100–5000 ms delay, disable hold | Partial | Windows OS key events verify release, repeats, modifier-first release, pause/resume cancellation and disabled hold; KDE native key delivery verifies tap, hold, repeats, pause cancellation and disabled hold; resume before key release and reassignment while held now pass; overlapping distinct chords and live Plasma 6 remain |
-| Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows mouse tile uses the key-down pointer position; KDE hold tile and radial selection/cancellation pass native key delivery; shared eight-slot geometry/order and both overlays implemented; Windows radial focus correction still requires native retest |
+| Hold mouse tile; radial picker (stable title order, 8 slots, dead zone, release selection/cancel) | Partial | Windows mouse tile uses the key-down pointer position; KDE hold tile and radial selection/cancellation pass native key delivery; shared eight-slot geometry/order and both overlays implemented; Windows radial release selection and cancellation pass the native fixture |
 | Editor from current app, shortcut recording, shared/app shortcut browser, edit/delete/per-binding disable, conflict reassignment | Partial | Recording, search, per-binding disable, behavior controls and reviewed reassignment tested; native KDE current-app capture and physical-key reassignment pass; Windows native current-app capture, key recording, reassignment and persistence pass |
 | Global pause/resume hotkey stays available while paused; editor/workspace/update hotkeys | Partial | Implemented with separate pause registration; native KDE KGlobalAccel action dispatch passes; Windows OS key delivery, lifecycle and registration-failure recovery pass; KDE native pause/app-pull key delivery passes; editor/workspace key delivery remains direct-dispatch coverage |
 | Settings persistence and startup registration | Partial | Windows Run entry and KDE autostart toggles pass; actual login/startup launches remain pending |
@@ -395,3 +395,18 @@ all eight slots and both centered instructions are separate and readable. The
 local final report/screenshot is under `src-tauri/target/kde-validation/radial/`.
 This validates the current Linux focus-before-hide behavior as well as the final
 layout; Windows correction verification remains pending for the reason above.
+
+
+## Windows radial verification after memory recovery
+
+`node desktop/tests/windows/native.mjs` now passes all 22 checks with no skips.
+Fresh receipt: `src-tauri/target/windows-validation/WARP-NATIVE-42666202-5045-4fed-9580-d4fe8bcd9dcf/`.
+This supersedes the Windows radial failure and memory blocker above. Selection
+focuses the chosen second window on release; dead-zone, native Escape and
+pause/resume cancellation all pass. The inspected picker screenshot has readable,
+separate labels and instructions. The ordinary debug build was restored
+successfully (`restore-build.log`, exit 0).
+
+The current Windows Rust suite passes 50 tests, with the two existing opt-in
+terminal tests ignored. No runtime code changed after the verified Linux radial
+receipt. INI migration and all other unfinished rows remain in scope.

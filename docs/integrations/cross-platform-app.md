@@ -8,7 +8,7 @@
 - Intended eventual target: `main`; promotion/merge has not been requested
 - Last updated: 2026-10-24
 - Latest immutable recovery checkpoint: `61233ff2e8e10eb7c5df8e8906aaf45e982817d8`
-- Feature implementation commits: `abfc95e` (desktop/workspace foundation), `ee7bee4` (Firefox profiles/tabs), `c09d79c` (terminal capture/editor/restore), `491a9d8` (KDE Firefox caption correction and complete 15-check native run), `5e6373d` (WSL distribution discovery and native directory restoration), `02d4e02` (reviewed shortcut reassignment and 12-check native KDE run), `b216f0c` (persistent pause and application control hotkeys, 15 native KDE checks), `d49e380` (14 native Windows application checks), `9794b75` (Windows tap/hold, activation deadlock correction, 18 Windows and 15 KDE native checks), `b63cb1d` (KDE native tap/hold, Wayland editor focus, 20 native KDE checks), `41fbc70` (KDE key reservation cleanup, 21 native KDE checks, held-key regression reproduced), `da23019` (held-key cancellation and deferred reassignment, verified script startup, 22 native KDE checks), `61233ff` (shared radial picker, 26 native KDE checks; Windows release-focus retest blocked by available memory)
+- Feature implementation commits: `abfc95e` (desktop/workspace foundation), `ee7bee4` (Firefox profiles/tabs), `c09d79c` (terminal capture/editor/restore), `491a9d8` (KDE Firefox caption correction and complete 15-check native run), `5e6373d` (WSL distribution discovery and native directory restoration), `02d4e02` (reviewed shortcut reassignment and 12-check native KDE run), `b216f0c` (persistent pause and application control hotkeys, 15 native KDE checks), `d49e380` (14 native Windows application checks), `9794b75` (Windows tap/hold, activation deadlock correction, 18 Windows and 15 KDE native checks), `b63cb1d` (KDE native tap/hold, Wayland editor focus, 20 native KDE checks), `41fbc70` (KDE key reservation cleanup, 21 native KDE checks, held-key regression reproduced), `da23019` (held-key cancellation and deferred reassignment, verified script startup, 22 native KDE checks), `61233ff` (shared radial picker, 26 native KDE checks; 22 native Windows checks after memory recovery)
 - Canonical references: original root AHK files; `desktop/PARITY.md`
 
 ## Intent and implemented contract
@@ -588,3 +588,17 @@ all eight slots and both centered instructions are separate and readable. The
 local final report/screenshot is under `desktop/src-tauri/target/kde-validation/radial/`.
 This validates the current Linux focus-before-hide behavior as well as the final
 layout; Windows correction verification remains pending for the reason above.
+
+
+## Windows radial retest complete
+
+Memory recovered; the authoritative full fixture passed all 22 checks with no
+skips on current implementation `61233ff2e8e10eb7c5df8e8906aaf45e982817d8`.
+Receipt: `desktop/src-tauri/target/windows-validation/WARP-NATIVE-42666202-5045-4fed-9580-d4fe8bcd9dcf/result.json`.
+Selection, dead-zone cancellation, native Escape and pause/resume are verified.
+The picker screenshot was inspected. The normal debug build restored successfully
+in the same run, superseding the prior memory blocker. Current Windows Rust:
+50 pass, two opt-in terminal tests ignored. No runtime edits were needed.
+
+Resume with reviewed INI migration, then the remaining PARITY requirements.
+Branch remains `codex/cross-platform-app`; no merge, push or installation.

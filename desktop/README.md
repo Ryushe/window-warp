@@ -68,7 +68,7 @@ For app identifiers, use the exact resource class or desktop file ID. KWin's win
 
 ## Scope and verification
 
-The full feature port is in progress; [PARITY.md](PARITY.md) tracks the source-derived requirements and verification gaps. INI import, pointer centering and timed retiling remain pending. The radial picker is implemented on both platforms and passes native KDE selection/cancellation checks; its Windows release-focus correction still requires a fresh native retest. Tap/hold tiling is implemented on Windows and KDE; see the checklist for native coverage and remaining gesture cases. Terminal capture and new-window restoration have passed native cmd, WSL, and Konsole fixtures; additional profile variants remain to be verified. Workspace capture/reuse/launch, per-axis maximization/fullscreen, and Firefox tab restoration have passed native KDE tests. Startup registration passes native Windows and KDE toggle tests; actual login launches still need validation. Live Windows Firefox, mixed-DPI displays, desktop-imposed minimum sizes, and elevated Windows applications also need coverage. Existing Windows preview installers predate these ongoing changes.
+The full feature port is in progress; [PARITY.md](PARITY.md) tracks the source-derived requirements and verification gaps. INI import, pointer centering and timed retiling remain pending. The radial picker is implemented on both platforms and passes native Windows and KDE selection/cancellation checks. Tap/hold tiling is implemented on Windows and KDE; see the checklist for native coverage and remaining gesture cases. Terminal capture and new-window restoration have passed native cmd, WSL, and Konsole fixtures; additional profile variants remain to be verified. Workspace capture/reuse/launch, per-axis maximization/fullscreen, and Firefox tab restoration have passed native KDE tests. Startup registration passes native Windows and KDE toggle tests; actual login launches still need validation. Live Windows Firefox, mixed-DPI displays, desktop-imposed minimum sizes, and elevated Windows applications also need coverage. Existing Windows preview installers predate these ongoing changes.
 
 ```sh
 npm test
@@ -113,5 +113,5 @@ existing settings continue to use mouse tiling.
 The overlay is clamped to the work area containing the original pointer. Native
 pointer updates run only while a picker is visible. On KDE, KWin positions and
 focuses the overlay, including on Wayland. More than four labels use a compact
-layout to keep all eight readable without overlap. Native Windows radial
-verification is incomplete; see PARITY.md before relying on it.
+layout to keep all eight readable without overlap. Native Windows and KDE fixtures verify selection on release, dead-zone and Escape
+cancellation, and pause/resume while held. See PARITY.md for remaining coverage.

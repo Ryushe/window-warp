@@ -27,7 +27,7 @@ The test covers:
 - App-pull tap on release, including release of a modifier before the main key.
 - Hold tiling from the initial pointer position, repeat suppression, and no tap
   after hold; pausing and resuming before release cancels the pending gesture.
-- Radial window order, pointer selection on release, dead-zone cancellation, Escape, and pause/resume while held (four new checks; final successful Windows receipt still required).
+- Radial window order, pointer selection on release, dead-zone cancellation, Escape, and pause/resume while held (four checks).
 - Saved delay and disable-hold settings; a disabled hold still taps on release.
 - Workspace capture/review with only owned windows selected and saved.
 - Closest-match workspace update review without automatic persistence.
@@ -51,11 +51,10 @@ launches, physical monitor removal, Firefox-specific restoration, or all termina
 profile variants. Those remain separate acceptance checks in `../../PARITY.md`.
 
 
-Current limitation: a native radial attempt reached selection but failed to focus
-the selected window on release. The implementation now focuses the selection
-before hiding the overlay, preserving Windows foreground eligibility. Rebuild
-and rerun the fixture to verify this correction. Local compilation subsequently
-failed from low system commit availability, including with one job and debug
-symbols disabled. The ordinary debug build was not successfully restored after
-that failure; rebuild it before launching it. Existing preview installers are
-unchanged and do not contain this work. See PARITY.md for exact receipts.
+Current receipt: all 22 checks pass with no skips in
+`src-tauri/target/windows-validation/WARP-NATIVE-42666202-5045-4fed-9580-d4fe8bcd9dcf/`.
+The radial selection is applied before hiding the overlay, preserving Windows
+foreground eligibility. Its screenshot was inspected and the ordinary debug
+build was successfully restored. Earlier memory and release-focus failures are
+superseded by this fresh build and native run. Existing preview installers are
+unchanged and do not contain this work.
