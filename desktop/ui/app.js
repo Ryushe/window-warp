@@ -20,17 +20,22 @@ function controls() {
     $("#toggle").textContent = enabled ? "Pause shortcuts" : "Enable shortcuts ↗";
     $("#status").textContent = enabled ? "● Shortcuts active" : "○ Paused";
     $("#status").classList.toggle("active", enabled);
-    $("#save").disabled = busy || !dirty || !config;
+    const cannotSave = busy || !dirty || !config;
+    $("#save").disabled = cannotSave;
+    $("#save-settings").disabled = cannotSave;
     $("#add").disabled = busy || !config;
     $("#bindings").querySelectorAll("input, select, button").forEach((el) => { el.disabled = busy; });
     $("#quick-shortcut").disabled = $("#quick-apply").disabled = $("#quick-behavior").disabled = $("#quick-layout").disabled = busy;
-    $("#main-monitor").disabled = $("#burner-monitor").disabled = busy || enabled || !config;
-    $("#hold-mode").disabled = $("#hold-enabled").disabled = $("#hold-delay").disabled = busy || enabled || !config;
+    $("#main-monitor").disabled = $("#burner-monitor").disabled = busy || !config;
+    $("#hold-mode").disabled = $("#hold-enabled").disabled = $("#hold-delay").disabled = busy || !config;
+    $("#enable-on-launch").disabled = busy || !config;
     $("#startup").disabled = busy || !startupKnown;
     $("#import-files").disabled = busy || enabled || !config;
     $("#apply-import").disabled = busy || enabled || !config;
     $("#edit-hint").textContent = enabled ? "Shortcuts are on. Save updates them without pausing." : "Save, then turn shortcuts on.";
-    $("#save-status").textContent = dirty ? "Unsaved changes" : "Stored on this device";
+    const saveStatus = dirty ? "Unsaved changes" : "Stored on this device";
+    $("#save-status").textContent = saveStatus;
+    $("#settings-save-status").textContent = saveStatus;
 }
 function cancelReassignment() {
     reassignment = null;
@@ -371,6 +376,7 @@ $("#save").addEventListener("click", () => perform(async () => {
     dirty = false; render();
     message(enabled ? "Saved. The shortcuts in use were updated." : "Saved. Enable shortcuts when you’re ready.");
 }));
+$("#save-settings").addEventListener("click", () => $("#save").click());
 $("#toggle").addEventListener("click", () => perform(async () => {
     enabled = await native.core.invoke("set_enabled", { enabled: !enabled });
     message(enabled ? "Shortcuts are active. Focus another app and try a shortcut. Close this window to keep Warp in the tray." : "Shortcuts are paused. You can edit your bindings now.");

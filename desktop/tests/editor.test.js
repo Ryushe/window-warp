@@ -56,7 +56,7 @@ async function editor({ failLoad = false, failSave = false, failEnable = false, 
     }, async click(selector) { document.querySelector(selector).click(); await tick(); } };
 }
 
-test("hold settings migrate defaults, save edits and lock while shortcuts are active", async () => {
+test("hold settings stay editable while shortcuts are active and save from the settings page", async () => {
     const e = await editor();
     assert.equal(e.document.querySelector("#hold-enabled").checked, true);
     assert.equal(e.document.querySelector("#hold-delay").value, "400");
@@ -74,13 +74,19 @@ test("hold settings migrate defaults, save edits and lock while shortcuts are ac
     assert.equal(saved.settings.holdTileEnabled, false);
     assert.equal(saved.settings.holdMode,"radial");
     await e.click("#toggle");
-    assert.equal(field.disabled, true);
-    assert.equal(mode.disabled, true);
-    assert.equal(e.document.querySelector("#hold-delay").disabled, true);
+    assert.equal(field.disabled, false);
+    assert.equal(mode.disabled, false);
+    assert.equal(e.document.querySelector("#hold-delay").disabled, false);
+    assert.equal(e.document.querySelector("#main-monitor").disabled, false);
+    assert.equal(e.document.querySelector("#enable-on-launch").disabled, false);
+    e.input("#hold-delay", "500");
+    assert.equal(e.document.querySelector("#save-settings").disabled, false);
+    await e.click("#save-settings");
+    assert.equal(e.calls.filter(c => c.command === "save_config").at(-1).args.config.settings.holdDelayMs, 500);
     e.listeners.get("warp-enabled")({payload:false});
     assert.equal(field.disabled, false);
     assert.equal(field.checked, false);
-    assert.equal(e.document.querySelector("#hold-delay").value, "725");
+    assert.equal(e.document.querySelector("#hold-delay").value, "500");
 });
 
 test("KDE editor offers the same hold settings as Windows", async () => {

@@ -2489,3 +2489,4 @@ User asked to commit and publish this branch. No merge to `main` yet.
 - The radial picker does not take focus. Release closes it and chooses the slice under the pointer; the center cancels.
 - Live on this PC: holding Win+D showed `Window Warp Picker`, and releasing removed it. The Win+B button says Go to Warp.
 - Not claimed: a full physical pass of Win+S, Win+T, Win+D, Win+S in a row, or a slice selection that pulls a chosen window. Injected keys are weaker than a physical keyboard for key-up.
+- Settings (monitors, hold, launch) stay editable while shortcuts are on. The settings page has its own Save settings button. Saving still reapplies the live shortcuts.
