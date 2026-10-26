@@ -1,6 +1,6 @@
 {
   "identifier": "main",
-  "description": "Local settings window",
-  "windows": ["main", "radial"],
+  "description": "Local settings, radial picker, and shortcut popup",
+  "windows": ["main", "radial", "quick"],
   "permissions": ["core:default"]
 }

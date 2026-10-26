@@ -15,6 +15,8 @@ use windows_sys::Win32::{
 };
 #[path = "windows_gestures.rs"]
 mod gestures;
+#[path = "windows_reserved.rs"]
+mod reserved;
 
 #[derive(Clone, Copy)]
 struct Placement {
@@ -300,6 +302,54 @@ pub fn restore_window(
 ) -> Result<(), String> {
     unsafe { restore_native(current, saved) }
 }
+pub fn raise_window(hwnd: isize) {
+    unsafe {
+        let hwnd = hwnd as HWND;
+        let foreground = GetForegroundWindow();
+        let target_thread = GetWindowThreadProcessId(hwnd, null_mut());
+        let foreground_thread = GetWindowThreadProcessId(foreground, null_mut());
+        let attached = foreground_thread != 0
+            && foreground_thread != target_thread
+            && AttachThreadInput(foreground_thread, target_thread, 1) != 0;
+        let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = SetForegroundWindow(hwnd);
+        if attached {
+            AttachThreadInput(foreground_thread, target_thread, 0);
+        }
+    }
+}
+pub fn capture_super_held() -> bool {
+    reserved::capture_super_held()
+}
+pub fn super_key_down() -> bool {
+    // The hook's own key state. GetAsyncKeyState stays up after a swallowed Win.
+    reserved::super_down()
+}
+pub fn capture_active() -> bool {
+    reserved::capturing()
+}
+pub fn mouse_down() -> bool {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON};
+    unsafe {
+        [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
+            .into_iter()
+            .any(|key| GetAsyncKeyState(i32::from(key)) < 0)
+    }
+}
+pub fn editor_foreground() -> Option<String> {
+    reserved::editor_hwnd().map(|hwnd| hwnd.to_string())
+}
+pub fn focus_captured(_: &AppHandle, id: &str, pid: u32) -> Result<(), String> {
+    unsafe {
+        let hwnd = id.parse::<usize>().map_err(|_| "Invalid window ID.")? as HWND;
+        let mut actual = 0;
+        GetWindowThreadProcessId(hwnd, &mut actual);
+        if IsWindow(hwnd) == 0 || actual != pid {
+            return Ok(());
+        }
+        focus(hwnd)
+    }
+}
 pub fn focus_window(_: &AppHandle, current: &crate::workspaces::WindowInfo) -> Result<(), String> {
     unsafe {
         let hwnd = current
@@ -410,8 +460,10 @@ pub fn show_radial(app: &AppHandle, bounds: Rect) -> Result<(), String> {
     window
         .set_position(tauri::PhysicalPosition::new(bounds.x, bounds.y))
         .map_err(|e| e.to_string())?;
-    window.show().map_err(|e| e.to_string())?;
-    window.set_focus().map_err(|e| e.to_string())
+    // The picker tracks the cursor. Taking focus grabs the mouse and makes
+    // Windows drop the key-up, so the menu never closes or chooses.
+    let _ = window.set_focusable(false);
+    window.show().map_err(|e| e.to_string())
 }
 
 unsafe fn pull_app(
@@ -672,6 +724,24 @@ unsafe fn execute(binding: &Binding, settings: &Settings) -> Result<(), String> 
     if action.starts_with("tile-") {
         return place(hwnd, tile_rect(area, action), false);
     }
+    if all.len() == 1
+        && matches!(
+            action,
+            "push-left" | "push-right" | "push-left-center" | "push-right-center"
+        )
+    {
+        // Nowhere to move. Tile in place instead of repeating a no-op push.
+        let direction = if action.starts_with("push-left") {
+            "tile-left"
+        } else {
+            "tile-right"
+        };
+        place(hwnd, tile_rect(area, direction), false)?;
+        if action.ends_with("-center") {
+            center_pointer(area)?;
+        }
+        return Ok(());
+    }
     let next = if action == "push-left" || action == "push-left-center" {
         (index + all.len() - 1) % all.len()
     } else {
@@ -773,9 +843,24 @@ pub fn retile_window(
     }
 }
 
+pub(super) fn run_binding(app: &AppHandle, binding: &Binding, settings: &Settings) {
+    if crate::app_actions::is_control(&binding.action) {
+        crate::app_actions::dispatch(app, &binding.action);
+    } else if binding.action == "pull-app" {
+        if let Err(message) = gestures::press(app, binding, settings) {
+            let _ = app.emit("warp-error", message);
+        }
+    } else if let Err(message) = unsafe { execute(binding, settings) } {
+        let _ = app.emit("warp-error", message);
+    }
+}
+
 pub fn configure_pause(app: &AppHandle, config: &Config) -> Result<(), String> {
+    // Super chords belong to Windows until shortcuts are enabled. Registering
+    // them here fails and would also steal keys such as Win+; while paused.
     let desired: Vec<_> = parsed_bindings(config, true)?
         .into_iter()
+        .filter(|(binding, _)| !reserved::is_super(&binding.shortcut))
         .map(|(_, key)| key)
         .collect();
     let mut current = PAUSE_SHORTCUTS.lock().map_err(|e| e.to_string())?;
@@ -815,7 +900,23 @@ pub fn enable(app: &AppHandle, config: &Config) -> Result<(), String> {
     // Validate the whole batch before installing any window-action hooks.
     let bindings = parsed_bindings(config, false)?;
     let mut installed = ACTION_SHORTCUTS.lock().map_err(|e| e.to_string())?;
+    let mut hooked = Vec::new();
+    for (binding, _) in parsed_bindings(config, true)? {
+        if reserved::is_super(&binding.shortcut) {
+            hooked.push(reserved::Armed {
+                settings: config.settings.clone(),
+                binding,
+            });
+        }
+    }
     for (binding, shortcut) in bindings {
+        if reserved::is_super(&binding.shortcut) {
+            hooked.push(reserved::Armed {
+                settings: config.settings.clone(),
+                binding,
+            });
+            continue;
+        }
         let key = binding.shortcut.clone();
         let settings = config.settings.clone();
         if let Err(e) = app
@@ -825,20 +926,13 @@ pub fn enable(app: &AppHandle, config: &Config) -> Result<(), String> {
                     if crate::retile::fire(&binding.shortcut) {
                         return;
                     }
-                    if crate::app_actions::is_control(&binding.action) {
-                        crate::app_actions::dispatch(app, &binding.action);
-                    } else if binding.action == "pull-app" {
-                        if let Err(message) = gestures::press(app, &binding, &settings) {
-                            let _ = app.emit("warp-error", message);
-                        }
-                    } else if let Err(message) = unsafe { execute(&binding, &settings) } {
-                        let _ = app.emit("warp-error", message);
-                    }
+                    run_binding(app, &binding, &settings);
                 }
             })
         {
             let keys = installed.clone();
             let cleanup = unregister_tracked(app, &mut installed, &keys);
+            reserved::clear_active();
             return Err(format!(
                 "Cannot register {key}. It may be used by Windows or another app: {e}{}",
                 cleanup
@@ -849,19 +943,39 @@ pub fn enable(app: &AppHandle, config: &Config) -> Result<(), String> {
         }
         installed.push(shortcut);
     }
+    drop(installed);
+    reserved::stop_recording();
+    if let Err(error) = reserved::set_active(app.clone(), hooked) {
+        let mut installed = ACTION_SHORTCUTS.lock().map_err(|e| e.to_string())?;
+        let keys = installed.clone();
+        let _ = unregister_tracked(app, &mut installed, &keys);
+        return Err(error);
+    }
     gestures::enable()
 }
 pub fn disable(app: &AppHandle) -> Result<(), String> {
     gestures::cancel()?;
+    // The pause chord stays installed so Super+pause can turn shortcuts back on.
+    // Every other Windows hotkey is released.
+    reserved::retain_pause();
     let mut installed = ACTION_SHORTCUTS.lock().map_err(|e| e.to_string())?;
     let keys = installed.clone();
     unregister_tracked(app, &mut installed, &keys)?;
     // Pausing cancels transient input, not the user's movement/focus history.
     // These process-local caches also survive configuration re-registration.
+    // The pause key stays only when Windows does not already own it.
     Ok(())
+}
+pub fn start_recording(app: AppHandle, popup: bool) -> Result<(), String> {
+    reserved::start_recording(app, popup)
+}
+pub fn stop_recording() {
+    reserved::stop_recording();
 }
 pub fn shutdown(app: &AppHandle) {
     let _ = gestures::cancel();
+    reserved::clear_active();
+    reserved::stop_recording();
     let _ = app.global_shortcut().unregister_all();
     if let Ok(mut saved) = MAXIMIZE_RESTORE.lock() {
         for (id, (pid, _)) in saved.drain() {

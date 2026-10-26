@@ -1,25 +1,47 @@
-//! Poll only while an app shortcut is held. The shortcut plugin's release event
-//! observes the main key only; we also need modifier-first release and cancellation.
+//! App shortcuts follow the AutoHotkey timing.
+//! The chord starts on key-down. Releasing its letter finishes it: a tap pulls
+//! the app, a hold opens the radial and finishes on release. Starting a
+//! different shortcut while one is still held cancels that hold so the new
+//! one can take over. The hook's own key state is the clock; we do not ask
+//! Windows whether a swallowed key is down.
+
 use crate::{
     config::{Binding, Settings},
     gesture::{Action, Press},
 };
 use std::{
-    collections::HashMap,
-    sync::{LazyLock, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, LazyLock, Mutex,
+    },
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter};
 use windows_sys::Win32::{
     Foundation::POINT,
-    UI::{Input::KeyboardAndMouse::GetAsyncKeyState, WindowsAndMessaging::GetCursorPos},
+    UI::WindowsAndMessaging::GetCursorPos,
 };
 
-#[derive(Default)]
+struct Track {
+    id: u64,
+    shortcut: String,
+    released: Arc<AtomicBool>,
+    cancelled: Arc<AtomicBool>,
+}
+
 struct Sessions {
     enabled: bool,
     sequence: u64,
-    active: HashMap<String, u64>,
+    current: Option<Track>,
+}
+impl Default for Sessions {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            sequence: 0,
+            current: None,
+        }
+    }
 }
 static SESSIONS: LazyLock<Mutex<Sessions>> = LazyLock::new(|| Mutex::new(Sessions::default()));
 
@@ -31,13 +53,15 @@ pub fn enable() -> Result<(), String> {
 pub fn cancel() -> Result<(), String> {
     let mut sessions = SESSIONS.lock().map_err(|e| e.to_string())?;
     sessions.enabled = false;
-    sessions.active.clear();
+    if let Some(track) = sessions.current.take() {
+        track.cancelled.store(true, Ordering::SeqCst);
+        track.released.store(true, Ordering::SeqCst);
+    }
     Ok(())
 }
 
 struct Chord {
     keys: Vec<i32>,
-    super_key: bool,
 }
 impl Chord {
     fn parse(shortcut: &str) -> Result<Self, String> {
@@ -80,21 +104,22 @@ impl Chord {
                 .map(|n| 0x70 + n - 1)
                 .ok_or_else(|| format!("Cannot observe shortcut key {key}."))?,
         };
-        let mut keys = vec![vk];
-        for (name, code) in [("Ctrl", 0x11), ("Alt", 0x12), ("Shift", 0x10)] {
-            if parts.contains(&name) {
-                keys.push(code);
-            }
-        }
-        Ok(Self {
-            keys,
-            super_key: parts.contains(&"Super"),
-        })
+        Ok(Self { keys: vec![vk] })
     }
-    fn down(&self) -> bool {
-        let down = |key| unsafe { GetAsyncKeyState(key) < 0 };
-        self.keys.iter().all(|key| down(*key)) && (!self.super_key || down(0x5B) || down(0x5C))
+
+    /// The letter (or function key) only. Win can flicker after Windows sees
+    /// it; the letter the user is still holding is what keeps a radial open.
+    fn letter_down(&self) -> bool {
+        self.keys
+            .iter()
+            .all(|key| super::reserved::vk_down(*key as u32))
     }
+}
+
+/// A second press of a chord that is still held is auto-repeat.
+/// After its letter goes up, the next shortcut is a new tap.
+fn blocks_repeat(same_chord: bool, letter_still_down: bool) -> bool {
+    same_chord && letter_still_down
 }
 
 pub fn press(app: &AppHandle, binding: &Binding, settings: &Settings) -> Result<(), String> {
@@ -106,91 +131,178 @@ pub fn press(app: &AppHandle, binding: &Binding, settings: &Settings) -> Result<
         ));
     }
     let mut sessions = SESSIONS.lock().map_err(|e| e.to_string())?;
-    if !sessions.enabled || sessions.active.contains_key(&binding.shortcut) {
+    if !sessions.enabled {
         return Ok(());
+    }
+    if let Some(current) = sessions.current.as_ref() {
+        let same = current.shortcut == binding.shortcut;
+        let still = !current.released.load(Ordering::SeqCst) && chord.letter_down();
+        if blocks_repeat(same, still) {
+            return Ok(());
+        }
+        if !same && !current.released.load(Ordering::SeqCst) {
+            // The user started a different shortcut before releasing this one.
+            current.cancelled.store(true, Ordering::SeqCst);
+            current.released.store(true, Ordering::SeqCst);
+        }
+    }
+    // The letter was already released before this reached the worker.
+    // That is a tap. Do not arm a hold.
+    if !chord.letter_down() {
+        sessions.current = None;
+        drop(sessions);
+        return unsafe { super::execute(binding, settings) };
     }
     sessions.sequence = sessions.sequence.wrapping_add(1);
     let id = sessions.sequence;
-    sessions.active.insert(binding.shortcut.clone(), id);
+    let released = Arc::new(AtomicBool::new(false));
+    let cancelled = Arc::new(AtomicBool::new(false));
+    sessions.current = Some(Track {
+        id,
+        shortcut: binding.shortcut.clone(),
+        released: released.clone(),
+        cancelled: cancelled.clone(),
+    });
     let started = Instant::now();
     let (app, binding, settings) = (app.clone(), binding.clone(), settings.clone());
-    let key = binding.shortcut.clone();
     let result = std::thread::Builder::new()
         .name("app-shortcut-hold".into())
         .spawn(move || {
-            let mut press = Press::new(settings.hold_delay_ms, settings.hold_tile_enabled);
+            let mut timing = Press::new(settings.hold_delay_ms, settings.hold_tile_enabled);
+            let mut held = false;
             let mut picker: Option<crate::radial::Picker> = None;
             loop {
-                // Serialize the final validity check and native action with cancel.
-                // An old worker can never act on a newly enabled session with the same key.
-                let outcome = (|| -> Result<bool, String> {
-                    let mut sessions = SESSIONS.lock().map_err(|e| e.to_string())?;
-                    if !sessions.enabled || sessions.active.get(&binding.shortcut) != Some(&id) {
-                        return Ok(true);
+                if cancelled.load(Ordering::SeqCst) {
+                    let _ = picker.take();
+                    break;
+                }
+                let win_let_go = binding.shortcut.split('+').any(|part| part == "Super")
+                    && !super::reserved::super_down();
+                if released.load(Ordering::SeqCst) || !chord.letter_down() || win_let_go {
+                    if !released.load(Ordering::SeqCst) {
+                        released.store(true, Ordering::SeqCst);
                     }
-                    let action = press.advance(started.elapsed(), chord.down());
-                    let result = match action {
-                        Some(Action::Tap) => unsafe { super::execute(&binding, &settings) },
-                        Some(Action::Hold) => (|| {
-                            if settings.hold_mode == "radial" {
-                                picker = crate::radial::Picker::open(
-                                    &app,
-                                    &binding,
-                                    crate::radial::Point {
-                                        x: point.x,
-                                        y: point.y,
-                                    },
-                                )?;
-                                if picker.is_some() {
-                                    return Ok(());
+                    finish(&app, id, &binding, &settings, held, picker.take());
+                    break;
+                }
+                if !held {
+                    if let Some(Action::Hold) =
+                        timing.advance(started.elapsed(), true)
+                    {
+                        held = true;
+                        if settings.hold_mode == "radial" {
+                            match crate::radial::Picker::open(
+                                &app,
+                                &binding,
+                                crate::radial::Point {
+                                    x: point.x,
+                                    y: point.y,
+                                },
+                            ) {
+                                Ok(Some(opened)) => picker = Some(opened),
+                                Ok(None) => {
+                                    if let Err(message) =
+                                        unsafe { super::pull_app(&binding, &settings, Some(point)) }
+                                    {
+                                        let _ = app.emit("warp-error", message);
+                                    }
+                                }
+                                Err(message) => {
+                                    let _ = app.emit("warp-error", message);
                                 }
                             }
+                        } else if let Err(message) =
                             unsafe { super::pull_app(&binding, &settings, Some(point)) }
-                        })(),
-                        None => Ok(()),
-                    };
-                    let result = result.and_then(|_| {
-                        if let Some(active) = picker.as_ref() {
-                            if unsafe { GetAsyncKeyState(0x1B) < 0 } || !active.update()? {
-                                picker = None;
-                            } else if press.finished() {
-                                picker.take().unwrap().release(&binding, &settings)?;
-                            }
+                        {
+                            let _ = app.emit("warp-error", message);
                         }
-                        Ok(())
-                    });
-                    if press.finished() || result.is_err() {
-                        sessions.active.remove(&binding.shortcut);
                     }
-                    result.map(|_| press.finished())
-                })();
-                match outcome {
-                    Ok(true) => break,
-                    Ok(false) => std::thread::sleep(Duration::from_millis(25)),
-                    Err(message) => {
-                        let _ = app.emit("warp-error", message);
-                        break;
+                } else if let Some(active) = picker.as_ref() {
+                    let escape = super::reserved::vk_down(0x1B);
+                    match active.update() {
+                        Ok(true) if !escape => {}
+                        _ => picker = None,
                     }
                 }
+                std::thread::sleep(Duration::from_millis(25));
             }
         });
     if let Err(error) = result {
-        sessions.active.remove(&key);
+        if sessions
+            .current
+            .as_ref()
+            .is_some_and(|track| track.id == id)
+        {
+            sessions.current = None;
+        }
         return Err(format!("Cannot start app shortcut hold tracking: {error}"));
     }
     Ok(())
 }
 
+fn finish(
+    app: &AppHandle,
+    id: u64,
+    binding: &Binding,
+    settings: &Settings,
+    held: bool,
+    picker: Option<crate::radial::Picker>,
+) {
+    if let Ok(mut sessions) = SESSIONS.lock() {
+        if sessions.current.as_ref().is_some_and(|track| track.id == id) {
+            sessions.current = None;
+        }
+    }
+    if held {
+        if let Some(picker) = picker {
+            if let Err(message) = picker.release(binding, settings) {
+                let _ = app.emit("warp-error", message);
+            }
+        }
+        return;
+    }
+    if let Err(message) = unsafe { super::execute(binding, settings) } {
+        let _ = app.emit("warp-error", message);
+    }
+}
+
+/// The hook calls this on every key-up, after it has forgotten that key.
+pub(super) fn note_release() {
+    let Some((shortcut, released)) = SESSIONS.lock().ok().and_then(|sessions| {
+        sessions.current.as_ref().map(|track| {
+            (track.shortcut.clone(), track.released.clone())
+        })
+    }) else {
+        return;
+    };
+    let Ok(chord) = Chord::parse(&shortcut) else {
+        return;
+    };
+    let win_let_go =
+        shortcut.split('+').any(|part| part == "Super") && !super::reserved::super_down();
+    if !chord.letter_down() || win_let_go {
+        released.store(true, Ordering::SeqCst);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn chord_observes_required_modifiers_and_supported_key_codes() {
         let chord = Chord::parse("Ctrl+Alt+Shift+Super+Semicolon").unwrap();
-        assert_eq!(chord.keys, [0xBA, 0x11, 0x12, 0x10]);
-        assert!(chord.super_key);
-        assert_eq!(Chord::parse("Ctrl+F24").unwrap().keys, [0x87, 0x11]);
+        assert_eq!(chord.keys, [0xBA]);
+        assert_eq!(Chord::parse("Ctrl+F24").unwrap().keys, [0x87]);
         assert_eq!(Chord::parse("Super+J").unwrap().keys, [0x4A]);
         assert!(Chord::parse("Ctrl+F25").is_err());
     }
+
+    #[test]
+    fn a_new_shortcut_is_allowed_as_soon_as_the_letter_is_up() {
+        assert!(blocks_repeat(true, true), "holding the same key is one gesture");
+        assert!(!blocks_repeat(true, false), "release then tap again");
+        assert!(!blocks_repeat(false, true), "a different shortcut takes over");
+    }
 }
+

@@ -42,6 +42,9 @@ pub fn focus_editor(app: &AppHandle) -> Result<(), String> {
     Err("KWin could not find the Window Warp editor to focus it. Open it from the taskbar and try again.".into())
 }
 
+pub fn editor_foreground() -> Option<String> {
+    None
+}
 pub fn snapshot(app: &AppHandle) -> Result<Vec<crate::workspaces::WindowInfo>, String> {
     let value = crate::linux_control::request(app, serde_json::json!({"kind": "snapshot"}))?;
     let mut windows: Vec<crate::workspaces::WindowInfo> =
@@ -99,6 +102,13 @@ pub fn restore_window(
         }
     }
     Err("The app did not accept the saved window size or state. It may enforce a minimum size or have changed its layout.".into())
+}
+pub fn focus_captured(app: &AppHandle, id: &str, pid: u32) -> Result<(), String> {
+    crate::linux_control::request(
+        app,
+        serde_json::json!({"kind":"focus", "window":{"id":id,"pid":pid}}),
+    )?;
+    Ok(())
 }
 pub fn focus_window(app: &AppHandle, window: &crate::workspaces::WindowInfo) -> Result<(), String> {
     crate::linux_control::request(
@@ -201,6 +211,13 @@ pub fn configure_pause(app: &AppHandle, config: &Config) -> Result<(), String> {
     if pause.bindings.is_empty() {
         return unload_script("window-warp-pause-session");
     }
+    // Leave a desktop-owned pause key alone until Warp is actually enabled.
+    if !crate::linux_override::borrowing() {
+        let keys: Vec<_> = pause.bindings.iter().map(|binding| binding.shortcut.clone()).collect();
+        if crate::linux_override::others_own(&keys).unwrap_or(false) {
+            return unload_script("window-warp-pause-session");
+        }
+    }
     let source = shortcut_source(app, &pause)?;
     load_script(app, "window-warp-pause-session", "kwin-pause.js", &source)
 }
@@ -267,6 +284,7 @@ pub fn shutdown(app: &AppHandle) {
     let _ = crate::linux_gestures::stop();
     let _ = unload_script("window-warp-retile-session");
     let _ = unload_script("window-warp-pause-session");
+    let _ = crate::linux_override::restore();
     crate::linux_control::shutdown(app);
 }
 pub fn load_script(
@@ -353,10 +371,11 @@ pub fn disable(_: &AppHandle) -> Result<(), String> {
         .chain(gestures.as_ref().err().cloned())
         .collect();
     if !failures.is_empty() {
+        let _ = end_activation();
         return Err(failures.join("; "));
     }
     if gestures.unwrap_or(false) {
-        return Ok(());
+        return end_activation();
     }
     disable_window_actions()?;
     // No worker exists during startup; reclaim hooks left by a previous crash.
@@ -366,7 +385,13 @@ pub fn disable(_: &AppHandle) -> Result<(), String> {
     {
         unload_script(&id)?;
     }
-    Ok(())
+    end_activation()
+}
+fn end_activation() -> Result<(), String> {
+    if crate::linux_override::takes_pause() {
+        let _ = unload_script("window-warp-pause-session");
+    }
+    crate::linux_override::restore()
 }
 pub fn unload_script(name: &str) -> Result<(), String> {
     let program = qdbus()?;

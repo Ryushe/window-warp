@@ -169,14 +169,16 @@ try {
 
     await press(18); await paused(false);
     await press(19);
-    await wait("document.querySelectorAll('.binding').length === 10 && document.querySelector('#status').textContent.includes('Paused')", "active-app editor");
-    assert.equal((await evaluate("document.querySelector('.binding:last-child [data-field=appMatch]').value")).toLowerCase(),path.basename(fixture.executable).toLowerCase());
-    await click(".binding:last-child .record");
+    await wait("!document.querySelector('#quick-edit').hidden && document.querySelector('#status').textContent.includes('active')", "quick app editor");
+    assert.equal((await evaluate("document.querySelector('#quick-match').textContent")).toLowerCase(),path.basename(fixture.executable).toLowerCase());
+    await evaluate("document.querySelector('#quick-shortcut').focus()");
     await native("press",{key:0x86,window:await native("app_window")}); // F23 delivered to the editor.
-    await wait("document.querySelector('.binding:last-child [data-field=shortcut]').value === 'Ctrl+Alt+Shift+F23'", "native shortcut recorder");
-    await click("#save");
-    await wait("!document.querySelector('#add').disabled && document.querySelector('#message').textContent.startsWith('Saved.')", "current app binding saved");
-    checks.push("editor shortcut captures the owned foreground app, pauses, and saves its binding");
+    await wait("document.querySelector('#quick-shortcut').value === 'Ctrl+Alt+Shift+F23'", "native shortcut recorder");
+    await click("#quick-apply");
+    await wait("document.querySelector('#quick-edit').hidden && document.querySelector('#message').textContent.startsWith('Saved.')", "current app binding saved");
+    assert.equal((await invoke("get_status")).enabled, true);
+    await press(18); await paused(true);
+    checks.push("quick editor names the focused app, keeps shortcuts on, and saves its binding");
     checks.push("shortcut recorder accepts Windows keyboard events and persists the physical key name");
     await input('.binding:last-child [data-field="shortcut"]',"shift+control+alt+F14");
     await click(".binding:last-child .reassign");

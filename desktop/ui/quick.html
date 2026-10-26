@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Window Warp</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="quick.js" defer></script>
+</head>
+<body class="quick-body">
+  <div class="quick-sheet" role="dialog" aria-labelledby="quick-title">
+    <h2 id="quick-title">Shortcut</h2>
+    <p id="quick-app" class="quick-app"></p>
+    <label class="key-field quick-key">
+      <input id="quick-entry" readonly placeholder="Press a shortcut" spellcheck="false" aria-label="Shortcut">
+    </label>
+    <p id="quick-hint">Press the whole shortcut, including Super. Escape closes this. Delete clears it.</p>
+    <label>Second press
+      <select id="quick-behavior">
+        <option value="focus-last">Focus previous app</option>
+        <option value="burner">Send to burner monitor</option>
+      </select>
+    </label>
+    <p id="quick-behavior-hint"></p>
+    <label>Burner layout
+      <select id="quick-layout">
+        <option value="float">Preserve relative placement</option>
+        <option value="tile-left">Left half</option>
+        <option value="tile-right">Right half</option>
+        <option value="fullscreen">Maximized</option>
+      </select>
+    </label>
+    <p id="quick-layout-hint"></p>
+    <p id="quick-message" role="status"></p>
+    <div class="quick-actions">
+      <button id="quick-open" type="button">Go to Warp</button>
+      <span>
+        <button id="quick-apply" class="primary" type="button">Apply</button>
+        <button id="quick-cancel" type="button">Cancel</button>
+      </span>
+    </div>
+  </div>
+</body>
+</html>

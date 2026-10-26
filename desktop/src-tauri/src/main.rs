@@ -12,9 +12,11 @@ mod linux_control;
 #[cfg(target_os = "linux")]
 mod linux_gestures;
 #[cfg(target_os = "linux")]
-mod linux_pointer;
+mod linux_override;
 #[cfg(any(target_os = "linux", test))]
 mod linux_physical;
+#[cfg(target_os = "linux")]
+mod linux_pointer;
 #[cfg(windows)]
 #[path = "windows.rs"]
 mod platform;
@@ -50,6 +52,9 @@ struct Runtime {
     workspace_io: Mutex<()>,
     restoring: std::sync::atomic::AtomicBool,
     cancel_restore: std::sync::atomic::AtomicBool,
+    quick_app: Mutex<Option<String>>,
+    quick_edit: Mutex<Option<serde_json::Value>>,
+    quick_open: std::sync::atomic::AtomicBool,
 }
 
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -84,9 +89,10 @@ async fn save_config(app: AppHandle, config: Config) -> Result<Config, String> {
 fn save_config_blocking(app: AppHandle, mut config: Config) -> Result<Config, String> {
     config.validate()?;
     let runtime = app.state::<Runtime>();
-    let enabled = runtime.enabled.lock().map_err(|e| e.to_string())?;
-    if *enabled {
-        return Err("Pause shortcuts before editing settings.".into());
+    let mut enabled = runtime.enabled.lock().map_err(|e| e.to_string())?;
+    let was_enabled = *enabled;
+    if was_enabled {
+        change_enabled(&app, false, &mut enabled)?;
     }
     let previous = get_config(app.clone())?;
     let path = settings_path(&app)?;
@@ -121,6 +127,13 @@ fn save_config_blocking(app: AppHandle, mut config: Config) -> Result<Config, St
         ));
     }
     *runtime.shortcut_error.lock().map_err(|e| e.to_string())? = None;
+    if was_enabled {
+        if let Err(error) = change_enabled(&app, true, &mut enabled) {
+            return Err(format!(
+                "Saved, but the shortcuts could not be turned back on: {error}"
+            ));
+        }
+    }
     Ok(config)
 }
 #[tauri::command]
@@ -153,10 +166,18 @@ fn change_enabled(app: &AppHandle, enabled: bool, current: &mut bool) -> Result<
     }
     if enabled {
         let config = get_config(app.clone())?;
-        platform::configure_pause(app, &config)?;
-        retile::start(app, &config)?;
-        if let Err(error) = platform::enable(app, &config) {
+        #[cfg(target_os = "linux")]
+        if let Err(error) = linux_override::begin(&config) {
+            return Err(error);
+        }
+        let activated = (|| {
+            platform::configure_pause(app, &config)?;
+            retile::start(app, &config)?;
+            platform::enable(app, &config)
+        })();
+        if let Err(error) = activated {
             let _ = retile::stop();
+            let _ = platform::disable(app);
             return Err(error);
         }
     } else {
@@ -184,7 +205,11 @@ fn change_enabled(app: &AppHandle, enabled: bool, current: &mut bool) -> Result<
     }
     *current = enabled;
     if let Some(menu) = app.try_state::<MenuItem<tauri::Wry>>() {
-        if let Err(error) = menu.set_text(if enabled { "Pause shortcuts" } else { "Enable shortcuts" }) {
+        if let Err(error) = menu.set_text(if enabled {
+            "Pause shortcuts"
+        } else {
+            "Enable shortcuts"
+        }) {
             eprintln!("Could not update the shortcut tray label: {error}");
         }
     }
@@ -317,10 +342,68 @@ fn cancel_workspace_restore(app: AppHandle) {
         .cancel_restore
         .store(true, std::sync::atomic::Ordering::SeqCst);
 }
+#[tauri::command]
+fn quick_edit(app: AppHandle) -> Option<serde_json::Value> {
+    app.state::<Runtime>()
+        .quick_edit
+        .lock()
+        .ok()
+        .and_then(|edit| edit.clone())
+}
+#[tauri::command]
+fn show_editor(app: AppHandle, app_match: Option<String>) {
+    show(&app);
+    if let Some(app_match) = app_match.filter(|name| !name.is_empty()) {
+        let _ = app.emit("reveal-app", app_match);
+    }
+}
+#[tauri::command]
+fn hide_quick(app: AppHandle) {
+    app.state::<Runtime>()
+        .quick_open
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    if let Some(window) = app.get_webview_window("quick") {
+        let _ = window.hide();
+    }
+}
+#[tauri::command]
+fn focus_captured(app: AppHandle, id: String, pid: u32) -> Result<(), String> {
+    platform::focus_captured(&app, &id, pid)
+}
+#[tauri::command]
+fn start_shortcut_recording(app: AppHandle, popup: Option<bool>) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        platform::start_recording(app, popup.unwrap_or(false))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = (app, popup);
+        linux_override::set_recording(true)
+    }
+}
+#[tauri::command]
+fn stop_shortcut_recording(app: AppHandle) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let _ = app;
+        platform::stop_recording();
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = app;
+        linux_override::set_recording(false)
+    }
+}
 fn show(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
         let _ = window.show();
         #[cfg(windows)]
+        if let Ok(hwnd) = window.hwnd() {
+            platform::raise_window(hwnd.0 as isize);
+        }
         let _ = window.set_focus();
         #[cfg(target_os = "linux")]
         {
@@ -403,11 +486,17 @@ fn main() {
                     .lock()
                     .map_err(|e| e.to_string())? = Some(error);
             }
-            if std::env::args().any(|arg| arg == "--startup") {
+            let startup_launch = std::env::args().any(|arg| arg == "--startup");
+            let enable_on_launch = get_config(app.handle().clone())
+                .map(|config| config.settings.enable_on_launch)
+                .unwrap_or(true);
+            if startup_launch || enable_on_launch {
                 match set_enabled_blocking(app.handle().clone(), true) {
                     Ok(_) => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.hide();
+                        if startup_launch {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.hide();
+                            }
                         }
                     }
                     Err(error) => eprintln!("Could not activate shortcuts at startup: {error}"),
@@ -416,11 +505,41 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // A picker is dismissed when focus leaves it, including Windows'
-            // Alt+Escape window cycling while an Alt-based app chord is held.
-            // Such system shortcuts need not reach the webview's key handler.
-            if window.label() == "radial" && matches!(event, tauri::WindowEvent::Focused(false)) {
-                radial::cancel_visible();
+            // The radial picker is not focusable. Focus loss used to cancel
+            // the choice before the key was released, so nothing was picked
+            // and the window could stay up. Escape and key release dismiss it.
+            if window.label() == "quick" {
+                use std::sync::atomic::{AtomicBool, Ordering};
+                static QUICK_ARMED: AtomicBool = AtomicBool::new(false);
+                match event {
+                    tauri::WindowEvent::Focused(true) => {
+                        QUICK_ARMED.store(true, Ordering::SeqCst);
+                    }
+                    tauri::WindowEvent::Focused(false) => {
+                        // Win's own release moves focus to the taskbar. That is
+                        // not a click outside, and it must not drop recording.
+                        #[cfg(windows)]
+                        let typing_win = platform::super_key_down()
+                            || platform::capture_super_held()
+                            || (platform::capture_active() && !platform::mouse_down());
+                        #[cfg(not(windows))]
+                        let typing_win = false;
+                        if typing_win {
+                        } else if QUICK_ARMED.swap(false, Ordering::SeqCst) {
+                            window
+                                .app_handle()
+                                .state::<Runtime>()
+                                .quick_open
+                                .store(false, Ordering::SeqCst);
+                            let _ = window.hide();
+                            #[cfg(windows)]
+                            platform::stop_recording();
+                            #[cfg(target_os = "linux")]
+                            linux_override::set_recording(false);
+                        }
+                    }
+                    _ => {}
+                }
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "radial" {
@@ -448,6 +567,12 @@ fn main() {
             get_windows,
             restore_workspace,
             cancel_workspace_restore,
+            start_shortcut_recording,
+            stop_shortcut_recording,
+            hide_quick,
+            quick_edit,
+            show_editor,
+            focus_captured,
             radial::radial_view,
             radial::cancel_radial
         ])

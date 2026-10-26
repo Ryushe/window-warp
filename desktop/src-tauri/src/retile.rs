@@ -9,7 +9,9 @@ use std::{
 };
 use tauri::{AppHandle, Emitter};
 
-pub const KEYS: [&str; 4] = ["X", "C", "Super+X", "Super+C"];
+/// Plain X/C only. Win+X and Win+C are the push shortcuts: with two or more
+/// monitors they must keep moving the window, not consume this follow-up.
+pub const KEYS: [&str; 2] = ["X", "C"];
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Target {
     pub id: String,
@@ -233,11 +235,11 @@ mod tests {
         let mut selection = Selection::default();
         selection.arm(target("first"), now + Duration::from_secs(1));
         selection.arm(target("last"), now + Duration::from_secs(1));
-        for key in ["Ctrl+X", "Alt+C", "Shift+X", "Ctrl+Super+C"] {
+        for key in ["Ctrl+X", "Alt+C", "Shift+X", "Ctrl+Super+C", "Super+X", "Super+C"] {
             assert!(selection.take(key, now).is_none());
         }
         assert_eq!(
-            selection.take("Super+C", now).map(|(t, l, _)| (t, l)),
+            selection.take("C", now).map(|(t, l, _)| (t, l)),
             Some((target("last"), false))
         );
         assert!(selection.take("X", now).is_none());
@@ -334,7 +336,7 @@ mod tests {
             });
             let mut hooks = crate::platform::RetileHooks::default();
             hooks.install_native().unwrap();
-            for (key, meta) in [(88, false), (67, false), (88, true), (67, true)] {
+            for (key, meta) in [(88, false), (67, false)] {
                 assert_eq!(
                     GetForegroundWindow(),
                     hwnd,

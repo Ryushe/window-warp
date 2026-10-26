@@ -37,6 +37,7 @@ pub struct Settings {
     pub hold_delay_ms: u64,
     pub hold_tile_enabled: bool,
     pub hold_mode: String,
+    pub enable_on_launch: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -46,6 +47,7 @@ impl Default for Settings {
             hold_delay_ms: 400,
             hold_tile_enabled: true,
             hold_mode: "tile".into(),
+            enable_on_launch: true,
         }
     }
 }
@@ -66,35 +68,202 @@ pub struct Reassignment {
     pub disabled_indices: Vec<usize>,
 }
 
+fn shortcut(
+    label: &str,
+    keys: &str,
+    action: &str,
+    app: &str,
+    main_monitor_action: &str,
+    burner_layout: &str,
+) -> Binding {
+    Binding {
+        label: label.into(),
+        shortcut: keys.into(),
+        action: action.into(),
+        app_match: app.into(),
+        windows_match: None,
+        enabled: true,
+        main_monitor_action: main_monitor_action.into(),
+        burner_layout: burner_layout.into(),
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
-        let entries = [
-            ("Push window left", "Ctrl+Alt+Left", "push-left"),
-            ("Push window right", "Ctrl+Alt+Right", "push-right"),
-            ("Pull last window back", "Ctrl+Alt+Down", "pull"),
-            ("Tile left", "Ctrl+Alt+J", "tile-left"),
-            ("Tile right", "Ctrl+Alt+L", "tile-right"),
-            ("Pause / resume shortcuts", "Ctrl+Alt+P", "toggle-pause"),
-            ("Edit current app shortcut", "Ctrl+Alt+B", "open-editor"),
-            ("Browse workspaces", "Ctrl+Alt+O", "open-workspaces"),
-            ("Update workspace", "Ctrl+Alt+U", "update-workspace"),
-        ];
+        // Same keys as the AutoHotkey scripts: Win is stored as Super.
         Self {
             version: 1,
             settings: Settings::default(),
-            bindings: entries
-                .iter()
-                .map(|(label, shortcut, action)| Binding {
-                    label: label.to_string(),
-                    shortcut: shortcut.to_string(),
-                    action: action.to_string(),
-                    app_match: String::new(),
-                    windows_match: None,
-                    enabled: true,
-                    main_monitor_action: burner(),
-                    burner_layout: floating(),
-                })
-                .collect(),
+            bindings: vec![
+                shortcut(
+                    "Push window left",
+                    "Super+X",
+                    "push-left",
+                    "",
+                    "burner",
+                    "float",
+                ),
+                shortcut(
+                    "Push window right",
+                    "Super+C",
+                    "push-right",
+                    "",
+                    "burner",
+                    "float",
+                ),
+                shortcut(
+                    "Push left and center pointer",
+                    "Ctrl+Super+X",
+                    "push-left-center",
+                    "",
+                    "burner",
+                    "float",
+                ),
+                shortcut(
+                    "Push right and center pointer",
+                    "Ctrl+Super+C",
+                    "push-right-center",
+                    "",
+                    "burner",
+                    "float",
+                ),
+                shortcut(
+                    "Pull last window back",
+                    "Super+R",
+                    "pull",
+                    "",
+                    "burner",
+                    "float",
+                ),
+                shortcut(
+                    "Edit current app shortcut",
+                    "Super+B",
+                    "open-editor",
+                    "",
+                    "burner",
+                    "float",
+                ),
+                shortcut(
+                    "Browse workspaces",
+                    "Super+O",
+                    "open-workspaces",
+                    "",
+                    "burner",
+                    "float",
+                ),
+                shortcut(
+                    "Update workspace",
+                    "Super+Y",
+                    "update-workspace",
+                    "",
+                    "burner",
+                    "float",
+                ),
+                shortcut(
+                    "Pause / resume shortcuts",
+                    "Super+Semicolon",
+                    "toggle-pause",
+                    "",
+                    "burner",
+                    "float",
+                ),
+                shortcut(
+                    "Maximize / restore",
+                    "Super+Z",
+                    "toggle-maximize",
+                    "",
+                    "burner",
+                    "float",
+                ),
+                shortcut(
+                    "Close active window",
+                    "Super+Q",
+                    "close-window",
+                    "",
+                    "burner",
+                    "float",
+                ),
+                shortcut(
+                    "Discord",
+                    "Super+D",
+                    "pull-app",
+                    "Discord.exe",
+                    "burner",
+                    "tile-left",
+                ),
+                shortcut(
+                    "Caido",
+                    "Super+P",
+                    "pull-app",
+                    "Caido.exe",
+                    "focus-last",
+                    "float",
+                ),
+                shortcut(
+                    "Claude",
+                    "Super+A",
+                    "pull-app",
+                    "Claude.exe",
+                    "burner",
+                    "tile-right",
+                ),
+                shortcut(
+                    "Firefox",
+                    "Super+S",
+                    "pull-app",
+                    "firefox.exe",
+                    "focus-last",
+                    "float",
+                ),
+                shortcut(
+                    "Windows Terminal",
+                    "Super+T",
+                    "pull-app",
+                    "WindowsTerminal.exe",
+                    "burner",
+                    "float",
+                ),
+                shortcut(
+                    "studio64",
+                    "Ctrl+Super+D",
+                    "pull-app",
+                    "studio64.exe",
+                    "burner",
+                    "float",
+                ),
+                shortcut(
+                    "Telegram",
+                    "Ctrl+Super+T",
+                    "pull-app",
+                    "Telegram.exe",
+                    "focus-last",
+                    "float",
+                ),
+                shortcut(
+                    "Explorer",
+                    "Super+E",
+                    "pull-app",
+                    "explorer.exe",
+                    "focus-last",
+                    "float",
+                ),
+                shortcut(
+                    "Code",
+                    "Super+F",
+                    "pull-app",
+                    "Code.exe",
+                    "focus-last",
+                    "float",
+                ),
+                shortcut(
+                    "ChatGPT",
+                    "Super+W",
+                    "pull-app",
+                    "ChatGPT.exe",
+                    "focus-last",
+                    "float",
+                ),
+            ],
         }
     }
 }
@@ -275,6 +444,68 @@ fn normalize_shortcut(value: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fresh_configuration_uses_the_autohotkey_shortcuts() {
+        let mut config = Config::default();
+        config.validate().unwrap();
+        let shown: Vec<_> = config
+            .bindings
+            .iter()
+            .map(|binding| {
+                (
+                    binding.shortcut.as_str(),
+                    binding.action.as_str(),
+                    binding.app_match.as_str(),
+                    binding.main_monitor_action.as_str(),
+                    binding.burner_layout.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                ("Super+X", "push-left", "", "burner", "float"),
+                ("Super+C", "push-right", "", "burner", "float"),
+                ("Ctrl+Super+X", "push-left-center", "", "burner", "float"),
+                ("Ctrl+Super+C", "push-right-center", "", "burner", "float"),
+                ("Super+R", "pull", "", "burner", "float"),
+                ("Super+B", "open-editor", "", "burner", "float"),
+                ("Super+O", "open-workspaces", "", "burner", "float"),
+                ("Super+Y", "update-workspace", "", "burner", "float"),
+                ("Super+Semicolon", "toggle-pause", "", "burner", "float"),
+                ("Super+Z", "toggle-maximize", "", "burner", "float"),
+                ("Super+Q", "close-window", "", "burner", "float"),
+                ("Super+D", "pull-app", "Discord.exe", "burner", "tile-left"),
+                ("Super+P", "pull-app", "Caido.exe", "focus-last", "float"),
+                ("Super+A", "pull-app", "Claude.exe", "burner", "tile-right"),
+                ("Super+S", "pull-app", "firefox.exe", "focus-last", "float"),
+                (
+                    "Super+T",
+                    "pull-app",
+                    "WindowsTerminal.exe",
+                    "burner",
+                    "float"
+                ),
+                (
+                    "Ctrl+Super+D",
+                    "pull-app",
+                    "studio64.exe",
+                    "burner",
+                    "float"
+                ),
+                (
+                    "Ctrl+Super+T",
+                    "pull-app",
+                    "Telegram.exe",
+                    "focus-last",
+                    "float"
+                ),
+                ("Super+E", "pull-app", "explorer.exe", "focus-last", "float"),
+                ("Super+F", "pull-app", "Code.exe", "focus-last", "float"),
+                ("Super+W", "pull-app", "ChatGPT.exe", "focus-last", "float"),
+            ]
+        );
+    }
     #[test]
     fn reassignment_disables_only_enabled_alias_conflicts_and_preserves_edits() {
         let mut config = Config::default();

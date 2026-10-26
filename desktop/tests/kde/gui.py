@@ -715,10 +715,10 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                 time.sleep(0.1)
         created = request("POST", "/session", {"capabilities": {"alwaysMatch": {"webkitgtk:browserOptions": {"binary": binary, "args": []}}}})
         session = created["sessionId"]
-        wait_for("return document.querySelectorAll('.binding').length === 9 && !document.querySelector('#toggle').disabled")
+        wait_for("return document.querySelectorAll('.binding').length === 21 && !document.querySelector('#toggle').disabled")
         # Exercise the actual input listeners, save command, native registration,
         # and pause command. Test-only settings are isolated from user settings.
-        evaluate("document.querySelectorAll('[data-field=shortcut]').forEach((input,i) => {input.value='Ctrl+Alt+Shift+F'+(13+i); input.dispatchEvent(new Event('input', {bubbles:true}));}); return true;")
+        evaluate("const keys=['F13','F14','F15','F16','F17','F18','F19','F20','F21','F22','F23','F24','A','B','D','E','G','H','I','J','K']; document.querySelectorAll('[data-field=shortcut]').forEach((input,i) => {input.value='Ctrl+Alt+Shift+'+keys[i]; input.dispatchEvent(new Event('input', {bubbles:true}));}); return true;")
         click("#save")
         wait_for("return document.querySelector('#message').textContent.startsWith('Saved.')")
         assert kwin_loaded("window-warp-pause-session"), "Pause hook must be installed while paused"
@@ -921,7 +921,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             config = invoke("get_config")
             hold_index = len(config["bindings"]) - 1
             config["bindings"][hold_index]["appMatch"] = state_item["window"]["appId"]
-            config["bindings"][5]["shortcut"] = "Ctrl+Alt+Shift+P"
+            next(binding for binding in config["bindings"] if binding["action"] == "toggle-pause")["shortcut"] = "Ctrl+Alt+Shift+P"
             config["bindings"][1].update({"action":"focus-app", "appMatch":state_item["window"]["appId"]})
             config["bindings"][hold_index].update({"shortcut":"Ctrl+Alt+Shift+J", "mainMonitorAction":"focus-last"})
             config["settings"].update({"mainMonitor":1, "holdDelayMs":600, "holdTileEnabled":True})

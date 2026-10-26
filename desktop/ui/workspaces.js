@@ -200,9 +200,18 @@
         try { await native.core.invoke("cancel_workspace_restore"); say("Canceling after the current window operation…"); }
         catch (error) { say(String(error), true); }
     });
-    select("#show-shortcuts").addEventListener("click", () => { select("#workspaces-page").hidden = true; select("#shortcuts-page").hidden = false; });
+    const showPage = page => {
+        select("#shortcuts-page").hidden = page !== "shortcuts";
+        select("#workspaces-page").hidden = page !== "workspaces";
+        select("#settings-page").hidden = page !== "settings";
+        select("#show-shortcuts").classList.toggle("active", page === "shortcuts");
+        select("#show-workspaces").classList.toggle("active", page === "workspaces");
+        select("#show-settings").classList.toggle("active", page === "settings");
+    };
+    select("#show-shortcuts").addEventListener("click", () => showPage("shortcuts"));
+    select("#show-settings").addEventListener("click", () => showPage("settings"));
     window.addEventListener("warp-workspace-request", event => {
-        select("#shortcuts-page").hidden = true; select("#workspaces-page").hidden = false;
+        showPage("workspaces");
         if (working) { say("Finish the current workspace operation before using this shortcut again.", true); return; }
         perform(async () => {
             if (!store) { store = await native.core.invoke("get_workspaces"); render(); }
@@ -218,7 +227,7 @@
         });
     });
     select("#show-workspaces").addEventListener("click", async () => {
-        select("#shortcuts-page").hidden = true; select("#workspaces-page").hidden = false;
+        showPage("workspaces");
         if (!native || store || working) return;
         await perform(async () => { store = await native.core.invoke("get_workspaces"); render(); });
     });
@@ -229,7 +238,7 @@
             if (store.profiles.some(p => p.id === profile.id)) throw new Error("This imported workspace is already saved. Edit it in the workspace list.");
             const prepared = await native.core.invoke("prepare_workspace_import", {profile:clone(profile)});
             openDraft(prepared);
-            select("#shortcuts-page").hidden = true; select("#workspaces-page").hidden = false;
+            showPage("workspaces");
             select("#workspace-editor").scrollIntoView?.({block:"start"});
             say("Review the imported workspace, including its platform, app commands and reference work areas, then Save workspace.");
         });

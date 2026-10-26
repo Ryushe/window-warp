@@ -32,10 +32,7 @@
                             WARP_APP.generation, JSON.stringify({binding:binding, settings:WARP_CONFIG.settings,
                                 window:target, previous:target, at:capturedAt}));
                     };
-                    if (binding.shortcut === "Super+X" || binding.shortcut === "Super+C") {
-                        callDBus(WARP_APP.service, "/Control", "com.windowwarp.Control", "Retile", WARP_APP.token, binding.shortcut,
-                            function(consumed) { if (!consumed) forward(); });
-                    } else forward();
+                    forward();
                 }
             } catch (error) { print("Window Warp shortcut: " + String(error)); }
         })) throw new Error("Could not register " + shortcut);

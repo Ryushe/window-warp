@@ -20,15 +20,16 @@ function controls() {
     $("#toggle").textContent = enabled ? "Pause shortcuts" : "Enable shortcuts ↗";
     $("#status").textContent = enabled ? "● Shortcuts active" : "○ Paused";
     $("#status").classList.toggle("active", enabled);
-    $("#save").disabled = busy || enabled || !dirty || !config;
-    $("#add").disabled = busy || enabled || !config;
-    $("#bindings").querySelectorAll("input, select, button").forEach((el) => { el.disabled = busy || enabled; });
+    $("#save").disabled = busy || !dirty || !config;
+    $("#add").disabled = busy || !config;
+    $("#bindings").querySelectorAll("input, select, button").forEach((el) => { el.disabled = busy; });
+    $("#quick-shortcut").disabled = $("#quick-apply").disabled = $("#quick-behavior").disabled = $("#quick-layout").disabled = busy;
     $("#main-monitor").disabled = $("#burner-monitor").disabled = busy || enabled || !config;
     $("#hold-mode").disabled = $("#hold-enabled").disabled = $("#hold-delay").disabled = busy || enabled || !config;
     $("#startup").disabled = busy || !startupKnown;
     $("#import-files").disabled = busy || enabled || !config;
     $("#apply-import").disabled = busy || enabled || !config;
-    $("#edit-hint").textContent = enabled ? "Pause shortcuts to make changes." : "Changes take effect after saving and enabling.";
+    $("#edit-hint").textContent = enabled ? "Shortcuts are on. Save updates them without pausing." : "Save, then turn shortcuts on.";
     $("#save-status").textContent = dirty ? "Unsaved changes" : "Stored on this device";
 }
 function cancelReassignment() {
@@ -109,7 +110,7 @@ function render() {
         const confirm = card.querySelector(".confirm-reassignment");
         card.querySelector(".reassign").addEventListener("click", () => perform(async () => {
             cancelReassignment();
-            if (recording) { recording.button.textContent = "Record keys"; recording = null; }
+            if (recording) recording = null;
             const proposal = await native.core.invoke("preview_shortcut_reassignment", {config, index});
             if (!proposal.disabledIndices.length) { message("No other enabled shortcut uses this key."); return; }
             reassignment = {proposal, index};
@@ -120,21 +121,24 @@ function render() {
             message("Review the conflicting shortcuts below. Save changes afterward to apply.");
         }));
         confirm.addEventListener("click", () => {
-            if (enabled || busy || reassignment?.index !== index) return;
+            if (busy || reassignment?.index !== index) return;
             config = reassignment.proposal.config;
             changed(); render();
             message("Key reassigned in this draft. Save changes to apply.");
         });
         card.querySelector(".cancel-reassignment").addEventListener("click", cancelReassignment);
-        const record = card.querySelector(".record");
         const shortcut = card.querySelector('[data-field="shortcut"]');
-        record.addEventListener("click", () => {
-            cancelReassignment();
-            if (recording) recording.button.textContent = "Record keys";
-            recording = {button: record, input: shortcut, binding};
-            record.textContent = "Press keys…";
-            shortcut.focus();
-            message("Press a modifier and key together. Escape cancels recording.");
+        shortcut.title = "Click here, then press the keys. Escape leaves it unchanged. Delete clears it.";
+        shortcut.addEventListener("focus", () => beginRecording(shortcut, binding));
+        shortcut.addEventListener("blur", () => scheduleStopRecording(shortcut));
+        const hints = { main: CHOICE_HINTS[binding.mainMonitorAction || "burner"], layout: CHOICE_HINTS[binding.burnerLayout || "float"] };
+        card.querySelectorAll(".choice-hint").forEach((hint) => {
+            hint.textContent = hints[hint.dataset.hint] || "";
+            const select = hint.parentElement.querySelector("select");
+            const show = () => { hint.textContent = CHOICE_HINTS[select.value] || ""; };
+            select.addEventListener("change", show);
+            select.addEventListener("focus", show);
+            select.addEventListener("mouseenter", show);
         });
         card.querySelector(".remove").addEventListener("click", () => { config.bindings.splice(index, 1); changed(); render(); });
         $("#bindings").append(card);
@@ -143,6 +147,7 @@ function render() {
     $("#empty").hidden = config.bindings.length > 0;
     $("#main-monitor").value = config.settings?.mainMonitor ?? 0;
     $("#burner-monitor").value = config.settings?.burnerMonitor ?? 2;
+    $("#enable-on-launch").checked = config.settings?.enableOnLaunch ?? true;
     $("#hold-enabled").checked = config.settings?.holdTileEnabled ?? true;
     $("#hold-delay").value = config.settings?.holdDelayMs ?? 400;
     $("#hold-mode").value = config.settings?.holdMode ?? "tile";
@@ -168,34 +173,60 @@ function receiveControl() {
             window.dispatchEvent(new window.CustomEvent("warp-workspace-request", {detail:request}));
             return;
         }
-        $("#show-shortcuts").click();
-        if (!request.window) { message("No active app was available. Add or edit a shortcut below."); return; }
+        if (!request.window) { message("No active app was available. Focus an application window, then press the shortcut again."); return; }
         const app = request.window.appId || request.window.path?.split(/[\\/]/).pop() || request.window.desktopId;
         if (!app) { message("This window has no usable app identifier.", true); return; }
-        let index = config.bindings.findIndex(b => {
-            if (!["pull-app", "focus-app"].includes(b.action)) return false;
-            const selector = b.windowsMatch;
-            if (!selector) return b.appMatch.toLowerCase() === app.toLowerCase();
-            // Imported ahk_exe-only selectors are equivalent for current-app
-            // editing. A narrower selector must remain a separate shortcut.
-            return platform === "windows" && !selector.titleContains && !selector.className && !selector.packagedAppId
-                && selector.processId == null && selector.windowId == null && !selector.activeOnly
-                && Boolean(selector.executable) && !/[\\/]/.test(selector.executable)
-                && selector.executable.toLowerCase() === app.toLowerCase();
-        });
-        if (index < 0) {
-            if (config.bindings.length >= 100) { message("Remove a shortcut before adding another app (maximum 100).", true); return; }
-            index = config.bindings.length;
-            config.bindings.push({label:app.replace(/\.exe$/i, "").slice(0,120), shortcut:"", action:"pull-app", appMatch:app, enabled:true, mainMonitorAction:"burner", burnerLayout:"float"});
-            changed();
-        }
-        $("#search").value = "";
-        render();
-        const card = $("#bindings").children[index];
-        card.scrollIntoView?.({block:"center"});
-        card.querySelector('[data-field="shortcut"]').focus();
-        message(`Editing ${app}. Shortcuts are paused; save edits before enabling them.`);
+        openQuick(app);
     });
+}
+function appBindingIndex(app) {
+    return config.bindings.findIndex(b => {
+        if (!["pull-app", "focus-app"].includes(b.action)) return false;
+        const selector = b.windowsMatch;
+        if (!selector) return b.appMatch.toLowerCase() === app.toLowerCase();
+        return platform === "windows" && !selector.titleContains && !selector.className && !selector.packagedAppId
+            && selector.processId == null && selector.windowId == null && !selector.activeOnly
+            && Boolean(selector.executable) && !/[\\/]/.test(selector.executable)
+            && selector.executable.toLowerCase() === app.toLowerCase();
+    });
+}
+let quick = null;
+function openQuick(app) {
+    let index = appBindingIndex(app);
+    let created = false;
+    if (index < 0) {
+        if (config.bindings.length >= 100) { message("Remove a shortcut before adding another app (maximum 100).", true); return; }
+        config.bindings.push({label:app.replace(/\.exe$/i, "").slice(0,120), shortcut:"", action:"pull-app", appMatch:app, enabled:true, mainMonitorAction:"burner", burnerLayout:"float"});
+        index = config.bindings.length - 1;
+        created = true;
+        render();
+    }
+    const binding = config.bindings[index];
+    quick = { index, created, snapshot: structuredClone(binding) };
+    $("#quick-title").textContent = binding.label || app;
+    $("#quick-match").textContent = app;
+    $("#quick-shortcut").value = binding.shortcut || "";
+    $("#quick-behavior").value = binding.mainMonitorAction || "burner";
+    $("#quick-layout").value = binding.burnerLayout || "float";
+    $("#quick-behavior-hint").textContent = CHOICE_HINTS[$("#quick-behavior").value] || "";
+    $("#quick-layout-hint").textContent = CHOICE_HINTS[$("#quick-layout").value] || "";
+    $("#quick-edit").hidden = false;
+    $("#quick-shortcut").focus();
+}
+function closeQuick(restore) {
+    if (recording?.input === $("#quick-shortcut")) stopRecording(false);
+    if (restore && quick) {
+        if (quick.created) config.bindings.splice(quick.index, 1);
+        else config.bindings[quick.index] = quick.snapshot;
+        render();
+    }
+    quick = null;
+    $("#quick-edit").hidden = true;
+}
+function showQuickHint(select, hint) {
+    if (!quick) return;
+    config.bindings[quick.index][select.id === "quick-behavior" ? "mainMonitorAction" : "burnerLayout"] = select.value;
+    hint.textContent = CHOICE_HINTS[select.value] || "";
 }
 $("#add").addEventListener("click", () => {
     $("#search").value = "";
@@ -231,12 +262,82 @@ $("#hold-enabled").addEventListener("change", () => {
     config.settings.holdTileEnabled = $("#hold-enabled").checked;
     changed();
 });
-document.addEventListener("keydown", (event) => {
-    if (!recording || enabled || busy) return;
-    event.preventDefault();
-    if (event.key === "Escape" && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
-        recording.button.textContent = "Record keys"; recording = null; message("Recording canceled."); return;
+$("#enable-on-launch").addEventListener("change", () => {
+    config.settings ??= {};
+    config.settings.enableOnLaunch = $("#enable-on-launch").checked;
+    changed();
+});
+const CHOICE_HINTS = {
+    "focus-last": "Brings the app to the main monitor. If it is already focused there, switches back to the previous app.",
+    burner: "Brings the app to the main monitor. If it is already focused there, sends it to the burner monitor.",
+    float: "Keeps the window's size and place, scaled onto that monitor.",
+    "tile-left": "Uses the left half of that monitor.",
+    "tile-right": "Uses the right half of that monitor.",
+    fullscreen: "Fills that monitor."
+};
+let recordingBlur = 0;
+function scheduleStopRecording(input) {
+    window.clearTimeout(recordingBlur);
+    // Win can blur the field while the chord is still being pressed.
+    // Stopping immediately lets Windows take that Super key.
+    recordingBlur = window.setTimeout(() => {
+        if (recording?.input === input && document.activeElement !== input) stopRecording(false);
+    }, 400);
+}
+function beginRecording(input, binding) {
+    window.clearTimeout(recordingBlur);
+    recording = { input, binding, previous: binding.shortcut || "" };
+    message("Press the shortcut. Escape leaves it unchanged. Delete clears it.");
+    native?.core.invoke("start_shortcut_recording").catch(() => {});
+}
+function stopRecording(chain) {
+    window.clearTimeout(recordingBlur);
+    native?.core.invoke("stop_shortcut_recording").catch(() => {});
+    const again = chain && recording && document.activeElement === recording.input ? recording : null;
+    recording = null;
+    if (again) beginRecording(again.input, again.binding);
+}
+function finishRecording(shortcut) {
+    if (!recording) return;
+    const current = recording;
+    if (!shortcut) {
+        current.input.value = current.previous;
+        current.binding.shortcut = current.previous;
+        stopRecording(false);
+        if (current.input.id === "quick-shortcut") closeQuick(true);
+        message("Left the shortcut unchanged.");
+        return;
     }
+    if (shortcut === "clear") {
+        current.binding.shortcut = "";
+        current.input.value = "";
+        current.previous = "";
+        stopRecording(false);
+        changed();
+        message("Shortcut cleared. Save to apply.");
+        return;
+    }
+    current.binding.shortcut = shortcut;
+    current.input.value = shortcut;
+    current.previous = shortcut;
+    changed();
+    message("Recorded " + shortcut + ". Save to apply.");
+    stopRecording(true);
+}
+document.addEventListener("keydown", (event) => {
+    const typingShortcut = event.target?.matches?.('[data-field="shortcut"], #quick-shortcut');
+    if ((!recording && !typingShortcut) || busy) return;
+    if (event.key === "Escape" && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
+        event.preventDefault();
+        finishRecording("");
+        return;
+    }
+    if ((event.key === "Delete" || event.key === "Backspace") && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
+        event.preventDefault();
+        finishRecording("clear");
+        return;
+    }
+    event.preventDefault();
     if (["Control", "Shift", "Alt", "Meta"].includes(event.key)) return;
     const mods = [event.ctrlKey && "Ctrl", event.altKey && "Alt", event.shiftKey && "Shift", event.metaKey && "Super"].filter(Boolean);
     if (!mods.length) { message("Include Ctrl, Alt, Shift, or Super.", true); return; }
@@ -245,29 +346,49 @@ document.addEventListener("keydown", (event) => {
     if (!/^(?:[A-Z0-9]|F(?:[1-9]|1[0-9]|2[0-4])|Left|Right|Up|Down|Space|Tab|Enter|Escape|Backspace|Delete|Insert|Home|End|PageUp|PageDown|Semicolon|Quote|Backquote|Comma|Period|Slash|Backslash|Minus|Equal|BracketLeft|BracketRight)$/.test(key)) {
         message("That key is not supported. Try a letter, navigation key, punctuation, or function key.", true); return;
     }
-    const shortcut = [...mods, key].join("+");
-    recording.binding.shortcut = shortcut;
-    recording.input.value = shortcut;
-    recording.button.textContent = "Record keys";
-    recording = null;
-    changed(); message("Recorded " + shortcut + ". Save to apply.");
+    finishRecording([...mods, key].join("+"));
 });
+$("#quick-shortcut").addEventListener("focus", () => { if (quick) beginRecording($("#quick-shortcut"), config.bindings[quick.index]); });
+$("#quick-behavior").addEventListener("change", () => showQuickHint($("#quick-behavior"), $("#quick-behavior-hint")));
+$("#quick-layout").addEventListener("change", () => showQuickHint($("#quick-layout"), $("#quick-layout-hint")));
+$("#quick-cancel").addEventListener("click", () => closeQuick(true));
+$("#quick-apply").addEventListener("click", () => perform(async () => {
+    if (!quick) return;
+    const binding = config.bindings[quick.index];
+    binding.shortcut = $("#quick-shortcut").value;
+    binding.mainMonitorAction = $("#quick-behavior").value;
+    binding.burnerLayout = $("#quick-layout").value;
+    config = await native.core.invoke("save_config", { config });
+    dirty = false;
+    quick = null;
+    $("#quick-edit").hidden = true;
+    stopRecording(false);
+    render();
+    message(enabled ? "Saved. The shortcuts in use were updated." : "Saved.");
+}));
 $("#save").addEventListener("click", () => perform(async () => {
     config = await native.core.invoke("save_config", { config });
     dirty = false; render();
-    message("Saved. Enable shortcuts when you’re ready.");
+    message(enabled ? "Saved. The shortcuts in use were updated." : "Saved. Enable shortcuts when you’re ready.");
 }));
 $("#toggle").addEventListener("click", () => perform(async () => {
     enabled = await native.core.invoke("set_enabled", { enabled: !enabled });
     message(enabled ? "Shortcuts are active. Focus another app and try a shortcut. Close this window to keep Warp in the tray." : "Shortcuts are paused. You can edit your bindings now.");
 }));
 async function init() {
+    native?.event.listen("shortcut-recorded", (event) => finishRecording(event.payload || ""));
     if (!native) {
         message("Open Window Warp as a desktop application to configure and control your windows.", true);
         $("#status").textContent = "Desktop app required";
         return;
     }
     try {
+        await native.event.listen("reveal-app", (event) => {
+            document.querySelector("#show-shortcuts")?.click();
+            const index = appBindingIndex(event.payload || "");
+            const card = index >= 0 ? document.querySelector("#bindings")?.children[index] : null;
+            card?.scrollIntoView?.({ block: "center" });
+        });
         await native.event.listen("warp-control", receiveControl);
         await native.event.listen("warp-error", (event) => message(event.payload, true));
         await native.event.listen("warp-enabled", (event) => {

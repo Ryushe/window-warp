@@ -7,10 +7,8 @@ A standalone Tauri 2 application for Windows and **KDE Plasma 5.27 and 6**, with
 - Native settings window and tray menu (open, enable/pause, quit).
 - Editable global shortcuts with validation, duplicate detection, and reviewed reassignment.
 - A pause/resume shortcut retained while paused, plus current-app editor and workspace control shortcuts.
-- Push the focused window between monitors, ordered left to right, wrapping at the ends.
-- After a push, press **X** to tile left or **C** to tile right within one second.
-  **Super/Win+X/C** also works. This targets the pushed window even if focus changes;
-  one use, expiry or pausing clears it. A single monitor wraps in place.
+- Push the focused window between monitors, ordered left to right. With only one monitor, Win+X tiles left and Win+C tiles right instead of moving.
+- After a push onto another monitor, press **X** or **C** within one second to tile that window. Win+X and Win+C keep moving it. One use, expiry, or pausing clears the follow-up.
 - Pull a pushed window back using a bounded in-memory history.
 - Left/right half tiling using monitor work areas.
 - Focus/cycle app windows by executable name/path or packaged app ID (Windows), or resource class/desktop ID (KDE).
@@ -26,9 +24,9 @@ A standalone Tauri 2 application for Windows and **KDE Plasma 5.27 and 6**, with
 - Local versioned JSON settings, written through a temporary file.
 - Single-instance behavior. Closing the editor hides it to the tray.
 
-Normal launches start **paused**. Save changes, then click **Enable shortcuts**. A registered login launch uses `--startup` to enable saved shortcuts and hide the editor. Editing shortcuts requires pausing first. Default keys use Ctrl+Alt; every key can be changed, including to Super/Win/Meta combinations when the desktop allows them. Stop or pause conflicting AutoHotkey bindings before reusing their keys.
+Normal launches turn shortcuts on. Settings can turn that off. A registered login launch uses `--startup` to enable saved shortcuts and hide the editor. Shortcut fields can be changed while shortcuts are on. A new configuration uses the AutoHotkey keys: Win+X/C move windows, Win+Ctrl+X/C also center the pointer, Win+R pulls the last window, Win+; pauses, Win+Z maximizes, and Win+Q closes. App keys match `window_manager_apps.ini`, including Win+D for Discord and Win+S for Firefox. Every key can be changed. Stop the AutoHotkey script before enabling these keys.
 
-New configurations include **Ctrl+Alt+P** to pause/resume, **Ctrl+Alt+B** to edit the current app's shortcut, **Ctrl+Alt+O** to browse workspaces, and **Ctrl+Alt+U** to capture a workspace update for review. Existing configurations can add these actions from the editor. Opening the current-app editor pauses window shortcuts and preserves existing drafts. Resume uses saved settings; unsaved edits remain in the editor.
+New configurations also include **Win+B** to edit the current app's shortcut, **Win+O** to browse workspaces, and **Win+Y** to capture a workspace update for review. The main screen has **Start Window Warp when I sign in**; that launch enables saved shortcuts. Existing configurations can add these actions from the editor. Opening the current-app editor pauses window shortcuts and preserves existing drafts. Resume uses saved settings; unsaved edits remain in the editor.
 
 For a more specific Windows app shortcut, enable **Use Windows matching criteria**. Every entered criterion must match. Title text uses case-sensitive contains matching, and window classes use case-sensitive equality, matching the original AHK configuration. Executable names, full paths and packaged IDs are case-insensitive. Process IDs and window IDs can change after restart. Imported `ahk_exe`, `ahk_class`, `ahk_pid`, `ahk_id`, title and active-window rules retain these criteria, including visible owned or untitled windows. Undefined AHK groups and ambiguous rules remain visible for manual review. Windows rules stay disabled on Linux until you turn off Windows matching and enter a KDE app identifier.
 
@@ -54,11 +52,11 @@ The current Debian package is for Ubuntu 24.04 with KWin
 - **Turn on:** open Window Warp and click **Enable shortcuts**, or choose
   **Enable shortcuts** from its tray menu.
 - **Temporarily turn off:** choose **Pause shortcuts** in the app or tray.
-  The pause/resume hotkey remains available (default **Ctrl+Alt+P**).
+  Desktop hotkeys such as Win+; work normally again while paused. Win+; pauses Window Warp only while its shortcuts are on. A pause key Windows or KDE does not use stays available.
 - **Completely stop:** choose **Quit** from the tray. Closing the editor hides
   it in the tray; it does not quit.
 - **Start at login:** opt in using the app's startup setting. Turn that setting
-  off to prevent automatic launches. Normal manual launches start paused.
+  off to prevent automatic launches. Opening Window Warp turns shortcuts on unless Settings says otherwise.
 - **Uninstall:** quit first. Windows: use **Installed apps → Window Warp →
   Uninstall**. KDE: run `sudo apt remove window-warp`.
 

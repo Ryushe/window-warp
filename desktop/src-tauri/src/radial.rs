@@ -202,9 +202,9 @@ impl Picker {
             .is_some_and(|v| v.id == self.id && !v.cancelled))
     }
     pub fn release(self, binding: &Binding, settings: &Settings) -> Result<(), String> {
-        if !self.update()? {
-            return Ok(());
-        }
+        // A failed refresh must not skip the choice or leave the menu up.
+        // Drop still hides the window.
+        let _ = self.update();
         let selected = VIEW
             .lock()
             .map_err(|e| e.to_string())?

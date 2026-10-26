@@ -10,6 +10,19 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const item = title => ({label:title, window:{title, appId:"fixture", monitor:1, rect:{width:640,height:400}}, launch:{program:"fixture", args:[], workingDirectory:"", newWindow:false}});
 const profile = (id, name) => ({id,name,platform:"linux",items:[item(name + " window")]});
 
+test("settings opens from the left navigation and leaves shortcuts", async () => {
+    const e = await editor();
+    assert.equal(e.document.querySelector("#settings-page").hidden, true);
+    await e.click("#show-settings");
+    assert.equal(e.document.querySelector("#settings-page").hidden, false);
+    assert.equal(e.document.querySelector("#shortcuts-page").hidden, true);
+    assert.equal(e.document.querySelector("#workspaces-page").hidden, true);
+    assert.equal(e.document.querySelector("#show-settings").classList.contains("active"), true);
+    await e.click("#show-shortcuts");
+    assert.equal(e.document.querySelector("#settings-page").hidden, true);
+    assert.equal(e.document.querySelector("#shortcuts-page").hidden, false);
+});
+
 test("launch types round trip through the editor and keep target and argument semantics visible",async()=>{
     const e=await editor({profiles:[profile("launch","Launch")]});
     await e.click('[data-action="edit"]');

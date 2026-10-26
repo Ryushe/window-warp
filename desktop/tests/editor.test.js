@@ -114,7 +114,7 @@ test("Windows matching criteria save losslessly, participate in search and lock 
     const saved=e.calls.find(c=>c.command==="save_config").args.config.bindings[0];
     assert.deepEqual(JSON.parse(JSON.stringify(saved.windowsMatch)),{titleContains:"Other ",className:"ExactClass",executable:"C:\\Apps\\Editor.exe",packagedAppId:"",processId:4294967295,windowId:"9007199254740993",activeOnly:true});
     await e.click('#toggle');
-    for(const input of e.document.querySelectorAll('.windows-match-field input')) assert.equal(input.disabled,true);
+    for(const input of e.document.querySelectorAll('.windows-match-field input')) assert.equal(input.disabled,false);
     e.listeners.get('warp-enabled')({payload:false});
     assert.equal(e.document.querySelector('[data-windows-match="titleContains"]').disabled,false);
     assert.equal(e.document.querySelector('[data-windows-match="titleContains"]').value,"Other ");
@@ -197,7 +197,9 @@ test("unsaved changes block activation; save and pause preserve editor state", a
     assert.equal(e.calls.find((c) => c.command === "save_config").args.config.bindings[0].shortcut, "Ctrl+Alt+F");
     assert.equal(e.document.querySelector("#toggle").disabled, false);
     await e.click("#toggle");
-    assert.equal(e.document.querySelector('[data-field="shortcut"]').disabled, true);
+    assert.equal(e.document.querySelector('[data-field="label"]').disabled, false);
+    assert.equal(e.document.querySelector('[data-field="action"]').disabled, false);
+    assert.equal(e.document.querySelector('[data-field="shortcut"]').disabled, false);
     e.listeners.get("warp-enabled")({ payload: false });
     assert.equal(e.document.querySelector('[data-field="shortcut"]').disabled, false);
     assert.equal(e.document.querySelector('[data-field="shortcut"]').value, "Ctrl+Alt+F");
@@ -247,16 +249,17 @@ test("app behavior, monitor selection, and per-binding disable are saved", async
 
 test("shortcut recording saves physical key names and supports cancellation", async () => {
     const e = await editor();
-    await e.click(".record");
-    const event = new e.window.Event("keydown", {cancelable:true});
-    Object.assign(event, {key:";", code:"Semicolon", metaKey:true});
-    e.document.dispatchEvent(event);
-    assert.equal(e.document.querySelector('[data-field="shortcut"]').value, "Super+Semicolon");
-    await e.click(".record");
+    const field = e.document.querySelector('[data-field="shortcut"]');
+    field.dispatchEvent(new e.window.Event("focus"));
     const cancel = new e.window.Event("keydown", {cancelable:true});
     Object.assign(cancel, {key:"Escape", code:"Escape"});
     e.document.dispatchEvent(cancel);
-    assert.equal(e.document.querySelector(".record").textContent, "Record keys");
+    assert.equal(field.value, "Ctrl+Alt+Right");
+    field.dispatchEvent(new e.window.Event("focus"));
+    const event = new e.window.Event("keydown", {cancelable:true});
+    Object.assign(event, {key:";", code:"Semicolon", metaKey:true});
+    e.document.dispatchEvent(event);
+    assert.equal(field.value, "Super+Semicolon");
     e.input("#search", "missing");
     assert.equal(e.document.querySelector(".binding").hidden, true);
     e.input("#search", "move");
@@ -336,5 +339,5 @@ test("resuming saved shortcuts keeps unsaved editor changes clearly identified",
     e.listeners.get("warp-enabled")({payload:true});
     assert.match(e.document.querySelector("#message").textContent, /Saved shortcuts are active.*unsaved edits/);
     assert.equal(e.document.querySelector('[data-field="label"]').value, "Unsaved label");
-    assert.equal(e.document.querySelector('[data-field="label"]').disabled, true);
+    assert.equal(e.document.querySelector('[data-field="label"]').disabled, false);
 });

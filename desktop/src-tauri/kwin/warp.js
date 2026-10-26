@@ -360,6 +360,13 @@ var Warp = (function () {
             var all = screens();
             var current = all.indexOf(outputFor(window, all));
             if (current < 0 || !window.moveableAcrossScreens) { done(); return; }
+            if (all.length === 1 && (job.action.indexOf("push-left") === 0 || job.action.indexOf("push-right") === 0)) {
+                // Nowhere to move. Tile in place instead of repeating a no-op push.
+                tile(window, all[current], job.action.indexOf("push-left") === 0 ? "tile-left" : "tile-right", done, function() {
+                    if (job.action === "push-left-center" || job.action === "push-right-center") centerPointer(all[current]);
+                });
+                return;
+            }
             var next = (current + (job.action.indexOf("push-left") === 0 ? all.length-1 : 1)) % all.length;
             var original = copy(window.frameGeometry);
             var source = area(all[current]);

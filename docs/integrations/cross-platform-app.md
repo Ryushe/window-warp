@@ -2477,3 +2477,15 @@ The existing OLD installer hash is
 Installer fixture now includes owned sentinels in both actual app-data roots;
 PowerShell parser passed, but fixture execution has NOT occurred. No registry,
 shortcut, sentinel or installation mutation was performed by that worker.
+
+## Windows hook and radial release — 2026-10-26
+
+User asked to commit and publish this branch. No merge to `main` yet.
+
+- One low-level hook in `desktop/src-tauri/src/windows_reserved.rs`. It is not reinstalled mid-chord.
+- Owned Win chords are swallowed while shortcuts are on. The pause chord stays armed when paused.
+- The shortcut popup (`quick`) is in the Tauri capability and shows the same binding as the list.
+- A tap finishes when its letter or Win key goes up. A different shortcut cancels a hold still in progress.
+- The radial picker does not take focus. Release closes it and chooses the slice under the pointer; the center cancels.
+- Live on this PC: holding Win+D showed `Window Warp Picker`, and releasing removed it. The Win+B button says Go to Warp.
+- Not claimed: a full physical pass of Win+S, Win+T, Win+D, Win+S in a row, or a slice selection that pulls a chosen window. Injected keys are weaker than a physical keyboard for key-up.
