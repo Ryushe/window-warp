@@ -18,6 +18,12 @@ next press is ignored. Pausing leaves only the pause chord installed, so
 that key can turn shortcuts back on. Every other Windows hotkey is
 returned.
 
+While shortcuts are on, pass every key through unless it completes a
+shortcut Warp owns. Do not swallow Win on the way down and do not inject a
+replacement chord. Mask the Start menu only after an owned Win shortcut
+fires. Push, tile, and maximize still run when the focused window is Warp
+or the popup, including while the popup is recording.
+
 The popup is the `quick` window. It has to stay in
 `desktop/src-tauri/capabilities/default.json` with `main` and `radial`.
 Without that, the page cannot read the binding or hear `quick-edit`,

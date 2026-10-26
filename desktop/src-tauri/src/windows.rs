@@ -73,6 +73,45 @@ unsafe fn toggle_maximize(hwnd: HWND) -> Result<(), String> {
 fn error(message: &str) -> String {
     format!("{message}: {}", std::io::Error::last_os_error())
 }
+
+/// The window a shortcut should move. Warp's own editor and popup are WebView
+/// children, so the focused handle is not the frame. Walk up to that frame.
+pub(super) unsafe fn foreground_action_hwnd() -> HWND {
+    let foreground = GetForegroundWindow();
+    if foreground.is_null() {
+        return foreground;
+    }
+    let mut best = foreground;
+    let mut cursor = foreground;
+    for _ in 0..8 {
+        let mut pid = 0;
+        GetWindowThreadProcessId(cursor, &mut pid);
+        if pid == std::process::id() {
+            best = cursor;
+        }
+        let root = GetAncestor(cursor, GA_ROOT);
+        let next = if !root.is_null() && root != cursor {
+            root
+        } else {
+            GetWindow(cursor, GW_OWNER)
+        };
+        if next.is_null() || next == cursor {
+            break;
+        }
+        cursor = next;
+    }
+    best
+}
+
+pub(super) unsafe fn focused_warp_window() -> bool {
+    let hwnd = foreground_action_hwnd();
+    if hwnd.is_null() {
+        return false;
+    }
+    let mut pid = 0;
+    GetWindowThreadProcessId(hwnd, &mut pid);
+    pid == std::process::id()
+}
 fn rect(value: RECT) -> Rect {
     Rect {
         x: value.left,
@@ -702,7 +741,7 @@ unsafe fn execute(binding: &Binding, settings: &Settings) -> Result<(), String> 
         }
         return Err("No pushed window to bring back.".into());
     }
-    let hwnd = GetForegroundWindow();
+    let hwnd = foreground_action_hwnd();
     if hwnd.is_null() || hwnd == GetShellWindow() || hwnd == GetDesktopWindow() {
         return Err("Focus an application window first.".into());
     }

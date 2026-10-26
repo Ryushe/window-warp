@@ -54,12 +54,6 @@ struct Session {
     /// chord then closes it. Recording in the main list must keep that chord.
     popup_recording: bool,
     last_down: HashMap<u32, Instant>,
-    /// A Super chord from this app fired while Win was held, so releasing
-    /// Win must not be handed back to the shell.
-    win_used: bool,
-    /// Keys pressed with Win that this app does not own. Replayed on Win up
-    /// so Explorer and the other shell shortcuts still work.
-    win_extra: Vec<u32>,
     /// Foreground window at the moment Win went down, before Windows can
     /// move focus to the taskbar. Zero means unset.
     editor_hwnd: usize,
@@ -135,8 +129,6 @@ pub(super) fn retain_pause() {
         slot.swallowed.clear();
         slot.down.clear();
         slot.last_down.clear();
-        slot.win_used = false;
-        slot.win_extra.clear();
         slot.job = if pause.is_empty() {
             Job::Idle
         } else {
@@ -240,8 +232,6 @@ pub(super) fn uninstall_shared() -> Result<(), String> {
             slot.swallowed.clear();
             slot.down.clear();
             slot.last_down.clear();
-            slot.win_used = false;
-            slot.win_extra.clear();
             slot.editor_hwnd = 0;
         }
     }
@@ -260,8 +250,6 @@ impl Default for Session {
             capture: false,
             popup_recording: false,
             last_down: HashMap::new(),
-            win_used: false,
-            win_extra: Vec::new(),
             editor_hwnd: 0,
         }
     }
@@ -381,23 +369,9 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
     if up {
         slot.last_down.remove(&vk);
         let swallowed = slot.swallowed.remove(&vk);
-        let win_released = is_win(vk) && !mods_from(&slot.down).super_key;
-        let replay = win_released && blocks_windows(slot) && !slot.capture && !slot.win_used;
-        let extras = if replay {
-            std::mem::take(&mut slot.win_extra)
-        } else {
-            Vec::new()
-        };
-        if win_released {
-            slot.win_used = false;
-            slot.win_extra.clear();
-        }
         drop(current);
         super::gestures::note_release();
-        if replay {
-            replay_unclaimed_win(&extras);
-        }
-        return if swallowed || replay {
+        return if swallowed {
             1
         } else {
             CallNextHookEx(null_mut(), code, wp, lp)
@@ -435,6 +409,22 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
             shortcut_from(vk, mods)
         };
         if let Some(shortcut) = finished.as_deref() {
+            if !shortcut.is_empty()
+                && shortcut != "clear"
+                && unsafe { super::focused_warp_window() }
+            {
+                if let Some(hit) = window_action(slot, shortcut).cloned() {
+                    swallow_chord(slot, vk);
+                    let app = slot.app.clone();
+                    let mask_start = mods.super_key;
+                    drop(current);
+                    if mask_start {
+                        suppress_start_menu();
+                    }
+                    dispatch_hit(app, hit);
+                    return 1;
+                }
+            }
             if slot.popup_recording {
                 if let Some(hit) = open_editor(slot)
                     .filter(|hit| hit.binding.shortcut == shortcut)
@@ -474,14 +464,6 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
             return 1;
         }
     }
-    if !slot.capture && blocks_windows(slot) && is_win(vk) {
-        if !super_before {
-            slot.win_used = false;
-            slot.win_extra.clear();
-        }
-        slot.swallowed.insert(vk);
-        return 1;
-    }
     if let Some(name) = key_name(vk) {
         let consumed = if mods == Mods::none() {
             crate::retile::fire(name)
@@ -507,22 +489,10 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
     };
     let pending = matched.map(|hit| {
         swallow_chord(slot, vk);
-        if is_super(&hit.binding.shortcut) {
-            slot.win_used = true;
-        }
         slot.app.clone().map(|app| Pending::Run(app, hit))
     });
     let eat = pending.is_some();
     let pending = pending.flatten();
-    let unowned = pending.is_none()
-        && !slot.capture
-        && blocks_windows(slot)
-        && mods.super_key
-        && key_name(vk).is_some();
-    if unowned {
-        slot.win_extra.push(vk);
-        slot.swallowed.insert(vk);
-    }
     let mask_start = eat && mods.super_key;
     drop(current);
     if mask_start {
@@ -533,7 +503,6 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
             dispatch_hit(Some(app), hit);
             1
         }
-        None if eat || unowned => 1,
         None => CallNextHookEx(null_mut(), code, wp, lp),
     }
 }
@@ -563,43 +532,18 @@ fn swallow_chord(slot: &mut Session, vk: u32) {
     slot.swallowed.insert(vk);
 }
 
-fn blocks_windows(slot: &Session) -> bool {
-    match &slot.job {
-        Job::Active(armed) => armed.iter().any(|item| {
-            item.binding.action != "toggle-pause" && is_super(&item.binding.shortcut)
-        }),
-        Job::Idle => false,
-    }
+fn is_window_action(action: &str) -> bool {
+    matches!(action, "toggle-maximize" | "close-window")
+        || action.starts_with("push-")
+        || action.starts_with("tile-")
 }
 
-fn replay_unclaimed_win(keys: &[u32]) {
-    // Called from inside the hook, so the nested SendInput is passed through
-    // and Windows sees a normal chord that this app does not own.
-    unsafe {
-        let mut inputs = Vec::with_capacity(keys.len() * 2 + 2);
-        let mut push = |vk: u16, up: bool| {
-            inputs.push(INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: INPUT_0 {
-                    ki: KEYBDINPUT {
-                        wVk: vk,
-                        dwFlags: if up { KEYEVENTF_KEYUP } else { 0 },
-                        ..std::mem::zeroed()
-                    },
-                },
-            });
-        };
-        push(VK_LWIN, false);
-        for key in keys {
-            push(*key as u16, false);
-            push(*key as u16, true);
-        }
-        push(VK_LWIN, true);
-        SendInput(
-            inputs.len() as u32,
-            inputs.as_ptr(),
-            std::mem::size_of::<INPUT>() as i32,
-        );
+fn window_action<'a>(slot: &'a Session, shortcut: &str) -> Option<&'a Armed> {
+    match &slot.job {
+        Job::Active(armed) => armed.iter().find(|item| {
+            item.binding.shortcut == shortcut && is_window_action(&item.binding.action)
+        }),
+        Job::Idle => None,
     }
 }
 
