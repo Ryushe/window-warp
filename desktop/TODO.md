@@ -7,6 +7,20 @@ across monitors, the one-second X/C tile, the radial picker, and opening a
 workspace. Keep it silent or lightly captioned, and do not include private
 window titles.
 
+## Radial picker styles and live preview
+
+Optional: a short warp animation when a window is pushed, pulled, or tiled.
+
+The radial picker should have more than one look, and the look should follow
+the theme that is on. Settings gets a radial style choice so the user can
+pick which selector they want.
+
+While a slice is highlighted, and before the key is released, make every
+other window transparent and leave the highlighted window visible. The user
+can see which window that slice is without guessing. Releasing the key brings
+that window over and restores the others. Moving to another slice, or
+canceling, restores transparency immediately.
+
 ## Settings section
 
 Done: Settings is a button on the left, next to Shortcuts and Workspaces.
