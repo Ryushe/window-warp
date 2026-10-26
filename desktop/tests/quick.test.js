@@ -5,7 +5,7 @@ import vm from "node:vm";
 import { parseHTML } from "linkedom";
 
 const html = fs.readFileSync(new URL("../ui/quick.html", import.meta.url), "utf8");
-const source = fs.readFileSync(new URL("../ui/quick.js", import.meta.url), "utf8");
+const source = fs.readFileSync(new URL("../ui/shortcut-picker.js", import.meta.url), "utf8") + "\n" + fs.readFileSync(new URL("../ui/quick.js", import.meta.url), "utf8");
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 async function popup(bindings) {
@@ -62,8 +62,17 @@ test("popup prefills the Discord shortcut from the same binding the list shows",
     assert.equal(page.document.querySelector("#quick-title").textContent, "Shortcut");
     assert.equal(page.document.querySelector("#quick-app").textContent, "Discord");
     assert.equal(page.document.querySelector("#quick-entry").value, "Super+D");
+    assert.equal(page.document.querySelector('[data-mod="Super"]').getAttribute("aria-pressed"), "true");
+    assert.equal(page.document.querySelector("#quick-key"), null);
     assert.equal(page.document.querySelector("#quick-hint").textContent.includes("Super"), true);
     assert.equal(page.document.querySelector("#quick-hint").textContent.includes("Win"), false);
+    assert.equal(page.calls.some(c => c.command === "start_shortcut_recording"), false);
+    const pressed = new page.window.Event("keydown", {bubbles:true, cancelable:true});
+    Object.assign(pressed, {key:"c", code:"KeyC"});
+    page.document.querySelector("#quick-entry").dispatchEvent(pressed);
+    assert.equal(page.document.querySelector("#quick-entry").value, "Super+C");
+    page.document.querySelector('[data-mod="Alt"]').click();
+    assert.equal(page.document.querySelector("#quick-entry").value, "Alt+Super+C");
 });
 
 test("a title that merely mentions Discord does not replace the focused app shortcut", async () => {

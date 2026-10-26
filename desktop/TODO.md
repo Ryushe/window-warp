@@ -1,5 +1,12 @@
 # Window Warp to-do
 
+## Preview video
+
+Record a short preview for the README and the GitHub release. Show a push
+across monitors, the one-second X/C tile, the radial picker, and opening a
+workspace. Keep it silent or lightly captioned, and do not include private
+window titles.
+
 ## Settings section
 
 Done: Settings is a button on the left, next to Shortcuts and Workspaces.

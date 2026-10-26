@@ -5,7 +5,7 @@ import vm from "node:vm";
 import { parseHTML } from "linkedom";
 
 const html = fs.readFileSync(new URL("../ui/index.html", import.meta.url), "utf8");
-const source = fs.readFileSync(new URL("../ui/app.js", import.meta.url), "utf8");
+const source = fs.readFileSync(new URL("../ui/shortcut-picker.js", import.meta.url), "utf8") + "\n" + fs.readFileSync(new URL("../ui/app.js", import.meta.url), "utf8");
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 async function editor({ failLoad = false, failSave = false, failEnable = false, failReassignment = false, platform = "windows", bindings } = {}) {
@@ -89,6 +89,42 @@ test("hold settings stay editable while shortcuts are active and save from the s
     assert.equal(e.document.querySelector("#hold-delay").value, "500");
 });
 
+test("push is one action with a direction and a center-pointer checkbox", async () => {
+    const e = await editor({bindings:[{label:"Left", shortcut:"Super+X", action:"push-left-center", appMatch:""}]});
+    const action = e.document.querySelector('[data-field="action"]');
+    assert.equal(action.value, "push");
+    assert.equal(action.querySelector("optgroup").getAttribute("label"), "Movement");
+    assert.equal(e.document.querySelector(".push-options").hidden, false);
+    assert.equal(e.document.querySelector(".push-direction").value, "left");
+    assert.equal(e.document.querySelector(".push-center").checked, true);
+    const center = e.document.querySelector(".push-center");
+    center.checked = false;
+    center.dispatchEvent(new e.window.Event("change"));
+    await e.click("#save");
+    assert.equal(e.calls.find(c => c.command === "save_config").args.config.bindings[0].action, "push-left");
+});
+test("tile is one action with a side", async () => {
+    const e = await editor({bindings:[{label:"Top", shortcut:"Ctrl+Alt+Up", action:"tile-up", appMatch:""}]});
+    const action = e.document.querySelector('[data-field="action"]');
+    assert.equal(action.value, "tile");
+    assert.equal(e.document.querySelector(".tile-options").hidden, false);
+    assert.equal(e.document.querySelector(".push-options").hidden, true);
+    assert.equal(e.document.querySelector(".tile-side").value, "up");
+    e.input(".tile-side", "right");
+    await e.click("#save");
+    assert.equal(e.calls.find(c => c.command === "save_config").args.config.bindings[0].action, "tile-right");
+});
+test("cancel changes restores the last saved shortcuts and settings", async () => {
+    const e = await editor();
+    e.document.querySelector('[data-mod="Shift"]').click();
+    e.input("#hold-delay", "900");
+    assert.equal(e.document.querySelector("#discard").disabled, false);
+    await e.click("#discard");
+    assert.equal(e.document.querySelector('[data-field="shortcut"]').value, "Ctrl+Alt+Right");
+    assert.equal(e.document.querySelector("#hold-delay").value, "400");
+    assert.equal(e.document.querySelector("#save").disabled, true);
+    assert.equal(e.calls.some(c => c.command === "save_config"), false);
+});
 test("KDE editor offers the same hold settings as Windows", async () => {
     const e = await editor({platform:"linux"});
     assert.equal(e.document.querySelector("#hold-enabled").disabled, false);
@@ -223,7 +259,7 @@ test("failed registration leaves controls paused and editable", async () => {
     const e = await editor({ failEnable: true });
     await e.click("#toggle");
     assert.match(e.document.querySelector("#message").textContent, /already in use/);
-    assert.equal(e.document.querySelector("#status").textContent, "○ Paused");
+    assert.equal(e.document.querySelector("#status").textContent, "Paused");
     assert.equal(e.document.querySelector('[data-field="shortcut"]').disabled, false);
 });
 test("unreadable settings never allow replacing the file with defaults", async () => {
@@ -253,19 +289,24 @@ test("app behavior, monitor selection, and per-binding disable are saved", async
     assert.equal(config.settings.mainMonitor, 2);
 });
 
-test("shortcut recording saves physical key names and supports cancellation", async () => {
+test("a shortcut is built from modifier buttons and a key, without recording", async () => {
     const e = await editor();
     const field = e.document.querySelector('[data-field="shortcut"]');
-    field.dispatchEvent(new e.window.Event("focus"));
-    const cancel = new e.window.Event("keydown", {cancelable:true});
-    Object.assign(cancel, {key:"Escape", code:"Escape"});
-    e.document.dispatchEvent(cancel);
+    const card = e.document.querySelector(".key-field");
     assert.equal(field.value, "Ctrl+Alt+Right");
-    field.dispatchEvent(new e.window.Event("focus"));
-    const event = new e.window.Event("keydown", {cancelable:true});
-    Object.assign(event, {key:";", code:"Semicolon", metaKey:true});
-    e.document.dispatchEvent(event);
-    assert.equal(field.value, "Super+Semicolon");
+    assert.equal(card.querySelector('[data-mod="Ctrl"]').getAttribute("aria-pressed"), "true");
+    assert.equal(card.querySelector('[data-mod="Super"]').getAttribute("aria-pressed"), "false");
+    const pressed = new e.window.Event("keydown", {bubbles:true, cancelable:true});
+    Object.assign(pressed, {key:"x", code:"KeyX"});
+    field.dispatchEvent(pressed);
+    assert.equal(field.value, "Ctrl+Alt+X");
+    card.querySelector('[data-mod="Super"]').click();
+    const semicolon = new e.window.Event("keydown", {bubbles:true, cancelable:true});
+    Object.assign(semicolon, {key:";", code:"Semicolon"});
+    field.dispatchEvent(semicolon);
+    assert.equal(field.value, "Ctrl+Alt+Super+Semicolon");
+    assert.equal(e.document.querySelector(".shortcut-key"), null);
+    assert.equal(e.calls.some(c => c.command === "start_shortcut_recording"), false);
     e.input("#search", "missing");
     assert.equal(e.document.querySelector(".binding").hidden, true);
     e.input("#search", "move");
@@ -343,7 +384,28 @@ test("resuming saved shortcuts keeps unsaved editor changes clearly identified",
     const e = await editor();
     e.input('[data-field="label"]', "Unsaved label");
     e.listeners.get("warp-enabled")({payload:true});
-    assert.match(e.document.querySelector("#message").textContent, /Saved shortcuts are active.*unsaved edits/);
+    assert.match(e.document.querySelector("#message").textContent, /Shortcuts are on\. Unsaved edits are still here/);
     assert.equal(e.document.querySelector('[data-field="label"]').value, "Unsaved label");
     assert.equal(e.document.querySelector('[data-field="label"]').disabled, false);
+});
+
+test("built-in themes, a custom palette, and custom CSS apply without leaving the editor", async () => {
+    const e = await editor();
+    assert.equal(e.document.documentElement.dataset.theme, "warp");
+    const theme = e.document.querySelector("#theme");
+    theme.value = "dracula";
+    theme.dispatchEvent(new e.window.Event("change"));
+    assert.equal(e.document.documentElement.dataset.theme, "dracula");
+    const background = e.document.querySelector("#theme-bg");
+    background.value = "#112233";
+    background.dispatchEvent(new e.window.Event("input"));
+    assert.equal(e.document.documentElement.dataset.theme, "custom");
+    assert.equal(e.document.documentElement.style.getPropertyValue("--custom-bg"), "#112233");
+    assert.equal(e.document.querySelector("#theme-custom").hidden, false);
+    const css = e.document.querySelector("#theme-css");
+    css.value = "body { color: red; }</style><script>";
+    css.dispatchEvent(new e.window.Event("input"));
+    const style = e.document.getElementById("theme-user-css");
+    assert.match(style.textContent, /color: red/);
+    assert.equal(style.textContent.includes("</style"), false);
 });

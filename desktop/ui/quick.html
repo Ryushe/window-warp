@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <title>Window Warp</title>
   <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+  <script src="shortcut-picker.js" defer></script>
   <script src="quick.js" defer></script>
 </head>
 <body class="quick-body">
@@ -11,25 +13,31 @@
     <h2 id="quick-title">Shortcut</h2>
     <p id="quick-app" class="quick-app"></p>
     <label class="key-field quick-key">
-      <input id="quick-entry" readonly placeholder="Press a shortcut" spellcheck="false" aria-label="Shortcut">
+      <input id="quick-entry" readonly placeholder="Click, then press C, X, or another key" spellcheck="false" aria-label="Shortcut">
     </label>
-    <p id="quick-hint">Press the whole shortcut, including Super. Escape closes this. Delete clears it.</p>
-    <label>Second press
+    <div class="mod-row" id="quick-mods">
+      <button type="button" data-mod="Super" aria-pressed="false">Super</button>
+      <button type="button" data-mod="Ctrl" aria-pressed="false">Ctrl</button>
+      <button type="button" data-mod="Alt" aria-pressed="false">Alt</button>
+      <button type="button" data-mod="Shift" aria-pressed="false">Shift</button>
+      <button type="button" class="clear-shortcut">Clear</button>
+    </div>
+    <p id="quick-hint">Press a key, then Enter. Super, Ctrl, Alt, and Shift are the buttons below. Escape closes this.</p>
+    <p class="behavior-heading">Behavior</p>
+    <label>If it is already on the main monitor
       <select id="quick-behavior">
-        <option value="focus-last">Focus previous app</option>
-        <option value="burner">Send to burner monitor</option>
+        <option value="focus-last">Switch back to the previous app</option>
+        <option value="burner">Move to the second monitor</option>
       </select>
     </label>
-    <p id="quick-behavior-hint"></p>
-    <label>Burner layout
+    <label>On the second monitor
       <select id="quick-layout">
-        <option value="float">Preserve relative placement</option>
+        <option value="float">Keep size and place</option>
         <option value="tile-left">Left half</option>
         <option value="tile-right">Right half</option>
-        <option value="fullscreen">Maximized</option>
+        <option value="fullscreen">Fill the monitor</option>
       </select>
     </label>
-    <p id="quick-layout-hint"></p>
     <p id="quick-message" role="status"></p>
     <div class="quick-actions">
       <button id="quick-open" type="button">Go to Warp</button>

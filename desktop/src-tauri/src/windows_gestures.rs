@@ -176,9 +176,7 @@ pub fn press(app: &AppHandle, binding: &Binding, settings: &Settings) -> Result<
                     let _ = picker.take();
                     break;
                 }
-                let win_let_go = binding.shortcut.split('+').any(|part| part == "Super")
-                    && !super::reserved::super_down();
-                if released.load(Ordering::SeqCst) || !chord.letter_down() || win_let_go {
+                if released.load(Ordering::SeqCst) || !chord.letter_down() {
                     if !released.load(Ordering::SeqCst) {
                         released.store(true, Ordering::SeqCst);
                     }
@@ -278,9 +276,7 @@ pub(super) fn note_release() {
     let Ok(chord) = Chord::parse(&shortcut) else {
         return;
     };
-    let win_let_go =
-        shortcut.split('+').any(|part| part == "Super") && !super::reserved::super_down();
-    if !chord.letter_down() || win_let_go {
+    if !chord.letter_down() {
         released.store(true, Ordering::SeqCst);
     }
 }

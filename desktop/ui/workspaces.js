@@ -52,6 +52,14 @@
                     await persist(next);
                 });
             }));
+            card.style.animationDelay = `${Math.min(index, 8) * 40}ms`;
+            const menu = card.querySelector(".menu");
+            card.querySelector(".menu-button").addEventListener("click", event => {
+                event.stopPropagation();
+                const willOpen = menu.hidden;
+                document.querySelectorAll(".menu").forEach(open => { open.hidden = true; });
+                menu.hidden = !willOpen;
+            });
             select("#workspace-list").append(fragment);
         });
     }
@@ -201,13 +209,21 @@
         catch (error) { say(String(error), true); }
     });
     const showPage = page => {
-        select("#shortcuts-page").hidden = page !== "shortcuts";
-        select("#workspaces-page").hidden = page !== "workspaces";
-        select("#settings-page").hidden = page !== "settings";
-        select("#show-shortcuts").classList.toggle("active", page === "shortcuts");
-        select("#show-workspaces").classList.toggle("active", page === "workspaces");
-        select("#show-settings").classList.toggle("active", page === "settings");
+        for (const name of ["shortcuts", "workspaces", "settings"]) {
+            const el = select("#" + name + "-page");
+            el.hidden = name !== page;
+            el.classList.remove("is-entering");
+            if (name === page) {
+                if (typeof el.offsetWidth === "number") void el.offsetWidth;
+                el.classList.add("is-entering");
+            }
+            select("#show-" + name).classList.toggle("active", name === page);
+        }
     };
+    document.addEventListener("click", event => {
+        if (event.target.closest?.(".menu, .menu-button")) return;
+        document.querySelectorAll(".menu").forEach(menu => { menu.hidden = true; });
+    });
     select("#show-shortcuts").addEventListener("click", () => showPage("shortcuts"));
     select("#show-settings").addEventListener("click", () => showPage("settings"));
     window.addEventListener("warp-workspace-request", event => {

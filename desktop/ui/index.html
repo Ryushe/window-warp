@@ -1,10 +1,28 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="warp">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Window Warp</title>
   <link rel="stylesheet" href="style.css">
+  <script>
+    try {
+      var themeName = localStorage.getItem("window-warp-theme") || "warp";
+      document.documentElement.dataset.theme = themeName;
+      var themeColors = JSON.parse(localStorage.getItem("window-warp-theme-colors") || "null");
+      if (themeColors) ["bg", "sidebar", "text", "chord", "button"].forEach(function (key) {
+        if (themeColors[key]) document.documentElement.style.setProperty("--custom-" + key, themeColors[key]);
+      });
+      var themeCss = localStorage.getItem("window-warp-theme-css") || "";
+      if (themeCss) {
+        var themeStyle = document.createElement("style");
+        themeStyle.id = "theme-user-css";
+        themeStyle.textContent = themeCss.replace(/<\/style/gi, "");
+        document.head.append(themeStyle);
+      }
+    } catch (error) {}
+  </script>
+  <script src="shortcut-picker.js" defer></script>
   <script src="app.js" defer></script>
   <script src="workspaces.js" defer></script>
   <script src="legacy-import.js" defer></script>
@@ -12,91 +30,144 @@
 </head>
 <body>
   <aside>
-    <div class="brand"><span class="mark" aria-hidden="true">↗</span> Window Warp</div>
-    <span class="eyebrow">YOUR DESKTOP, IN REACH</span>
-    <button class="nav-item active" id="show-shortcuts"><span aria-hidden="true">⌘</span> Shortcuts <span class="count" id="count">0</span></button>
-    <button class="nav-item nav-follow" id="show-workspaces">▦ Workspaces</button>
-    <button class="nav-item nav-follow" id="show-settings">Settings</button>
-    <div class="sidebar-bottom"><span class="dot"></span><span id="platform">Desktop application</span><small>Early preview · 0.1.0</small></div>
+    <div class="brand">Window Warp</div>
+    <nav>
+      <button class="nav-item active" id="show-shortcuts" type="button">Shortcuts <span class="count" id="count">0</span></button>
+      <button class="nav-item" id="show-workspaces" type="button">Workspaces</button>
+      <button class="nav-item" id="show-settings" type="button">Settings</button>
+    </nav>
+    <div class="sidebar-bottom">
+      <button id="toggle" class="rail-status" type="button" disabled>
+        <span class="dot" aria-hidden="true"></span>
+        <span id="status">Loading</span>
+      </button>
+      <small id="platform">Desktop application</small>
+    </div>
   </aside>
   <main>
-    <header><span class="eyebrow">CONTROL CENTER</span><span class="badge" id="status">Loading</span></header>
-    <section class="intro">
-      <div><h1>A shortcut to<br>your next move.</h1><p>Bring your apps closer. Put every window in its place.</p></div>
-      <div class="intro-actions">
-        <button class="primary" id="toggle" disabled>Enable shortcuts <span aria-hidden="true">↗</span></button>
-        <label class="enabled-field startup-option"><input type="checkbox" id="startup" disabled> Start Window Warp when I sign in</label>
-        <small class="startup-note">Signing in also turns your saved shortcuts on. Uncheck this to start it yourself.</small>
-      </div>
-    </section>
     <div class="notice" id="message" role="status" aria-live="polite">Loading your shortcuts…</div>
-    <details id="legacy-import"><summary>Import AutoHotkey settings</summary>
-      <p>Select your apps, shared hotkeys, settings or workspace INI files. Review the results below. Imported shortcuts are added to your draft; each workspace opens for review. Save in the editor to apply.</p>
-      <label>INI files<input id="import-files" type="file" accept=".ini" multiple disabled></label>
-      <p>UTF-8 and UTF-16 files are detected automatically. Older ANSI files use Windows-1252; check names after importing.</p>
-      <div id="import-results"></div>
-      <button id="apply-import" hidden disabled>Add selected shortcuts and settings to draft</button>
-      <button id="clear-import" hidden>Clear import review</button>
-    </details>
-    <div id="shortcuts-page">
-    <section aria-labelledby="shortcuts-heading" class="editor">
-      <div class="section-title"><div><h2 id="shortcuts-heading">Your shortcuts</h2><p id="edit-hint">Save to update the shortcuts that are on.</p></div></div>
-      <label class="search-field">Find a shortcut<input id="search" type="search" placeholder="Search names, keys, actions, or apps"></label>
+    <div id="shortcuts-page" class="page is-entering">
+      <header class="page-head">
+        <div>
+          <h1 id="shortcuts-heading">Shortcuts</h1>
+          <p id="edit-hint">Save to update the shortcuts that are on.</p>
+        </div>
+        <button id="add" type="button" disabled>Add shortcut</button>
+      </header>
+      <label class="search-field">Search<input id="search" type="search" placeholder="Search names, keys, or apps"></label>
       <div id="bindings"></div>
-      <div class="empty" id="empty" hidden>No shortcuts yet. Add your first action above.</div>
-      <div class="editor-footer"><span id="save-status">Stored on this device</span><span class="footer-actions"><button id="add" disabled>+ Add shortcut</button><button id="save" class="primary" disabled>Save changes</button></span></div>
-    </section>
-    <section class="guide" aria-label="Getting started">
-      <div><span class="step">01</span><h3>Choose an action</h3><p>Push a window to another monitor, pull it back, tile it, or focus an app.</p></div>
-      <div><span class="step">02</span><h3>Make it yours</h3><p>Use Ctrl, Alt, Shift, or Super plus a key. Super means the Windows or Meta key.</p></div>
-      <div><span class="step">03</span><h3>Keep it close</h3><p>Closing this window keeps Warp in the tray. Use its tray menu to reopen, pause, or quit.</p></div>
-    </section>
-    <p class="footnote">Workspaces can restore your apps and window positions. Hold behavior is in Settings.</p>
+      <div class="empty" id="empty" hidden>No shortcuts yet. Add a shortcut to create one.</div>
+      <div class="editor-footer"><span id="save-status">Stored on this device</span><span class="footer-actions"><button id="discard" type="button" disabled>Cancel changes</button><button id="save" class="primary" type="button" disabled>Save changes</button></span></div>
     </div>
-    <section id="settings-page" hidden aria-labelledby="settings-heading">
-      <div class="section-title"><div><h2 id="settings-heading">Settings</h2><p>Monitors, holding a shortcut, and where this copy keeps its file.</p></div></div>
-      <div class="monitor-settings"><label>Main monitor<input id="main-monitor" type="number" min="0" max="32" value="0"><small>0 = primary/origin display. Other numbers follow left-to-right display order.</small></label><label>Burner monitor<input id="burner-monitor" type="number" min="1" max="32" value="2"><small>Falls back to another connected display when unavailable.</small></label></div>
-      <label class="enabled-field"><input type="checkbox" id="enable-on-launch" checked> Turn shortcuts on when Window Warp opens</label>
-      <label class="enabled-field"><input type="checkbox" id="hold-enabled" checked> Enable holding app-pull shortcuts</label>
-      <label>Hold action<select id="hold-mode"><option value="tile">Mouse tiling</option><option value="radial">Radial window picker</option></select></label>
-      <label>Hold delay (milliseconds)<input id="hold-delay" type="number" min="100" max="5000" step="1" value="400"></label>
-      <p id="hold-hint"></p>
-      <p id="compatibility"></p><p id="settings-path"></p>
-      <div class="editor-footer"><span id="settings-save-status">Stored on this device</span><button id="save-settings" class="primary" type="button" disabled>Save settings</button></div>
+    <section id="settings-page" class="page" hidden aria-labelledby="settings-heading">
+      <header class="page-head">
+        <div>
+          <h1 id="settings-heading">Settings</h1>
+          <p>Appearance, monitors, hold behavior, and AutoHotkey import.</p>
+        </div>
+      </header>
+      <section class="group">
+        <h2>Appearance</h2>
+        <label>Theme<select id="theme">
+          <option value="warp">Warp</option>
+          <option value="dracula">Dracula</option>
+          <option value="ink">Ink</option>
+          <option value="light">Light</option>
+          <option value="custom">Custom</option>
+        </select></label>
+        <div id="theme-custom" class="theme-colors" hidden>
+          <label>Background<input id="theme-bg" type="color" value="#1c1b19"></label>
+          <label>Sidebar<input id="theme-sidebar" type="color" value="#262421"></label>
+          <label>Text<input id="theme-text" type="color" value="#f3efe6"></label>
+          <label>Chord<input id="theme-chord" type="color" value="#e4c07a"></label>
+          <label>Button<input id="theme-button" type="color" value="#f4efe6"></label>
+        </div>
+        <details>
+          <summary>Custom CSS</summary>
+          <p>Applied after the theme. It can break the layout when the interface changes.</p>
+          <textarea id="theme-css" rows="5" spellcheck="false" placeholder="button.primary { }"></textarea>
+        </details>
+      </section>
+      <section class="group">
+        <h2>General</h2>
+        <label class="enabled-field"><input type="checkbox" id="startup" disabled> Start Window Warp when I sign in</label>
+        <small class="startup-note">Signing in also turns your saved shortcuts on. Uncheck this to start it yourself.</small>
+        <label class="enabled-field"><input type="checkbox" id="enable-on-launch" checked> Turn shortcuts on when Window Warp opens</label>
+      </section>
+      <section class="group">
+        <h2>Monitors</h2>
+        <div class="monitor-settings"><label>Main monitor<input id="main-monitor" type="number" min="0" max="32" value="0"></label><label>Second monitor<input id="burner-monitor" type="number" min="1" max="32" value="2"></label></div>
+        <small>0 is the primary display. Other numbers follow left to right. The second monitor falls back to another connected display when that one is unavailable.</small>
+      </section>
+      <section class="group">
+        <h2>Hold behavior</h2>
+        <label class="enabled-field"><input type="checkbox" id="hold-enabled" checked> Hold app-pull shortcuts</label>
+        <label>While held<select id="hold-mode"><option value="tile">Mouse tiling</option><option value="radial">Radial window picker</option></select></label>
+        <label>Delay (milliseconds)<input id="hold-delay" type="number" min="100" max="5000" step="1" value="400"></label>
+        <p id="hold-hint"></p>
+      </section>
+      <section class="group">
+        <h2>Import AutoHotkey settings</h2>
+        <div id="legacy-import">
+          <label class="import-label">INI files<input id="import-files" type="file" accept=".ini" multiple disabled></label>
+          <p>Apps, shared hotkeys, settings, or workspace INI files. UTF-8 and UTF-16 are detected. Older ANSI files are read as Windows-1252. Imported shortcuts join your draft, and each workspace opens for review.</p>
+          <div id="import-results"></div>
+          <div class="footer-actions"><button id="apply-import" type="button" hidden disabled>Add selected shortcuts and settings to draft</button><button id="clear-import" type="button" hidden>Clear import review</button></div>
+        </div>
+      </section>
+      <div class="editor-footer"><span id="settings-save-status">Stored on this device</span><span class="footer-actions"><button id="discard-settings" type="button" disabled>Cancel changes</button><button id="save-settings" class="primary" type="button" disabled>Save settings</button></span></div>
     </section>
-    <section id="workspaces-page" hidden aria-labelledby="workspace-heading">
-      <div class="section-title"><div><h2 id="workspace-heading">Workspaces</h2><p>Save the apps and window positions for each kind of work.</p></div><button id="capture-workspace" class="primary">Capture current</button></div>
+    <section id="workspaces-page" class="page" hidden aria-labelledby="workspace-heading">
+      <header class="page-head">
+        <div>
+          <h1 id="workspace-heading">Workspaces</h1>
+          <p>Save the apps and window positions for each kind of work.</p>
+        </div>
+        <button id="capture-workspace" class="primary" type="button">Capture current</button>
+      </header>
       <div id="workspace-list"></div>
       <p id="workspace-empty">No workspaces yet. Capture the open windows to create one.</p>
       <div id="workspace-editor" hidden>
-        <div class="section-title"><h2>Review workspace</h2><button id="discard-workspace">Cancel</button></div>
+        <div class="section-title"><h2>Review workspace</h2><button id="discard-workspace" type="button">Cancel</button></div>
         <label>Name<input id="workspace-name" maxlength="240" placeholder="e.g. Research"></label>
         <label>Workspace platform<select id="workspace-platform"><option value="windows">Windows</option><option value="linux">Linux / KDE</option></select></label>
         <label id="workspace-update-choice" hidden>Save as<select id="workspace-target"><option value="">New workspace</option></select><small id="workspace-suggestion"></small></label>
         <div id="workspace-items"></div>
-        <div class="editor-footer"><span id="workspace-item-count"></span><button id="save-workspace" class="primary">Save workspace</button></div>
+        <div class="editor-footer"><span id="workspace-item-count"></span><button id="save-workspace" class="primary" type="button">Save workspace</button></div>
       </div>
       <div id="workspace-results" role="status" aria-live="polite"></div>
-      <button id="cancel-restore" hidden>Cancel restore</button>
+      <button id="cancel-restore" type="button" hidden>Cancel restore</button>
     </section>
     <div id="quick-edit" hidden>
       <div class="quick-card" role="dialog" aria-labelledby="quick-title">
         <h2 id="quick-title">This app</h2>
         <p id="quick-match"></p>
-        <label>Shortcut<input id="quick-shortcut" placeholder="Click, then press keys" spellcheck="false"></label>
-        <p id="quick-hint">Escape leaves it unchanged. Delete clears it. Press the next keys to replace it.</p>
-        <label>When it is already on the main monitor<select id="quick-behavior"><option value="focus-last">Focus previous app</option><option value="burner">Send to burner monitor</option></select></label>
+        <label>Shortcut<input id="quick-shortcut" readonly placeholder="Click, then press C, X, or another key" spellcheck="false"></label>
+        <div class="mod-row" id="quick-mods"><button type="button" data-mod="Super" aria-pressed="false">Super</button><button type="button" data-mod="Ctrl" aria-pressed="false">Ctrl</button><button type="button" data-mod="Alt" aria-pressed="false">Alt</button><button type="button" data-mod="Shift" aria-pressed="false">Shift</button><button type="button" class="clear-shortcut">Clear</button></div>
+        <p id="quick-hint">Click the shortcut, then press the key, such as C or X. Super, Ctrl, Alt, and Shift are the buttons below.</p>
+        <label>If it is already on the main monitor<select id="quick-behavior"><option value="focus-last">Switch back to the previous app</option><option value="burner">Send it to the second monitor</option></select></label>
         <p id="quick-behavior-hint"></p>
-        <label>Burner layout<select id="quick-layout"><option value="float">Preserve relative placement</option><option value="tile-left">Left half</option><option value="tile-right">Right half</option><option value="fullscreen">Maximized</option></select></label>
+        <label>On the second monitor<select id="quick-layout"><option value="float">Keep size and place</option><option value="tile-left">Left half</option><option value="tile-right">Right half</option><option value="fullscreen">Fill the monitor</option></select></label>
         <p id="quick-layout-hint"></p>
-        <div class="quick-actions"><button id="quick-apply" class="primary" type="button">Apply</button><button id="quick-cancel" type="button">Cancel</button></div>
+        <div class="quick-actions"><button id="quick-cancel" type="button">Cancel</button><button id="quick-apply" class="primary" type="button">Apply</button></div>
       </div>
     </div>
   </main>
   <template id="binding-template">
     <article class="binding">
-      <div class="binding-top"><label class="label-field">Name<input data-field="label" maxlength="120" placeholder="e.g. Focus Firefox"></label><label class="key-field">Shortcut<input data-field="shortcut" placeholder="Click, then press keys" spellcheck="false"></label><button class="remove" type="button" aria-label="Remove shortcut">×</button></div>
-      <div class="binding-bottom"><label>Action<select data-field="action"><option value="push-left">Push window left</option><option value="push-right">Push window right</option><option value="push-left-center">Push left and center pointer</option><option value="push-right-center">Push right and center pointer</option><option value="pull">Pull last window back</option><option value="tile-left">Tile left half</option><option value="tile-right">Tile right half</option><option value="tile-up">Tile top half</option><option value="tile-down">Tile bottom half</option><option value="toggle-maximize">Maximize / restore</option><option value="close-window">Close active window</option><option value="toggle-pause">Pause / resume shortcuts (always available)</option><option value="open-editor">Edit current app shortcut</option><option value="open-workspaces">Browse workspaces</option><option value="update-workspace">Capture workspace update</option><option value="focus-app">Focus / cycle app windows</option><option value="pull-app">Pull app to main / send to burner</option></select></label><label class="match-field" hidden>App identifier<input data-field="appMatch" maxlength="32768" spellcheck="false"><small class="match-hint"></small></label></div>
+      <div class="binding-row">
+        <button class="binding-summary" type="button">
+          <span class="chord" data-summary="shortcut"></span>
+          <span class="name" data-summary="label"></span>
+          <span class="action-name" data-summary="action"></span>
+        </button>
+        <label class="switch"><input type="checkbox" data-field="enabled" checked><span class="switch-ui"></span></label>
+      </div>
+      <div class="binding-body"><div class="binding-inner">
+      <div class="binding-top"><label class="label-field">Name<input data-field="label" maxlength="120" placeholder="e.g. Focus Firefox"></label><div class="key-field"><label>Shortcut<input data-field="shortcut" readonly placeholder="Click, then press C, X, or another key" spellcheck="false"></label><div class="mod-row"><button type="button" data-mod="Super" aria-pressed="false">Super</button><button type="button" data-mod="Ctrl" aria-pressed="false">Ctrl</button><button type="button" data-mod="Alt" aria-pressed="false">Alt</button><button type="button" data-mod="Shift" aria-pressed="false">Shift</button><button type="button" class="clear-shortcut">Clear</button></div></div></div>
+      <div class="binding-bottom"><label>Action<select data-field="action"><optgroup label="Movement"><option value="push">Push window</option><option value="pull">Bring the last window back</option><option value="tile">Tile window</option><option value="toggle-maximize">Maximize or restore</option><option value="close-window">Close the window</option></optgroup><optgroup label="Focus"><option value="pull-app">Bring an app to the main monitor</option><option value="focus-app">Cycle that app's windows</option></optgroup><optgroup label="Controls"><option value="toggle-pause">Pause or resume shortcuts</option><option value="open-editor">Edit the shortcut for this app</option><option value="open-workspaces">Browse workspaces</option><option value="update-workspace">Save the open windows as a workspace</option></optgroup></select></label><label class="match-field" hidden>App identifier<input data-field="appMatch" maxlength="32768" spellcheck="false"><small class="match-hint"></small></label></div>
+      <div class="push-options" hidden><label>Direction<select class="push-direction"><option value="left">Left</option><option value="right">Right</option></select></label><label class="enabled-field"><input class="push-center" type="checkbox"> Center the pointer</label></div>
+      <div class="tile-options" hidden><label>Side<select class="tile-side"><option value="left">Left half</option><option value="right">Right half</option><option value="up">Top half</option><option value="down">Bottom half</option></select></label></div>
       <div class="windows-match-field" hidden>
         <label class="enabled-field"><input type="checkbox" class="windows-match-enabled">Use Windows matching criteria</label>
         <details class="windows-match-details" hidden><summary>Windows window matching</summary>
@@ -110,13 +181,13 @@
           <label class="enabled-field"><input data-windows-match="activeOnly" type="checkbox">Only the active window</label>
         </details>
       </div>
-      <div class="app-options" hidden><label>When active on main<select data-field="mainMonitorAction"><option value="burner" title="Brings the app here, then sends it to the burner monitor if it is already focused.">Send to burner monitor</option><option value="focus-last" title="Brings the app here, then switches back to the previous app if it is already focused.">Focus previous app</option></select><small class="choice-hint" data-hint="main"></small></label><label>Burner layout<select data-field="burnerLayout"><option value="float" title="Keeps the window's size and place, scaled onto that monitor.">Preserve relative placement</option><option value="tile-left" title="Uses the left half of that monitor.">Left half</option><option value="tile-right" title="Uses the right half of that monitor.">Right half</option><option value="fullscreen" title="Fills that monitor.">Maximized</option></select><small class="choice-hint" data-hint="layout"></small></label></div>
-      <label class="enabled-field"><input type="checkbox" data-field="enabled" checked> Enable this shortcut</label>
-      <button type="button" class="reassign">Reassign this key</button>
+      <div class="app-options" hidden><p class="behavior-heading">Behavior</p><label>If it is already on the main monitor<select data-field="mainMonitorAction"><option value="burner">Send it to the second monitor</option><option value="focus-last">Switch back to the previous app</option></select><small class="choice-hint" data-hint="main"></small></label><label>On the second monitor<select data-field="burnerLayout"><option value="float">Keep size and place</option><option value="tile-left">Left half</option><option value="tile-right">Right half</option><option value="fullscreen">Fill the monitor</option></select><small class="choice-hint" data-hint="layout"></small></label></div>
+      <div class="binding-actions"><button type="button" class="remove" aria-label="Remove shortcut">Remove</button><button type="button" class="reassign">Reassign this key</button></div>
       <div class="reassignment" hidden><p class="reassignment-summary"></p><button type="button" class="confirm-reassignment">Use key and disable conflicts</button><button type="button" class="cancel-reassignment">Cancel</button></div>
+      </div></div>
     </article>
   </template>
-  <template id="workspace-card-template"><article class="workspace-card"><h3 class="workspace-title"></h3><p class="workspace-summary"></p><div class="workspace-actions"><button data-action="restore" class="primary">Open workspace</button><button data-action="edit">Edit</button><button data-action="update">Update from current</button><button data-action="up" aria-label="Move workspace up">↑</button><button data-action="down" aria-label="Move workspace down">↓</button><button data-action="delete">Delete</button></div><div class="workspace-delete-confirm" hidden><p>Delete this saved workspace? Open windows will stay open.</p><button data-action="confirm-delete">Delete workspace</button><button data-action="cancel-delete">Keep it</button></div></article></template>
+  <template id="workspace-card-template"><article class="workspace-card"><div class="workspace-main"><div><h3 class="workspace-title"></h3><p class="workspace-summary"></p></div><div class="workspace-actions"><button data-action="restore" type="button">Open</button><button class="menu-button" type="button" aria-label="Workspace actions">···</button><div class="menu" hidden><button data-action="edit" type="button">Edit</button><button data-action="update" type="button">Update from current</button><button data-action="up" type="button">Move up</button><button data-action="down" type="button">Move down</button><button data-action="delete" type="button">Delete</button></div></div></div><div class="workspace-delete-confirm" hidden><p>Delete this saved workspace? Open windows will stay open.</p><button data-action="confirm-delete" type="button">Delete workspace</button><button data-action="cancel-delete" type="button">Keep it</button></div></article></template>
   <template id="workspace-item-template"><article class="workspace-item">
     <label class="enabled-field"><input type="checkbox" class="include-window" checked><span class="window-title"></span></label>
     <p class="window-placement"></p><p class="capture-note" hidden></p>

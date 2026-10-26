@@ -1,11 +1,12 @@
 const native = window.__TAURI__;
+const SECOND_MONITOR = "Where the window sits after it moves to the second monitor.";
 const HINTS = {
-    "focus-last": "Brings the app to the main monitor. If it is already focused there, switches back to the previous app.",
-    burner: "Brings the app to the main monitor. If it is already focused there, sends it to the burner monitor.",
-    float: "Keeps the window's size and place, scaled onto that monitor.",
-    "tile-left": "Uses the left half of that monitor.",
-    "tile-right": "Uses the right half of that monitor.",
-    fullscreen: "Fills that monitor."
+    "focus-last": "It is already on the main monitor, so this press goes back to the previous app.",
+    burner: "It is already on the main monitor, so this press sends it to the second monitor.",
+    float: SECOND_MONITOR,
+    "tile-left": SECOND_MONITOR,
+    "tile-right": SECOND_MONITOR,
+    fullscreen: SECOND_MONITOR
 };
 let config;
 let quick = null;
@@ -29,14 +30,27 @@ function bindingIndex(info, app) {
 function showRecorded() {
     const entry = document.querySelector("#quick-entry");
     entry.value = recorded || "";
-    entry.placeholder = recorded ? "" : "Press a shortcut";
+    entry.placeholder = recorded ? "" : "Click, then press C, X, or another key";
+    syncShortcutPicker(document.querySelector(".quick-sheet"), recorded);
 }
+watchShortcutPicker(document.querySelector(".quick-sheet"), (shortcut) => {
+    recorded = shortcut;
+    document.querySelector("#quick-entry").value = shortcut;
+    document.querySelector("#quick-message").textContent = "";
+});
 function showHint() {
-    document.querySelector("#quick-behavior-hint").textContent = HINTS[document.querySelector("#quick-behavior").value] || "";
-    document.querySelector("#quick-layout-hint").textContent = HINTS[document.querySelector("#quick-layout").value] || "";
+    const behavior = document.querySelector("#quick-behavior-hint");
+    const layout = document.querySelector("#quick-layout-hint");
+    if (behavior) behavior.textContent = HINTS[document.querySelector("#quick-behavior").value] || "";
+    if (layout) layout.textContent = HINTS[document.querySelector("#quick-layout").value] || "";
+}
+function shortcutKeyFromEvent(event) {
+    if (["Control", "Shift", "Alt", "Meta"].includes(event.key)) return "";
+    const key = String(event.code || event.key || "").replace(/^Key/, "").replace(/^Digit/, "").replace(/^Arrow/, "");
+    if (SHORTCUT_KEYS.includes(key)) return key;
+    return SHORTCUT_KEYS.includes(key.toUpperCase()) ? key.toUpperCase() : "";
 }
 async function closePopup(restoreFocus) {
-    native?.core.invoke("stop_shortcut_recording").catch(() => {});
     const target = previousWindow;
     previousWindow = null;
     await native.core.invoke("hide_quick").catch(() => {});
@@ -80,13 +94,12 @@ async function openEditor(payload) {
     recorded = binding.shortcut || preset;
     showRecorded();
     showHint();
-    native.core.invoke("start_shortcut_recording", { popup: true }).catch(() => {});
+    document.querySelector("#quick-entry")?.focus();
 }
 document.querySelector("#quick-behavior").addEventListener("change", showHint);
 document.querySelector("#quick-layout").addEventListener("change", showHint);
 document.querySelector("#quick-open").addEventListener("click", async () => {
     const app = document.querySelector("#quick-app").textContent;
-    native?.core.invoke("stop_shortcut_recording").catch(() => {});
     await native.core.invoke("show_editor", { appMatch: app || null }).catch(() => {});
     await native.core.invoke("hide_quick").catch(() => {});
 });
@@ -94,7 +107,7 @@ document.querySelector("#quick-cancel").addEventListener("click", () => closePop
 document.querySelector("#quick-apply").addEventListener("click", async () => {
     if (!quick) return;
     if (!recorded) {
-        document.querySelector("#quick-message").textContent = "Press a shortcut first.";
+        document.querySelector("#quick-message").textContent = "Choose a modifier and a key first.";
         return;
     }
     const binding = config.bindings[quick.index];
@@ -110,14 +123,21 @@ document.querySelector("#quick-apply").addEventListener("click", async () => {
     }
 });
 document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") { event.preventDefault(); closePopup(true); }
-});
-native?.event.listen("shortcut-recorded", (event) => {
-    const shortcut = event.payload || "";
-    if (!shortcut) { closePopup(true); return; }
-    if (shortcut === "clear") { recorded = ""; showRecorded(); return; }
-    recorded = shortcut;
+    if (event.key === "Escape") { event.preventDefault(); closePopup(true); return; }
+    if (event.key === "Enter") {
+        if (event.target?.tagName === "SELECT") return;
+        event.preventDefault();
+        document.querySelector("#quick-apply")?.click();
+        return;
+    }
+    if (event.target?.tagName === "BUTTON") return;
+    const named = shortcutKeyFromEvent(event);
+    if (!named) return;
+    event.preventDefault();
+    const root = document.querySelector(".quick-sheet");
+    root.dataset.shortcutKey = named;
+    recorded = readShortcutPicker(root);
     showRecorded();
-});
+}, true);
 native?.event.listen("quick-edit", (event) => openEditor(event.payload || {}));
 native?.core.invoke("quick_edit").then((pending) => { if (pending) openEditor(pending); }).catch(() => {});

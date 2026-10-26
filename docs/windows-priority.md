@@ -23,7 +23,7 @@ before the next hook, and pausing let Win+E through again. Checked after the rei
 Menu **Window Warp** points at `AppData\Local\Window Warp\window-warp.exe`,
 file version 0.1.0, last written 2026-10-25 16:14:52. That is the same 0.1.0
 setup built at 16:14, before the hook fix. There is no newer installer. The
-separate Startup shortcut **Windows Warp** launches `Windows Warp.ahk`, not
+separate Startup shortcut **Windows Warp** launches `autohotkey/Windows Warp.ahk`, not
 this app.
 
 On that installed exe, Win+E stalled the hook for about three seconds and the
