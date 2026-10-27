@@ -8,15 +8,19 @@ The app lives in [`desktop/`](desktop/README.md). It does not need AutoHotkey.
 
 ## Install
 
-Windows: run `Window Warp_0.1.0_x64-setup.exe` from the GitHub release. It installs for your account and adds a Start menu entry.
+Download the installers from the [latest release](https://github.com/Ryushe/windows_warp/releases/latest).
 
-KDE Plasma 5.27 or 6, on Wayland:
+Windows: run `Window.Warp_0.1.0_x64-setup.exe`. It installs for your account and adds a Start menu entry.
+
+KDE package: Ubuntu/Kubuntu 24.04 amd64, Plasma 5.27.11 on Wayland:
 
 ```sh
-sudo apt install "./Window Warp_0.1.0_amd64.deb"
+sudo apt install ./Window.Warp_0.1.0_amd64.deb
 ```
 
-The current Debian package targets Ubuntu 24.04 with a matching KWin build. Other KWin versions need a matching companion.
+Run this from the download directory. `apt` installs the local `.deb` and resolves its dependencies. `sudo dpkg -i ./Window.Warp_0.1.0_amd64.deb` also works when those dependencies are already installed.
+
+This package requires `kwin-common (= 4:5.27.11-0ubuntu3)`. Other KWin versions, including Plasma 6, need a matching companion and package build.
 
 ## What it does
 

@@ -38,16 +38,24 @@ Firefox captures its profile, tab URLs, and selected tab from its last readable 
 
 ## Install, turn on/off, and uninstall
 
-On Windows, run `Window Warp_0.1.0_x64-setup.exe`. It installs for your Windows
+Download the installers from the [latest release](https://github.com/Ryushe/windows_warp/releases/latest).
+
+On Windows, run `Window.Warp_0.1.0_x64-setup.exe`. It installs for your Windows
 account and adds Window Warp to the Start menu and **Settings → Apps → Installed
-apps**. On KDE, install the matching Debian package with:
+apps**. The published KDE package targets Ubuntu/Kubuntu 24.04 amd64 with
+Plasma 5.27.11 on Wayland. From the download directory, run:
 
 ```sh
-sudo apt install "./Window Warp_0.1.0_amd64.deb"
+sudo apt install ./Window.Warp_0.1.0_amd64.deb
 ```
 
-The current Debian package is for Ubuntu 24.04 with KWin
-`4:5.27.11-0ubuntu3`; other KWin versions need a matching companion build.
+`apt` installs the local `.deb` and resolves its dependencies. In an environment
+where dependencies are already installed,
+`sudo dpkg -i ./Window.Warp_0.1.0_amd64.deb` also works; this was the command used
+for the disposable package acceptance test.
+
+The package requires `kwin-common (= 4:5.27.11-0ubuntu3)`. Other KWin versions,
+including Plasma 6, need a matching companion and package build.
 
 - **Turn on:** open Window Warp and click **Enable shortcuts**, or choose
   **Enable shortcuts** from its tray menu.
