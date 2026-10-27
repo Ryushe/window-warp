@@ -551,7 +551,9 @@ fn dispatch_hit(app: Option<AppHandle>, hit: Armed) {
 
 fn open_editor(slot: &Session) -> Option<&Armed> {
     match &slot.job {
-        Job::Active(armed) => armed.iter().find(|item| item.binding.action == "open-editor"),
+        Job::Active(armed) => armed
+            .iter()
+            .find(|item| item.binding.action == "open-editor"),
         _ => None,
     }
 }
@@ -565,9 +567,9 @@ fn swallow_chord(slot: &mut Session, vk: u32) {
 
 fn blocks_windows(slot: &Session) -> bool {
     match &slot.job {
-        Job::Active(armed) => armed.iter().any(|item| {
-            item.binding.action != "toggle-pause" && is_super(&item.binding.shortcut)
-        }),
+        Job::Active(armed) => armed
+            .iter()
+            .any(|item| item.binding.action != "toggle-pause" && is_super(&item.binding.shortcut)),
         Job::Idle => false,
     }
 }
@@ -805,8 +807,14 @@ mod tests {
 
     #[test]
     fn a_quick_second_press_is_not_swallowed_as_auto_repeat() {
-        assert!(is_auto_repeat(true, 30), "Windows repeat stays inside the chord");
-        assert!(!is_auto_repeat(true, 81), "a missed key-up must not eat the next press");
+        assert!(
+            is_auto_repeat(true, 30),
+            "Windows repeat stays inside the chord"
+        );
+        assert!(
+            !is_auto_repeat(true, 81),
+            "a missed key-up must not eat the next press"
+        );
         assert!(!is_auto_repeat(false, 0));
     }
 
@@ -819,10 +827,16 @@ mod tests {
         assert!(mods.super_key);
         assert!(key_is_down(&down, 0x5B));
         assert!(key_is_down(&down, 0x5C));
-        assert_eq!(shortcut_from(u32::from(b'D'), mods).as_deref(), Some("Super+D"));
+        assert_eq!(
+            shortcut_from(u32::from(b'D'), mods).as_deref(),
+            Some("Super+D")
+        );
         assert!(!key_is_down(&down, 0x11));
         down.insert(0xA2);
-        assert!(key_is_down(&down, 0x11), "left Ctrl satisfies the generic Ctrl check");
+        assert!(
+            key_is_down(&down, 0x11),
+            "left Ctrl satisfies the generic Ctrl check"
+        );
         assert_eq!(
             shortcut_from(u32::from(b'D'), mods_from(&down)).as_deref(),
             Some("Ctrl+Super+D")

@@ -329,7 +329,9 @@ pub fn capture_active() -> bool {
     reserved::capturing()
 }
 pub fn mouse_down() -> bool {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
+    };
     unsafe {
         [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
             .into_iter()

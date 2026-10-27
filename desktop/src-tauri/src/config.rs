@@ -509,6 +509,8 @@ mod tests {
     #[test]
     fn reassignment_disables_only_enabled_alias_conflicts_and_preserves_edits() {
         let mut config = Config::default();
+        // Keep this fixture independent of the default pause shortcut.
+        config.bindings.truncate(5);
         config.bindings[0].shortcut = "Super+Semicolon".into();
         config.bindings[1].shortcut = "win+;".into();
         config.bindings[1].enabled = false;

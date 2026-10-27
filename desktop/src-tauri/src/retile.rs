@@ -235,7 +235,14 @@ mod tests {
         let mut selection = Selection::default();
         selection.arm(target("first"), now + Duration::from_secs(1));
         selection.arm(target("last"), now + Duration::from_secs(1));
-        for key in ["Ctrl+X", "Alt+C", "Shift+X", "Ctrl+Super+C", "Super+X", "Super+C"] {
+        for key in [
+            "Ctrl+X",
+            "Alt+C",
+            "Shift+X",
+            "Ctrl+Super+C",
+            "Super+X",
+            "Super+C",
+        ] {
             assert!(selection.take(key, now).is_none());
         }
         assert_eq!(

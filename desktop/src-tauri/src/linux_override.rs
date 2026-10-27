@@ -15,7 +15,10 @@ static BORROWED: Mutex<Vec<Borrowed>> = Mutex::new(Vec::new());
 static RECORDING: Mutex<bool> = Mutex::new(false);
 
 pub fn borrowing() -> bool {
-    BORROWED.lock().map(|items| !items.is_empty()).unwrap_or(false)
+    BORROWED
+        .lock()
+        .map(|items| !items.is_empty())
+        .unwrap_or(false)
 }
 
 pub fn begin(config: &Config) -> Result<(), String> {
@@ -82,9 +85,9 @@ pub fn set_recording(blocked: bool) -> Result<(), String> {
         return Ok(());
     }
     let _: () = with_registry(|registry| {
-        registry.call("blockGlobalShortcuts", &blocked).map_err(|error| {
-            format!("Cannot reach KDE shortcut recording: {error}")
-        })
+        registry
+            .call("blockGlobalShortcuts", &blocked)
+            .map_err(|error| format!("Cannot reach KDE shortcut recording: {error}"))
     })?;
     *recording = blocked;
     Ok(())
@@ -109,18 +112,18 @@ fn with_registry<T>(
 
 fn action_for(key: i32) -> Result<Vec<String>, String> {
     with_registry(|registry| {
-        registry.call("action", &key).map_err(|error| {
-            format!("Cannot inspect the KDE shortcut for this key: {error}")
-        })
+        registry
+            .call("action", &key)
+            .map_err(|error| format!("Cannot inspect the KDE shortcut for this key: {error}"))
     })
 }
 
 fn shortcut_keys(action: &[String]) -> Result<Vec<i32>, String> {
     let action = action.to_vec();
     with_registry(|registry| {
-        registry.call("shortcut", &(action,)).map_err(|error| {
-            format!("Cannot read the previous KDE shortcut: {error}")
-        })
+        registry
+            .call("shortcut", &(action,))
+            .map_err(|error| format!("Cannot read the previous KDE shortcut: {error}"))
     })
 }
 
