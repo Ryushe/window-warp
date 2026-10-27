@@ -17,10 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter};
-use windows_sys::Win32::{
-    Foundation::POINT,
-    UI::WindowsAndMessaging::GetCursorPos,
-};
+use windows_sys::Win32::{Foundation::POINT, UI::WindowsAndMessaging::GetCursorPos};
 
 struct Track {
     id: u64,
@@ -184,9 +181,7 @@ pub fn press(app: &AppHandle, binding: &Binding, settings: &Settings) -> Result<
                     break;
                 }
                 if !held {
-                    if let Some(Action::Hold) =
-                        timing.advance(started.elapsed(), true)
-                    {
+                    if let Some(Action::Hold) = timing.advance(started.elapsed(), true) {
                         held = true;
                         if settings.hold_mode == "radial" {
                             match crate::radial::Picker::open(
@@ -247,7 +242,11 @@ fn finish(
     picker: Option<crate::radial::Picker>,
 ) {
     if let Ok(mut sessions) = SESSIONS.lock() {
-        if sessions.current.as_ref().is_some_and(|track| track.id == id) {
+        if sessions
+            .current
+            .as_ref()
+            .is_some_and(|track| track.id == id)
+        {
             sessions.current = None;
         }
     }
@@ -267,9 +266,10 @@ fn finish(
 /// The hook calls this on every key-up, after it has forgotten that key.
 pub(super) fn note_release() {
     let Some((shortcut, released)) = SESSIONS.lock().ok().and_then(|sessions| {
-        sessions.current.as_ref().map(|track| {
-            (track.shortcut.clone(), track.released.clone())
-        })
+        sessions
+            .current
+            .as_ref()
+            .map(|track| (track.shortcut.clone(), track.released.clone()))
     }) else {
         return;
     };
@@ -296,9 +296,14 @@ mod tests {
 
     #[test]
     fn a_new_shortcut_is_allowed_as_soon_as_the_letter_is_up() {
-        assert!(blocks_repeat(true, true), "holding the same key is one gesture");
+        assert!(
+            blocks_repeat(true, true),
+            "holding the same key is one gesture"
+        );
         assert!(!blocks_repeat(true, false), "release then tap again");
-        assert!(!blocks_repeat(false, true), "a different shortcut takes over");
+        assert!(
+            !blocks_repeat(false, true),
+            "a different shortcut takes over"
+        );
     }
 }
-

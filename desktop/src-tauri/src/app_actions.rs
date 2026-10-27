@@ -114,7 +114,10 @@ fn run(app: &AppHandle, action: &str) -> Result<(), String> {
                 return Ok(());
             }
             let active = focused_window(app)?;
-            let name = active.as_ref().map(app_label).filter(|name| !name.is_empty());
+            let name = active
+                .as_ref()
+                .map(app_label)
+                .filter(|name| !name.is_empty());
             if let Ok(mut saved) = app.state::<crate::Runtime>().quick_app.lock() {
                 *saved = name.clone();
             }
@@ -124,7 +127,11 @@ fn run(app: &AppHandle, action: &str) -> Result<(), String> {
                     .as_ref()
                     .and_then(|window| app_binding_index(config, window))
             });
-            let matched = index.and_then(|index| config.as_ref().and_then(|config| config.bindings.get(index)));
+            let matched = index.and_then(|index| {
+                config
+                    .as_ref()
+                    .and_then(|config| config.bindings.get(index))
+            });
             let payload = json!({
                 "window": active,
                 "label": matched.map(|binding| binding.label.clone()).or(name.clone()),
@@ -199,14 +206,18 @@ mod tests {
     #[test]
     fn popup_uses_the_same_discord_binding_the_list_shows() {
         let config = crate::config::Config::default();
-        let index = app_binding_index(&config, &window("discord.exe", "Friends - Discord")).unwrap();
+        let index =
+            app_binding_index(&config, &window("discord.exe", "Friends - Discord")).unwrap();
         let binding = &config.bindings[index];
         assert_eq!(binding.label, "Discord");
         assert_eq!(binding.shortcut, "Super+D");
-        assert!(app_binding_index(&config, &window("Code.exe", "Discord notes")).is_none()
-            || config.bindings[app_binding_index(&config, &window("Code.exe", "Discord notes")).unwrap()]
+        assert!(
+            app_binding_index(&config, &window("Code.exe", "Discord notes")).is_none()
+                || config.bindings
+                    [app_binding_index(&config, &window("Code.exe", "Discord notes")).unwrap()]
                 .label
-                == "Code");
+                    == "Code"
+        );
         let code = app_binding_index(&config, &window("Code.exe", "Discord notes")).unwrap();
         assert_eq!(config.bindings[code].shortcut, "Super+F");
         assert_ne!(config.bindings[code].shortcut, "Super+D");
