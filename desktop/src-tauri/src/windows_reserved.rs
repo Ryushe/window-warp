@@ -10,7 +10,6 @@
 
 use crate::config::{Binding, Settings};
 use std::{
-    cell::Cell,
     collections::{HashMap, HashSet},
     ptr::null_mut,
     sync::{mpsc, Mutex},
@@ -54,12 +53,6 @@ struct Session {
     /// chord then closes it. Recording in the main list must keep that chord.
     popup_recording: bool,
     last_down: HashMap<u32, Instant>,
-    /// A Super chord from this app fired while Win was held, so releasing
-    /// Win must not be handed back to the shell.
-    win_used: bool,
-    /// Keys pressed with Win that this app does not own. Replayed on Win up
-    /// so Explorer and the other shell shortcuts still work.
-    win_extra: Vec<u32>,
     /// Foreground window at the moment Win went down, before Windows can
     /// move focus to the taskbar. Zero means unset.
     editor_hwnd: usize,
@@ -69,26 +62,13 @@ static SESSION: Mutex<Option<Session>> = Mutex::new(None);
 /// Shorter than a human tapping again, longer than Windows key-repeat.
 const REPEAT_MS: u128 = 80;
 
-// SendInput invokes this hook again on the same thread before it returns.
-// Depth keeps that re-entry from locking SESSION, which is not reentrant.
-thread_local! {
-    static HOOK_DEPTH: Cell<u32> = const { Cell::new(0) };
-}
+// Only our synthetic menu mask is ignored. Other injected or physical events
+// must still update the state, even if SendInput pumps a nested callback.
+const MENU_MASK_TAG: usize = 0x5752504D;
+const MENU_MASK_VK: u16 = 0xE8;
 
-struct HookLeave;
-
-impl Drop for HookLeave {
-    fn drop(&mut self) {
-        HOOK_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
-    }
-}
-
-fn enter_hook() -> bool {
-    HOOK_DEPTH.with(|depth| {
-        let nested = depth.get() > 0;
-        depth.set(depth.get().saturating_add(1));
-        nested
-    })
+fn is_menu_mask(event: &KBDLLHOOKSTRUCT) -> bool {
+    event.flags & LLKHF_INJECTED != 0 && event.dwExtraInfo == MENU_MASK_TAG
 }
 
 fn session() -> std::sync::MutexGuard<'static, Option<Session>> {
@@ -135,8 +115,6 @@ pub(super) fn retain_pause() {
         slot.swallowed.clear();
         slot.down.clear();
         slot.last_down.clear();
-        slot.win_used = false;
-        slot.win_extra.clear();
         slot.job = if pause.is_empty() {
             Job::Idle
         } else {
@@ -240,8 +218,6 @@ pub(super) fn uninstall_shared() -> Result<(), String> {
             slot.swallowed.clear();
             slot.down.clear();
             slot.last_down.clear();
-            slot.win_used = false;
-            slot.win_extra.clear();
             slot.editor_hwnd = 0;
         }
     }
@@ -260,8 +236,6 @@ impl Default for Session {
             capture: false,
             popup_recording: false,
             last_down: HashMap::new(),
-            win_used: false,
-            win_extra: Vec::new(),
             editor_hwnd: 0,
         }
     }
@@ -346,15 +320,10 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
     if code != HC_ACTION as i32 {
         return CallNextHookEx(null_mut(), code, wp, lp);
     }
-    // The Start-menu mask calls SendInput from this callback. Windows runs
-    // the hook again on this thread before SendInput returns. Locking SESSION
-    // there never returns, so Windows drops the hook and keeps the Win chord.
-    let nested = enter_hook();
-    let _leave = HookLeave;
-    if nested {
+    let event = &*(lp as *const KBDLLHOOKSTRUCT);
+    if is_menu_mask(event) {
         return CallNextHookEx(null_mut(), code, wp, lp);
     }
-    let event = &*(lp as *const KBDLLHOOKSTRUCT);
     let vk = event.vkCode;
     let up = event.flags & LLKHF_UP != 0;
     let mut current = match SESSION.lock() {
@@ -362,6 +331,7 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
         Err(_) => return CallNextHookEx(null_mut(), code, wp, lp),
     };
     let Some(slot) = current.as_mut() else {
+        drop(current);
         return CallNextHookEx(null_mut(), code, wp, lp);
     };
     let was_down = key_is_down(&slot.down, vk);
@@ -381,23 +351,9 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
     if up {
         slot.last_down.remove(&vk);
         let swallowed = slot.swallowed.remove(&vk);
-        let win_released = is_win(vk) && !mods_from(&slot.down).super_key;
-        let replay = win_released && blocks_windows(slot) && !slot.capture && !slot.win_used;
-        let extras = if replay {
-            std::mem::take(&mut slot.win_extra)
-        } else {
-            Vec::new()
-        };
-        if win_released {
-            slot.win_used = false;
-            slot.win_extra.clear();
-        }
         drop(current);
         super::gestures::note_release();
-        if replay {
-            replay_unclaimed_win(&extras);
-        }
-        return if swallowed || replay {
+        return if swallowed {
             1
         } else {
             CallNextHookEx(null_mut(), code, wp, lp)
@@ -412,7 +368,9 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
     if is_auto_repeat(was_down, age) {
         // Auto-repeat must not record or run the shortcut a second time.
         // A later press is a new chord: a missed key-up used to swallow it.
-        return if slot.capture || slot.swallowed.contains(&vk) {
+        let swallowed = slot.capture || slot.swallowed.contains(&vk);
+        drop(current);
+        return if swallowed {
             1
         } else {
             CallNextHookEx(null_mut(), code, wp, lp)
@@ -445,6 +403,9 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
                     slot.popup_recording = false;
                     let app = slot.app.clone();
                     drop(current);
+                    if mods.super_key {
+                        suppress_start_menu();
+                    }
                     dispatch_hit(app, hit);
                     return 1;
                 }
@@ -474,14 +435,6 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
             return 1;
         }
     }
-    if !slot.capture && blocks_windows(slot) && is_win(vk) {
-        if !super_before {
-            slot.win_used = false;
-            slot.win_extra.clear();
-        }
-        slot.swallowed.insert(vk);
-        return 1;
-    }
     if let Some(name) = key_name(vk) {
         let consumed = if mods == Mods::none() {
             crate::retile::fire(name)
@@ -507,22 +460,10 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
     };
     let pending = matched.map(|hit| {
         swallow_chord(slot, vk);
-        if is_super(&hit.binding.shortcut) {
-            slot.win_used = true;
-        }
         slot.app.clone().map(|app| Pending::Run(app, hit))
     });
     let eat = pending.is_some();
     let pending = pending.flatten();
-    let unowned = pending.is_none()
-        && !slot.capture
-        && blocks_windows(slot)
-        && mods.super_key
-        && key_name(vk).is_some();
-    if unowned {
-        slot.win_extra.push(vk);
-        slot.swallowed.insert(vk);
-    }
     let mask_start = eat && mods.super_key;
     drop(current);
     if mask_start {
@@ -533,7 +474,7 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
             dispatch_hit(Some(app), hit);
             1
         }
-        None if eat || unowned => 1,
+        None if eat => 1,
         None => CallNextHookEx(null_mut(), code, wp, lp),
     }
 }
@@ -561,46 +502,6 @@ fn swallow_chord(slot: &mut Session, vk: u32) {
     // its key-up, or the key sticks. Win presses that started during
     // recording were marked swallowed on the way down.
     slot.swallowed.insert(vk);
-}
-
-fn blocks_windows(slot: &Session) -> bool {
-    match &slot.job {
-        Job::Active(armed) => armed.iter().any(|item| {
-            item.binding.action != "toggle-pause" && is_super(&item.binding.shortcut)
-        }),
-        Job::Idle => false,
-    }
-}
-
-fn replay_unclaimed_win(keys: &[u32]) {
-    // Called from inside the hook, so the nested SendInput is passed through
-    // and Windows sees a normal chord that this app does not own.
-    unsafe {
-        let mut inputs = Vec::with_capacity(keys.len() * 2 + 2);
-        let mut push = |vk: u16, up: bool| {
-            inputs.push(INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: INPUT_0 {
-                    ki: KEYBDINPUT {
-                        wVk: vk,
-                        dwFlags: if up { KEYEVENTF_KEYUP } else { 0 },
-                        ..std::mem::zeroed()
-                    },
-                },
-            });
-        };
-        push(VK_LWIN, false);
-        for key in keys {
-            push(*key as u16, false);
-            push(*key as u16, true);
-        }
-        push(VK_LWIN, true);
-        SendInput(
-            inputs.len() as u32,
-            inputs.as_ptr(),
-            std::mem::size_of::<INPUT>() as i32,
-        );
-    }
 }
 
 fn is_auto_repeat(was_down: bool, age_ms: u128) -> bool {
@@ -654,8 +555,9 @@ fn suppress_start_menu() {
             r#type: INPUT_KEYBOARD,
             Anonymous: INPUT_0 {
                 ki: KEYBDINPUT {
-                    wVk: VK_CONTROL,
+                    wVk: MENU_MASK_VK,
                     dwFlags: flags,
+                    dwExtraInfo: MENU_MASK_TAG,
                     ..std::mem::zeroed()
                 },
             },
@@ -762,19 +664,14 @@ mod tests {
     }
 
     #[test]
-    fn nested_hook_entry_passes_through_without_taking_the_session_lock() {
-        assert!(!super::enter_hook(), "the outer chord may handle the key");
-        assert!(super::enter_hook(), "SendInput re-entry must not lock");
-        assert!(super::enter_hook(), "deeper re-entry stays locked out");
-        leave_for_test();
-        leave_for_test();
-        leave_for_test();
-        assert!(!super::enter_hook(), "the next physical key is a new chord");
-        leave_for_test();
-    }
-
-    fn leave_for_test() {
-        super::HOOK_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    fn only_our_injected_menu_mask_is_ignored() {
+        let mut event: KBDLLHOOKSTRUCT = unsafe { std::mem::zeroed() };
+        event.dwExtraInfo = MENU_MASK_TAG;
+        assert!(!is_menu_mask(&event), "a physical event must still be tracked");
+        event.flags = LLKHF_INJECTED;
+        assert!(is_menu_mask(&event));
+        event.dwExtraInfo = 0;
+        assert!(!is_menu_mask(&event), "other injected events must still be tracked");
     }
 
     #[test]

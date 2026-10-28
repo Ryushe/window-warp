@@ -1,6 +1,6 @@
 # Desktop shortcut UX integration dossier
 
-- **Status:** feature, verification incomplete
+- **Status:** feature and Windows hook experiment, verification incomplete; do not activate the experiment
 - **Owner:** Codex
 - **Branch:** `codex/desktop-shortcut-ux`
 - **Base commit:** `d9f24c8`
@@ -68,13 +68,43 @@ windows and matches names conservatively; it is not a full app inventory.
   fields. Check upgrade and rollback behavior before installing this build over
   a user's existing configuration.
 
+## Windows hook investigation, 2026-10-28
+
+The running pre-experiment build swallows Win while an active Super shortcut
+exists and replays unclaimed chords on release. That can disrupt other apps'
+hold-to-talk shortcuts. The experimental single-hook change passes unclaimed
+keys through immediately and masks the Start menu with a tagged injected event.
+It is a candidate, not a proven AutoHotkey-equivalent or release-ready fix.
+The popup also has a DOM fallback for its configured open-editor chord, but it
+only works when the WebView actually receives that chord.
+
+- `npm test`: 143 passed. `cargo test --manifest-path
+  desktop/src-tauri/Cargo.toml platform::reserved::tests`: 4 passed.
+- `node desktop/tests/windows/native.mjs --hook-only` with
+  `WARP_TEST_CARGO_TARGET_DIR` pointing to an isolated target: unowned Win+F23
+  reached a fixture application's registered hotkey while held; the second
+  Win+B did not open the editor. This test remains **failing**. The focused
+  popup only received Meta, and a temporary hook trace saw the first chord
+  finish but no callback for the subsequent chord. The trace does not establish
+  the cause, and an experimental focus-loss change was reverted.
+- The running user's original app was not replaced; shortcuts were restored to
+  active after testing. Wispr coexistence and physical input remain unverified.
+
+Resume by reproducing the red `--hook-only` test with the live app's shortcuts
+paused, using an isolated Cargo target. Investigate missing hook callbacks and
+popup focus without introducing another hook; prove configured-chord behavior,
+start-menu suppression and recording, then test physical Win+Alt and Wispr in
+both launch orders. Restore the user's shortcut state after each session.
+Do not integrate or activate the candidate until these checks pass.
+
 ## Interruption / resume handoff
 
 - **Owning feature branch/ref:** `codex/desktop-shortcut-ux`
 - **Latest immutable recovery checkpoint:** `9b10b1d`
 - **Feature implementation commit(s):** `10f5479`
-- **Exact resume point:** run the physical Windows and live KDE checks above,
-  diagnose full-suite failures, and review before integration or activation.
+- **Exact resume point:** investigate the failing native `--hook-only` popup test and unowned
+  shortcut coexistence as described above, then perform physical Windows and
+  live KDE checks and review before integration or activation.
 - **Working-tree state at handoff:** intended clean checkpoint
 
 ## Decision gates

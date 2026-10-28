@@ -57,6 +57,17 @@ function shortcutKeyFromEvent(event) {
     if (SHORTCUT_KEYS.includes(key)) return key;
     return SHORTCUT_KEYS.includes(key.toUpperCase()) ? key.toUpperCase() : "";
 }
+function isEditorShortcut(event) {
+    const editor = config?.bindings.find(binding => binding.enabled !== false && binding.action === "open-editor");
+    const key = shortcutKeyFromEvent(event);
+    if (!editor || !key) return false;
+    const modifiers = new Set();
+    if (event.ctrlKey) modifiers.add("Ctrl");
+    if (event.altKey) modifiers.add("Alt");
+    if (event.shiftKey) modifiers.add("Shift");
+    if (event.metaKey) modifiers.add("Super");
+    return formatShortcut(modifiers, key) === editor.shortcut;
+}
 async function closePopup(restoreFocus) {
     const target = previousWindow;
     previousWindow = null;
@@ -153,6 +164,12 @@ document.querySelector("#quick-apply").addEventListener("click", async () => {
     }
 });
 document.addEventListener("keydown", (event) => {
+    if (!event.repeat && isEditorShortcut(event)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        document.querySelector("#quick-open").click();
+        return;
+    }
     if (event.key === "Escape") { event.preventDefault(); closePopup(true); return; }
     if (event.key === "Enter") {
         if (["SELECT", "BUTTON"].includes(event.target?.tagName)) return;

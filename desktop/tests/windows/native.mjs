@@ -11,10 +11,12 @@ import {testFirefox} from "./firefox.mjs";
 
 if (process.platform !== "win32") throw new Error("This fixture requires Windows");
 const firefoxProfileLock = process.argv.includes("--firefox-profile-lock");
-const quickOnly = process.argv.includes("--quick-only");
+const hookOnly = process.argv.includes("--hook-only");
+const quickOnly = process.argv.includes("--quick-only") || hookOnly;
 const firefoxOnly = process.argv.includes("--firefox-only") || firefoxProfileLock;
 const runFirefox = firefoxOnly || process.argv.includes("--firefox");
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const buildTarget = process.env.WARP_TEST_CARGO_TARGET_DIR || path.join(desktop, "src-tauri/target");
 const marker = "WARP-NATIVE-" + randomUUID();
 const output = path.join(desktop, "src-tauri/target/windows-validation", marker);
 const state = path.join(output, "state");
@@ -54,19 +56,20 @@ const config = {version:1, settings:{mainMonitor:0,burnerMonitor:2,enableOnLaunc
     label:action, shortcut:`Ctrl+Alt+Shift+F${13+index}`, action, enabled:true, appMatch:"", mainMonitorAction:"burner", burnerLayout:"float"
 }))};
 if (quickOnly) config.bindings[0].shortcut = "Alt+C";
+if (hookOnly) config.bindings.find(binding => binding.action === "open-editor").shortcut = "Super+B";
 fs.writeFileSync(path.join(state, "settings.json"), JSON.stringify(config, null, 2));
 const buildLog = fs.openSync(path.join(output, "build.log"), "w");
 const cargo = path.join(process.env.USERPROFILE, ".cargo/bin/cargo.exe");
 console.log("Building isolated native fixture:", output);
 const build = spawn(cargo, ["rustc", "--manifest-path", "src-tauri/Cargo.toml", "--offline", "--features", "tauri/custom-protocol", "--", "-C", "debuginfo=0"], {
-    cwd:desktop, env:{...process.env, CARGO_INCREMENTAL:"0", CARGO_BUILD_JOBS:"1", TAURI_CONFIG:JSON.stringify(override)},
+    cwd:desktop, env:{...process.env, CARGO_TARGET_DIR:buildTarget, CARGO_INCREMENTAL:"0", CARGO_BUILD_JOBS:"1", TAURI_CONFIG:JSON.stringify(override)},
     windowsHide:true, stdio:["ignore",buildLog,buildLog]
 });
 const built = await exit(build, 600000);
 fs.closeSync(buildLog);
 if (built !== 0) throw new Error("Native fixture build failed: " + fs.readFileSync(path.join(output,"build.log"),"utf8").slice(-6000));
 const binary = path.join(output, "window-warp-fixture.exe");
-fs.copyFileSync(path.join(desktop,"src-tauri/target/debug/window-warp.exe"), binary);
+fs.copyFileSync(path.join(buildTarget,"debug/window-warp.exe"), binary);
 
 let app, helper, socket, second, startupTouched = false, calculatorPrepared = false;
 const checks = [];
@@ -75,7 +78,7 @@ let fixture, native;
 let report = {passed:false, checks, skipped};
 const appLog = fs.openSync(path.join(output,"app.log"), "w");
 try {
-    const appEnvironment = firefoxProfileLock ? {...process.env, APPDATA:path.join(output,"firefox-discovery")} : process.env;
+    const appEnvironment = {...process.env, ...(firefoxProfileLock ? {APPDATA:path.join(output,"firefox-discovery")} : {})};
     app = spawn(binary, [], {cwd:output, env:appEnvironment, windowsHide:true, stdio:["ignore",appLog,appLog]});
     const target = await until(async () => {
         try { return (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t => t.type === "page" && /^https?:\/\/tauri\.localhost\/(?:index.html)?$/.test(t.url)); }
@@ -139,7 +142,50 @@ try {
     });
     const press = f => native("press",{key:0x70 + f - 1});
     const paused = wanted => until(() => invoke("get_status"), s => s.enabled !== wanted, wanted ? "paused" : "active");
-    if (quickOnly) {
+    if (hookOnly) {
+        await invoke("set_enabled", {enabled:true});
+        await native("reserve", {key:0x86, meta:true});
+        const initialEvents = (await native("hotkey_events")).length;
+        await native("hold_start", {key:0x86, meta:true});
+        try {
+            await until(()=>native("hotkey_events"),events=>events.length > initialEvents,"unowned Win+F23 delivered while held",3000);
+        } finally {
+            await native("key_up");
+            await native("release", {key:0x86});
+        }
+        checks.push("unowned Win+F23 reaches another application's hotkey while held");
+        const mainWindow = await native("app_window");
+        await native("app_close",{window:mainWindow});
+        await until(()=>native("app_state",{window:mainWindow}),s=>!s.visible,"hide fixture editor");
+        await native("plain_press",{key:66,meta:true});
+        const quickWindow = await until(()=>native("app_window").catch(()=>null),Boolean,"Win+B opens popup",4000);
+        const quickTarget = await until(async()=>{
+            try {return (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.type === "page" && /\/quick\.html$/.test(t.url));}
+            catch {return null;}
+        },Boolean,"popup diagnostics");
+        const probe = new WebSocket(quickTarget.webSocketDebuggerUrl);
+        await new Promise((resolve,reject)=>{probe.addEventListener("open",resolve,{once:true});probe.addEventListener("error",reject,{once:true});});
+        let probeId=0;
+        const probeEval = expression => new Promise((resolve,reject)=>{
+            const id=++probeId;
+            const timer=setTimeout(()=>reject(new Error("Popup probe timed out")),5000);
+            const receive=event=>{const response=JSON.parse(event.data);if(response.id!==id)return;clearTimeout(timer);probe.removeEventListener("message",receive);response.error?reject(new Error(JSON.stringify(response.error))):resolve(response.result.result?.value);};
+            probe.addEventListener("message",receive);probe.send(JSON.stringify({id,method:"Runtime.evaluate",params:{expression,returnByValue:true}}));
+        });
+        await probeEval("window.__hookKeys=[];window.addEventListener('keydown',e=>window.__hookKeys.push({key:e.key,code:e.code,meta:e.metaKey,ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey}),true);true");
+        // Let the first key cycle and popup-open dispatch finish before the
+        // second distinct press, without holding the modifier between presses.
+        await sleep(200);
+        await native("plain_press",{key:66,meta:true,window:quickWindow});
+        try {
+            await until(()=>native("app_state",{window:mainWindow}),s=>s.visible && s.foreground,"second Win+B opens the main window",4000);
+        } catch (error) {
+            report.popupDiagnostics = {keys:await probeEval("window.__hookKeys"),entry:await probeEval("document.querySelector('#quick-entry').value"),quick:await native("fixture_window_state",{window:quickWindow})};
+            throw error;
+        } finally {probe.close();}
+        checks.push("one further Win+B hides the popup and opens the main editor");
+    }
+    if (quickOnly && !hookOnly) {
         await invoke("set_enabled",{enabled:true});
         const mainWindow = await native("app_window");
         await native("app_close",{window:mainWindow});
@@ -947,7 +993,7 @@ try {
     }
     await invoke("save_workspaces",{store:previousStore});
     } else {
-        skipped.push(quickOnly ? "General native checks omitted by --quick-only" : "General native checks omitted by --firefox-only");
+        skipped.push(hookOnly ? "General native checks omitted by --hook-only" : quickOnly ? "General native checks omitted by --quick-only" : "General native checks omitted by --firefox-only");
     }
     if (runFirefox) {
         await testFirefox({output,marker,native,invoke,evaluate,wait,click,screenshot,until,checks,report,profileLock:firefoxProfileLock});
@@ -1016,7 +1062,7 @@ try {
     fs.closeSync(appLog);
     // The fixture copied its executable already; restore the ordinary debug build.
     const normalLog = fs.openSync(path.join(output,"restore-build.log"),"w");
-    const normalEnv = {...process.env,CARGO_INCREMENTAL:"0",CARGO_BUILD_JOBS:"1"};
+    const normalEnv = {...process.env,CARGO_TARGET_DIR:buildTarget,CARGO_INCREMENTAL:"0",CARGO_BUILD_JOBS:"1"};
     delete normalEnv.TAURI_CONFIG;
     const normal = spawn(cargo,["rustc","--manifest-path","src-tauri/Cargo.toml","--offline","--features","tauri/custom-protocol","--","-C","debuginfo=0"],{
         cwd:desktop,env:normalEnv,windowsHide:true,stdio:["ignore",normalLog,normalLog]

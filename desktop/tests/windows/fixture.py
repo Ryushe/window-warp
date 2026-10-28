@@ -587,9 +587,13 @@ def tray_menu(action):
     return {"tray": tray, "popup": popup, "items": items, "selected": action}
 
 close_fixture = {"window": None, "requests": 0, "allow": False}
+hotkey_events = []
 
 @WNDPROC
 def procedure(hwnd, message, wp, lp):
+    if message == 0x0312:
+        hotkey_events.append(int(wp))
+        return 0
     if message == 0x10 and hwnd == close_fixture["window"]:
         close_fixture["requests"] += 1
         if not close_fixture["allow"]:
@@ -685,6 +689,10 @@ try:
                     raise c.WinError(c.get_last_error())
                 result = {"window": hwnd, "pid": args.app_pid, "className": app_class_name,
                           "visible": bool(user.IsWindowVisible(hwnd)), "foreground": user.GetForegroundWindow() == hwnd}
+            elif command == "fixture_window_state":
+                hwnd = int(request["window"])
+                checked_app_window(hwnd)
+                result = {"visible": bool(user.IsWindowVisible(hwnd)), "foreground": user.GetForegroundWindow() == hwnd}
             elif command == "tray_menu":
                 result = tray_menu(request["action"])
             elif command == "calculator_begin":
@@ -751,7 +759,8 @@ try:
                     result = None
             elif command == "reserve":
                 key = request["key"]
-                if not user.RegisterHotKey(windows[0], key, 0x4007, key):
+                modifiers = 0x4008 if request.get("meta") else 0x4007
+                if not user.RegisterHotKey(windows[0], key, modifiers, key):
                     raise c.WinError(c.get_last_error())
                 reserved.add(key)
             elif command == "release":
@@ -759,6 +768,8 @@ try:
                 if not user.UnregisterHotKey(windows[0], key):
                     raise c.WinError(c.get_last_error())
                 reserved.discard(key)
+            elif command == "hotkey_events":
+                result = list(hotkey_events)
             elif command == "pointer_position":
                 point = w.POINT()
                 if not user.GetCursorPos(c.byref(point)):
@@ -856,11 +867,13 @@ try:
                     if any(user.GetAsyncKeyState(key) & 0x8000 for key in (0x10, 0x11, 0x12, 0x5B, 0x5C)):
                         raise RuntimeError("A modifier is already held; no keys sent")
                     if command == "plain_press":
-                        if request["key"] not in (88,67,13):
-                            raise RuntimeError("Only X/C and Enter are supported by the fixture")
+                        if request["key"] not in (66,88,67,13):
+                            raise RuntimeError("Only B/X/C and Enter are supported by the fixture")
                         if request["key"] == 13:
                             checked_app_window(hwnd)
                         keys = ([0x5B] if request.get("meta",False) else []) + [request["key"]]
+                    elif request.get("meta") and command == "hold_start":
+                        keys = [0x5B, request["key"]]
                     else:
                         keys = [0x11, 0x12, 0x10, request["key"]]
                     held_keys = keys.copy()

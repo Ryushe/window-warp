@@ -27,6 +27,7 @@ async function popup(bindings, settings = {}) {
         core: { invoke: async (command, args) => {
             calls.push({ command, args });
             if (command === "get_config") return structuredClone(config);
+            if (command === "show_editor") return null;
             if (command === "quick_edit") return null;
             if (command === "start_shortcut_recording" || command === "stop_shortcut_recording" || command === "hide_quick") return null;
             if (command === "save_config") return structuredClone(args.config);
@@ -122,6 +123,25 @@ test("a conflicting shortcut requires explicit replacement and preserves the dis
     assert.equal(saved.bindings[0].enabled, false);
     assert.equal(saved.bindings[0].shortcut, "Super+C");
     assert.equal(saved.bindings[1].shortcut, "Super+C");
+});
+
+test("only the configured editor chord opens the main window from the popup", async () => {
+    const page = await popup([
+        {label:"Open editor",shortcut:"Ctrl+Alt+K",action:"open-editor",enabled:true},
+        discord
+    ]);
+    await page.listeners.get("quick-edit")({payload:{window:{appId:"discord.exe"},label:"Discord",shortcut:"Super+D",bindingIndex:1}});
+    await tick();
+    const other = new page.window.Event("keydown", {bubbles:true, cancelable:true});
+    Object.assign(other, {key:"b",code:"KeyB",metaKey:true});
+    page.document.dispatchEvent(other);
+    assert.equal(page.calls.some(c => c.command === "show_editor"), false);
+    const editor = new page.window.Event("keydown", {bubbles:true, cancelable:true});
+    Object.assign(editor, {key:"k",code:"KeyK",ctrlKey:true,altKey:true});
+    page.document.dispatchEvent(editor);
+    await tick();
+    assert.equal(page.calls.filter(c => c.command === "show_editor").length, 1);
+    assert.equal(page.calls.some(c => c.command === "hide_quick"), true);
 });
 
 test("a title that merely mentions Discord does not replace the focused app shortcut", async () => {
