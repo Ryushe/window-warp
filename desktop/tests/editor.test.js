@@ -8,7 +8,7 @@ const html = fs.readFileSync(new URL("../ui/index.html", import.meta.url), "utf8
 const source = fs.readFileSync(new URL("../ui/shortcut-picker.js", import.meta.url), "utf8") + "\n" + fs.readFileSync(new URL("../ui/app.js", import.meta.url), "utf8");
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-async function editor({ failLoad = false, failSave = false, failEnable = false, failReassignment = false, platform = "windows", bindings } = {}) {
+async function editor({ failLoad = false, failSave = false, failEnable = false, failReassignment = false, platform = "windows", bindings, windows = [] } = {}) {
     const { window, document } = parseHTML(html);
     // linkedom exposes select.value as a getter; browsers also provide a setter.
     Object.defineProperty(window.HTMLSelectElement.prototype, "value", {
@@ -30,6 +30,7 @@ async function editor({ failLoad = false, failSave = false, failEnable = false, 
             calls.push({ command, args });
             if (command === "get_status") return { enabled: false, platform, settingsPath: "test/settings.json" };
             if (command === "get_config") { if (failLoad) throw "Settings are unreadable"; return structuredClone(config); }
+            if (command === "get_windows") return structuredClone(windows);
             if (command === "take_control_request") return controlRequests.shift() || null;
             if (command === "get_startup") return false;
             if (command === "set_startup") return args.enabled;
@@ -55,6 +56,39 @@ async function editor({ failLoad = false, failSave = false, failEnable = false, 
         field.dispatchEvent(new window.Event("input"));
     }, async click(selector) { document.querySelector(selector).click(); await tick(); } };
 }
+
+test("find open apps adds unambiguous identifiers to the draft and reports missing apps", async () => {
+    const e = await editor({platform:"linux", bindings:[
+        {label:"Firefox",shortcut:"Super+F",action:"pull-app",appMatch:"firefox.exe",enabled:true},
+        {label:"Discord",shortcut:"Super+D",action:"pull-app",appMatch:"Discord.exe",enabled:true}
+    ], windows:[{appId:"firefox",desktopId:"org.mozilla.firefox"}]});
+    await e.click("#find-apps");
+    assert.match(e.document.querySelector("#find-apps-result").textContent, /Not found: Discord/);
+    assert.equal(e.document.querySelector(".app-matches").value, "firefox\norg.mozilla.firefox");
+    assert.equal(e.calls.some(c => c.command === "save_config"), false);
+    await e.click("#save");
+    const saved = e.calls.find(c => c.command === "save_config").args.config;
+    assert.equal(saved.bindings[0].appMatch, "firefox.exe");
+    assert.deepEqual([...saved.bindings[0].appMatches], ["firefox", "org.mozilla.firefox"]);
+});
+
+test("popup default modifier is saved in settings", async () => {
+    const e = await editor();
+    const field = e.document.querySelector("#quick-modifier");
+    field.value = "Alt";
+    field.dispatchEvent(new e.window.Event("change"));
+    await e.click("#save-settings");
+    assert.equal(e.calls.find(c => c.command === "save_config").args.config.settings.quickModifier, "Alt");
+});
+
+test("app discovery leaves ambiguous names unchanged", async () => {
+    const e = await editor({bindings:[{label:"Firefox",shortcut:"Super+F",action:"focus-app",appMatch:"firefox.exe",enabled:true}],
+        windows:[{appId:"firefox",desktopId:"firefox"},{appId:"org.mozilla.firefox",desktopId:"org.mozilla.firefox"}]});
+    await e.click("#find-apps");
+    assert.match(e.document.querySelector("#find-apps-result").textContent, /Multiple matches/);
+    assert.equal(e.document.querySelector(".app-matches").value, "");
+    assert.equal(e.document.querySelector("#save").disabled, true);
+});
 
 test("hold settings stay editable while shortcuts are active and save from the settings page", async () => {
     const e = await editor();

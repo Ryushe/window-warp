@@ -141,6 +141,17 @@ Manual acceptance on each OS: enable the app; push a floating window across two 
 
 Settings live in Tauri's per-user configuration directory under `com.windowwarp.desktop/settings.json`; workspaces use `workspaces.json` beside it. The editor displays the settings path. Use **Import AutoHotkey settings** to select existing INI files. The originals are never modified.
 
+For a new shortcut in the popup, press a key and Enter. Settings chooses the
+default modifier; the popup buttons can adjust it. If a key is already used,
+the popup offers to replace it and keeps the displaced binding disabled.
+
+Under Shortcuts, **Find open apps** compares open app identifiers with shortcut
+names and existing identifiers. Unambiguous matches are added to the draft;
+missing or ambiguous apps are listed for review. Open the apps first and save
+the reviewed changes. Additional identifiers can also be edited manually, one
+per line. Windows-specific matching criteria remain authoritative on Windows;
+additional identifiers provide KDE matches for those bindings.
+
 ## Radial window picker
 
 In **Settings → Hold action**, select **Radial window picker**, then save and

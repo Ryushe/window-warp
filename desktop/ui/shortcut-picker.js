@@ -57,6 +57,7 @@ function watchShortcutPicker(root, onChange) {
         update();
     });
     root.querySelector("[data-field=shortcut], #quick-entry, #quick-shortcut")?.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && event.target?.id === "quick-entry") return;
         if (event.key === "Escape" || ["Control", "Shift", "Alt", "Meta"].includes(event.key)) return;
         const key = String(event.code || event.key || "").replace(/^Key/, "").replace(/^Digit/, "").replace(/^Arrow/, "");
         const named = SHORTCUT_KEYS.includes(key) ? key : SHORTCUT_KEYS.includes(key.toUpperCase()) ? key.toUpperCase() : "";

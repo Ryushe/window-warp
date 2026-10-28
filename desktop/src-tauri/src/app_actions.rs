@@ -139,10 +139,6 @@ fn run(app: &AppHandle, action: &str) -> Result<(), String> {
             app.state::<crate::Runtime>()
                 .quick_open
                 .store(true, std::sync::atomic::Ordering::SeqCst);
-            #[cfg(windows)]
-            {
-                let _ = crate::platform::start_recording(app.clone(), true);
-            }
             let _ = window.center();
             window.show().map_err(|e| e.to_string())?;
             let _ = window.set_focus();

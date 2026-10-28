@@ -12,6 +12,12 @@ let config;
 let quick = null;
 let recorded = "";
 let previousWindow = null;
+let conflictProposal = null;
+
+function clearConflict() {
+    conflictProposal = null;
+    document.querySelector("#quick-conflict").hidden = true;
+}
 
 function baseName(value) {
     return String(value || "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
@@ -20,7 +26,7 @@ function appName(window) {
     return window?.appId || window?.path?.split(/[\\/]/).pop() || window?.desktopId || "";
 }
 function sameApp(binding, info, app) {
-    const needles = [binding.appMatch, binding.windowsMatch?.executable, binding.label].map(baseName).filter(name => name.length > 1);
+    const needles = [binding.appMatch, ...(binding.appMatches || []), binding.windowsMatch?.executable, binding.label].map(baseName).filter(name => name.length > 1);
     const hay = [app, info?.appId, info?.path, info?.desktopId].map(baseName).filter(Boolean);
     return needles.some(name => hay.includes(name));
 }
@@ -30,10 +36,11 @@ function bindingIndex(info, app) {
 function showRecorded() {
     const entry = document.querySelector("#quick-entry");
     entry.value = recorded || "";
-    entry.placeholder = recorded ? "" : "Click, then press C, X, or another key";
+    entry.placeholder = recorded ? "" : "Press a key";
     syncShortcutPicker(document.querySelector(".quick-sheet"), recorded);
 }
 watchShortcutPicker(document.querySelector(".quick-sheet"), (shortcut) => {
+    clearConflict();
     recorded = shortcut;
     document.querySelector("#quick-entry").value = shortcut;
     document.querySelector("#quick-message").textContent = "";
@@ -59,6 +66,7 @@ async function closePopup(restoreFocus) {
     }
 }
 async function openEditor(payload) {
+    clearConflict();
     const windowInfo = payload?.window || null;
     previousWindow = windowInfo;
     const preset = typeof payload?.shortcut === "string" ? payload.shortcut : "";
@@ -93,17 +101,33 @@ async function openEditor(payload) {
     document.querySelector("#quick-apply").disabled = false;
     recorded = binding.shortcut || preset;
     showRecorded();
+    if (!recorded) {
+        const modifier = config.settings?.quickModifier || "Super";
+        const button = document.querySelector(`[data-mod="${modifier}"]`);
+        if (button) button.setAttribute("aria-pressed", "true");
+    }
     showHint();
     document.querySelector("#quick-entry")?.focus();
 }
-document.querySelector("#quick-behavior").addEventListener("change", showHint);
-document.querySelector("#quick-layout").addEventListener("change", showHint);
+document.querySelector("#quick-behavior").addEventListener("change", () => { clearConflict(); showHint(); });
+document.querySelector("#quick-layout").addEventListener("change", () => { clearConflict(); showHint(); });
 document.querySelector("#quick-open").addEventListener("click", async () => {
     const app = document.querySelector("#quick-app").textContent;
     await native.core.invoke("show_editor", { appMatch: app || null }).catch(() => {});
     await native.core.invoke("hide_quick").catch(() => {});
 });
 document.querySelector("#quick-cancel").addEventListener("click", () => closePopup(true));
+async function saveQuick(value) {
+    await native.core.invoke("save_config", {config:value});
+    quick = null;
+    await closePopup(true);
+}
+document.querySelector("#quick-keep").addEventListener("click", clearConflict);
+document.querySelector("#quick-replace").addEventListener("click", async () => {
+    if (!conflictProposal) return;
+    try { await saveQuick(conflictProposal.config); }
+    catch (error) { document.querySelector("#quick-message").textContent = String(error); }
+});
 document.querySelector("#quick-apply").addEventListener("click", async () => {
     if (!quick) return;
     if (!recorded) {
@@ -115,9 +139,15 @@ document.querySelector("#quick-apply").addEventListener("click", async () => {
     binding.mainMonitorAction = document.querySelector("#quick-behavior").value;
     binding.burnerLayout = document.querySelector("#quick-layout").value;
     try {
-        await native.core.invoke("save_config", { config });
-        quick = null;
-        await closePopup(true);
+        const proposal = await native.core.invoke("preview_shortcut_reassignment", {config, index:quick.index});
+        if (proposal.disabledIndices.length) {
+            conflictProposal = proposal;
+            const names = proposal.disabledIndices.map(index => proposal.config.bindings[index].label);
+            document.querySelector("#quick-conflict-summary").textContent = `${recorded} is used by ${names.join(", ")}. Replacing it disables those shortcuts but keeps their settings.`;
+            document.querySelector("#quick-conflict").hidden = false;
+            return;
+        }
+        await saveQuick(config);
     } catch (error) {
         document.querySelector("#quick-message").textContent = String(error);
     }
@@ -125,14 +155,15 @@ document.querySelector("#quick-apply").addEventListener("click", async () => {
 document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") { event.preventDefault(); closePopup(true); return; }
     if (event.key === "Enter") {
-        if (event.target?.tagName === "SELECT") return;
+        if (["SELECT", "BUTTON"].includes(event.target?.tagName)) return;
         event.preventDefault();
         document.querySelector("#quick-apply")?.click();
         return;
     }
-    if (event.target?.tagName === "BUTTON") return;
+    if (event.key === "Tab" || event.target?.tagName === "SELECT" || (event.target?.tagName === "BUTTON" && event.key === " ")) return;
     const named = shortcutKeyFromEvent(event);
     if (!named) return;
+    clearConflict();
     event.preventDefault();
     const root = document.querySelector(".quick-sheet");
     root.dataset.shortcutKey = named;

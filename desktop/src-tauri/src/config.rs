@@ -9,6 +9,8 @@ pub struct Binding {
     pub action: String,
     #[serde(default)]
     pub app_match: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub app_matches: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub windows_match: Option<crate::window_match::WindowsMatch>,
     #[serde(default = "yes")]
@@ -38,6 +40,7 @@ pub struct Settings {
     pub hold_tile_enabled: bool,
     pub hold_mode: String,
     pub enable_on_launch: bool,
+    pub quick_modifier: String,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -48,6 +51,7 @@ impl Default for Settings {
             hold_tile_enabled: true,
             hold_mode: "tile".into(),
             enable_on_launch: true,
+            quick_modifier: "Super".into(),
         }
     }
 }
@@ -81,6 +85,7 @@ fn shortcut(
         shortcut: keys.into(),
         action: action.into(),
         app_match: app.into(),
+        app_matches: Vec::new(),
         windows_match: None,
         enabled: true,
         main_monitor_action: main_monitor_action.into(),
@@ -310,6 +315,9 @@ impl Config {
                     .into(),
             );
         }
+        if !["Super", "Ctrl", "Alt", "Shift"].contains(&self.settings.quick_modifier.as_str()) {
+            return Err("Choose a default popup modifier: Super, Ctrl, Alt, or Shift.".into());
+        }
         if self.settings.main_monitor > 32
             || self.settings.burner_monitor > 32
             || self.settings.burner_monitor == 0
@@ -320,6 +328,12 @@ impl Config {
         for binding in &mut self.bindings {
             binding.label = binding.label.trim().to_string();
             binding.app_match = binding.app_match.trim().to_string();
+            for identifier in &mut binding.app_matches {
+                *identifier = identifier.trim().to_string();
+                if identifier.is_empty() || identifier.len() > 32768 || identifier.contains('\0') {
+                    return Err("Each additional app identifier must be nonempty and valid.".into());
+                }
+            }
             if binding.label.is_empty() || binding.label.len() > 120 {
                 return Err("Each shortcut needs a label of 1–120 characters.".into());
             }
@@ -349,14 +363,14 @@ impl Config {
             if ["focus-app", "pull-app"].contains(&binding.action.as_str()) {
                 if let Some(selector) = &mut binding.windows_match {
                     selector.validate()?;
-                    if !cfg!(windows) && binding.enabled {
+                    if !cfg!(windows) && binding.enabled && binding.app_matches.is_empty() {
                         return Err("Windows window-match rules cannot be enabled on KDE. Turn off Windows matching and enter a KDE app identifier first.".into());
                     }
                 }
             }
             if ["focus-app", "pull-app"].contains(&binding.action.as_str())
                 && binding.windows_match.is_none()
-                && (binding.app_match.is_empty()
+                && ((binding.app_match.is_empty() && binding.app_matches.is_empty())
                     || binding.app_match.len() > 32768
                     || binding.app_match.contains('\0'))
             {
@@ -517,7 +531,8 @@ mod tests {
         config.bindings[3].enabled = false;
         config.bindings[4].label = "Unsaved edit".into();
         let proposal = config.preview_reassignment(1).unwrap();
-        assert_eq!(proposal.disabled_indices, [0, 2]);
+        // The default pause shortcut also uses Super+Semicolon.
+        assert_eq!(proposal.disabled_indices, [0, 2, 8]);
         assert!(proposal.config.bindings[1].enabled);
         assert_eq!(proposal.config.bindings[1].shortcut, "Super+Semicolon");
         assert!(!proposal.config.bindings[3].enabled);

@@ -95,9 +95,10 @@ var Warp = (function () {
             awaitPlacement(target, placement({horizontal:false, vertical:false}, window, output, rect), done, accepted);
         }, done, rect);
     }
-    function matches(window, match) {
+    function matches(window, binding) {
+        var identifiers = (binding.windowsMatch ? [] : [binding.appMatch]).concat(binding.appMatches || []);
         return !window.deleted && !window.dock && !window.desktopWindow &&
-            (String(window.resourceClass).toLowerCase() === match || String(window.desktopFileName).toLowerCase() === match);
+            identifiers.some(function(match) { return match && (String(window.resourceClass).toLowerCase() === match.toLowerCase() || String(window.desktopFileName).toLowerCase() === match.toLowerCase()); });
     }
     function moveRelative(window, from, to) {
         var rect = relative(copy(window.frameGeometry), area(from), area(to));
@@ -107,7 +108,7 @@ var Warp = (function () {
     }
     function pullApp(binding, all, holdPointer, selected, previous, state, configuration, done) {
         var current = previous;
-        var candidates = windows().filter(function (w) { return matches(w, binding.appMatch.toLowerCase()); });
+        var candidates = windows().filter(function (w) { return matches(w, binding); });
         var window = selected || (candidates.indexOf(current) >= 0 ? current : candidates[candidates.length - 1]);
         if (selected && candidates.indexOf(selected) < 0) throw new Error("The selected window no longer matches this app.");
         if (!window) { done("No matching app window is open."); return; }
@@ -307,7 +308,7 @@ var Warp = (function () {
             var previous = job.previous ? live(job.previous) : null;
             var selected = job.selected ? live(job.selected) : null;
             if (job.selected && !selected) { done("The selected window closed or changed identity."); return; }
-            var candidates = windows().filter(function(w) { return matches(w, job.binding.appMatch.toLowerCase()); });
+            var candidates = windows().filter(function(w) { return matches(w, job.binding); });
             var selected = selected || (candidates.indexOf(previous) >= 0 ? previous : candidates[candidates.length - 1]);
             if (!selected) { done("No matching app window is open."); return; }
             var target = identity(selected);
@@ -420,7 +421,7 @@ var Warp = (function () {
         nextGeometry();
     }
     function run(binding, overrides, holdPointer, selected, previous, completion, invocation) {
-        if (binding.windowsMatch && (binding.action === "pull-app" || binding.action === "focus-app")) {
+        if (binding.windowsMatch && !(binding.appMatches || []).length && (binding.action === "pull-app" || binding.action === "focus-app")) {
             throw new Error("Windows window-match rules cannot run on KDE. Adapt the binding to a KDE app identifier first.");
         }
         if (["toggle-pause", "open-editor", "open-workspaces", "update-workspace"].indexOf(binding.action) >= 0) {
@@ -442,7 +443,7 @@ var Warp = (function () {
         }
         if (overrides) settings = overrides;
         if (binding.action === "pull-app") {
-            if (selected && !matches(selected, binding.appMatch.toLowerCase())) throw new Error("The selected window no longer matches this app.");
+            if (selected && !matches(selected, binding)) throw new Error("The selected window no longer matches this app.");
             extra.binding=binding; extra.settings=settings; extra.pointer=holdPointer;
             extra.selected=selected ? identity(selected) : null;
             var prior=invocation ? previous : (previous || window);
@@ -451,9 +452,8 @@ var Warp = (function () {
             return;
         }
         if (binding.action === "focus-app") {
-            var match = binding.appMatch.toLowerCase();
             var candidates = windows().filter(function (w) {
-                return matches(w, match);
+                return matches(w, binding);
             });
             // Stable order lets repeated presses cycle through every instance.
             candidates.sort(function (a, b) { return String(a.internalId).localeCompare(String(b.internalId)); });

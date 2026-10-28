@@ -13,7 +13,7 @@
     <h2 id="quick-title">Shortcut</h2>
     <p id="quick-app" class="quick-app"></p>
     <label class="key-field quick-key">
-      <input id="quick-entry" readonly placeholder="Click, then press C, X, or another key" spellcheck="false" aria-label="Shortcut">
+      <input id="quick-entry" readonly placeholder="Press a key" spellcheck="false" aria-label="Shortcut">
     </label>
     <div class="mod-row" id="quick-mods">
       <button type="button" data-mod="Super" aria-pressed="false">Super</button>
@@ -39,6 +39,11 @@
       </select>
     </label>
     <p id="quick-message" role="status"></p>
+    <div id="quick-conflict" hidden>
+      <p id="quick-conflict-summary"></p>
+      <button id="quick-replace" type="button">Replace shortcut</button>
+      <button id="quick-keep" type="button">Keep existing shortcut</button>
+    </div>
     <div class="quick-actions">
       <button id="quick-open" type="button">Go to Warp</button>
       <span>

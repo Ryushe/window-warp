@@ -86,11 +86,13 @@ function controls() {
     $("#discard").disabled = cannotSave;
     $("#discard-settings").disabled = cannotSave;
     $("#add").disabled = busy || !config;
-    $("#bindings").querySelectorAll("input, select, button").forEach((el) => { el.disabled = busy; });
+    $("#find-apps").disabled = busy || !config;
+    $("#bindings").querySelectorAll("input, textarea, select, button").forEach((el) => { el.disabled = busy; });
     $("#quick-shortcut").disabled = $("#quick-apply").disabled = $("#quick-behavior").disabled = $("#quick-layout").disabled = busy;
     $("#main-monitor").disabled = $("#burner-monitor").disabled = busy || !config;
     $("#hold-mode").disabled = $("#hold-enabled").disabled = $("#hold-delay").disabled = busy || !config;
     $("#enable-on-launch").disabled = busy || !config;
+    $("#quick-modifier").disabled = busy || !config;
     $("#startup").disabled = busy || !startupKnown;
     $("#import-files").disabled = busy || enabled || !config;
     $("#apply-import").disabled = busy || enabled || !config;
@@ -121,6 +123,7 @@ function render() {
     config.bindings.forEach((binding, index) => {
         const card = $("#binding-template").content.cloneNode(true);
         const match = card.querySelector(".match-field");
+        const alternatives = card.querySelector(".alternative-matches");
         const options = card.querySelector(".app-options");
         const windowsFields = card.querySelector(".windows-match-field");
         const windowsDetails = card.querySelector(".windows-match-details");
@@ -150,6 +153,7 @@ function render() {
         const appFields = () => {
             const appAction = ["focus-app", "pull-app"].includes(binding.action);
             match.hidden = !appAction || Boolean(binding.windowsMatch);
+            alternatives.hidden = !appAction;
             windowsFields.hidden = !appAction;
             windowsDetails.hidden = !binding.windowsMatch;
             options.hidden = binding.action !== "pull-app";
@@ -157,11 +161,17 @@ function render() {
             tileOptions.hidden = !String(binding.action).startsWith("tile-");
         };
         appFields();
+        const identifiersInput = card.querySelector(".app-matches");
+        identifiersInput.value = (binding.appMatches || []).join("\n");
+        identifiersInput.addEventListener("input", () => {
+            binding.appMatches = identifiersInput.value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+            changed();
+        });
         windowsToggle.checked = Boolean(binding.windowsMatch);
         windowsDetails.open = Boolean(binding.windowsMatch);
         card.querySelector(".windows-match-hint").textContent = platform === "windows"
             ? "All entered criteria must match. Title text and class names are case-sensitive; executable names, full paths and packaged app IDs are not. Process and window IDs may change when an app restarts."
-            : "Windows-only criteria. To use this shortcut on Linux, turn these off and enter a KDE resource class or desktop ID in App identifier before enabling it.";
+            : "Windows-only criteria are preserved. On KDE, add a resource class or desktop ID under Additional app identifiers before enabling this shortcut.";
         windowsToggle.addEventListener("change", () => {
             if (windowsToggle.checked && !hasCriteria) {
                 Object.assign(criteria, seedIdentity());
@@ -280,6 +290,7 @@ function render() {
     $("#main-monitor").value = config.settings?.mainMonitor ?? 0;
     $("#burner-monitor").value = config.settings?.burnerMonitor ?? 2;
     $("#enable-on-launch").checked = config.settings?.enableOnLaunch ?? true;
+    $("#quick-modifier").value = config.settings?.quickModifier || "Super";
     $("#hold-enabled").checked = config.settings?.holdTileEnabled ?? true;
     $("#hold-delay").value = config.settings?.holdDelayMs ?? 400;
     $("#hold-mode").value = config.settings?.holdMode ?? "tile";
@@ -315,7 +326,8 @@ function appBindingIndex(app) {
     return config.bindings.findIndex(b => {
         if (!["pull-app", "focus-app"].includes(b.action)) return false;
         const selector = b.windowsMatch;
-        if (!selector) return b.appMatch.toLowerCase() === app.toLowerCase();
+        if (!selector) return [b.appMatch, ...(b.appMatches || [])].some(id => id?.toLowerCase() === app.toLowerCase());
+        if (platform !== "windows") return (b.appMatches || []).some(id => id.toLowerCase() === app.toLowerCase());
         return platform === "windows" && !selector.titleContains && !selector.className && !selector.packagedAppId
             && selector.processId == null && selector.windowId == null && !selector.activeOnly
             && Boolean(selector.executable) && !/[\\/]/.test(selector.executable)
@@ -366,11 +378,44 @@ $("#add").addEventListener("click", () => {
     changed(); render();
     $("#bindings").lastElementChild.querySelector("input").focus();
 });
+function appNameKey(value) {
+    const base = String(value || "").split(/[\\/]/).pop().replace(/\.exe$/i, "").split(".").pop();
+    return base.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+$("#find-apps").addEventListener("click", () => perform(async () => {
+    const result = $("#find-apps-result");
+    result.textContent = "Finding open apps…";
+    try {
+        const windows = await native.core.invoke("get_windows");
+        const missing = [], ambiguous = [], found = [];
+        for (const binding of config.bindings.filter(b => ["pull-app", "focus-app"].includes(b.action))) {
+            const keys = [binding.label, binding.appMatch, binding.windowsMatch?.executable, ...(binding.appMatches || [])].map(appNameKey).filter(Boolean);
+            const groups = new Map();
+            for (const window of windows) {
+                const ids = [window.appId, window.desktopId].filter(Boolean);
+                if (!ids.some(id => keys.includes(appNameKey(id)))) continue;
+                const group = String(window.appId || window.desktopId).toLowerCase();
+                if (!groups.has(group)) groups.set(group, new Set());
+                ids.forEach(id => groups.get(group).add(id));
+            }
+            if (groups.size === 0) { missing.push(binding.label); continue; }
+            if (groups.size > 1) { ambiguous.push(binding.label); continue; }
+            const ids = [...groups.values()][0];
+            const known = new Set([binding.appMatch, ...(binding.appMatches || [])].filter(Boolean).map(id => id.toLowerCase()));
+            const additions = [...ids].filter(id => !known.has(id.toLowerCase()));
+            if (additions.length) { binding.appMatches = [...(binding.appMatches || []), ...additions]; found.push(binding.label); }
+        }
+        if (found.length) { changed(); render(); }
+        result.textContent = [found.length ? `Added names for: ${found.join(", ")}. Review and save changes.` : "No new names added.", missing.length ? `Not found: ${missing.join(", ")}. Open those apps and try again.` : "", ambiguous.length ? `Multiple matches; review manually: ${ambiguous.join(", ")}.` : ""].filter(Boolean).join(" ");
+    } catch (error) {
+        result.textContent = `Could not find open apps: ${error}`;
+    }
+}));
 function filterBindings() {
     const query = $("#search").value.trim().toLowerCase();
     $("#bindings").querySelectorAll(".binding").forEach((card, index) => {
         const b = config.bindings[index];
-        card.hidden = ![b.label, b.shortcut, b.action, b.appMatch, ...Object.values(b.windowsMatch || {}), b.windowsMatch?.activeOnly ? "active window" : ""].join(" ").toLowerCase().includes(query);
+        card.hidden = ![b.label, b.shortcut, b.action, b.appMatch, ...(b.appMatches || []), ...Object.values(b.windowsMatch || {}), b.windowsMatch?.activeOnly ? "active window" : ""].join(" ").toLowerCase().includes(query);
     });
 }
 $("#search").addEventListener("input", () => { if (config) filterBindings(); });
@@ -389,6 +434,7 @@ for (const [id, field] of [["main-monitor", "mainMonitor"], ["burner-monitor", "
     });
 }
 $("#hold-mode").addEventListener("change", () => { config.settings ??= {}; config.settings.holdMode = $("#hold-mode").value; changed(); });
+$("#quick-modifier").addEventListener("change", () => { config.settings ??= {}; config.settings.quickModifier = $("#quick-modifier").value; changed(); });
 $("#hold-enabled").addEventListener("change", () => {
     config.settings ??= {};
     config.settings.holdTileEnabled = $("#hold-enabled").checked;

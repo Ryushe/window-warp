@@ -8,7 +8,7 @@ const html = fs.readFileSync(new URL("../ui/quick.html", import.meta.url), "utf8
 const source = fs.readFileSync(new URL("../ui/shortcut-picker.js", import.meta.url), "utf8") + "\n" + fs.readFileSync(new URL("../ui/quick.js", import.meta.url), "utf8");
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-async function popup(bindings) {
+async function popup(bindings, settings = {}) {
     const { window, document } = parseHTML(html);
     Object.defineProperty(window.HTMLSelectElement.prototype, "value", {
         configurable: true,
@@ -19,7 +19,7 @@ async function popup(bindings) {
             if (selected) selected.setAttribute("selected", "");
         }
     });
-    const config = { version: 1, bindings, settings: { holdMode: "radial" } };
+    const config = { version: 1, bindings, settings: { holdMode: "radial", ...settings } };
     const calls = [];
     const listeners = new Map();
     window.__TAURI__ = {
@@ -30,6 +30,18 @@ async function popup(bindings) {
             if (command === "quick_edit") return null;
             if (command === "start_shortcut_recording" || command === "stop_shortcut_recording" || command === "hide_quick") return null;
             if (command === "save_config") return structuredClone(args.config);
+            if (command === "preview_shortcut_reassignment") {
+                const proposal = structuredClone(args.config);
+                const selected = proposal.bindings[args.index];
+                const disabledIndices = [];
+                proposal.bindings.forEach((binding, index) => {
+                    if (index !== args.index && binding.enabled !== false && binding.shortcut === selected.shortcut) {
+                        disabledIndices.push(index);
+                        binding.enabled = false;
+                    }
+                });
+                return {config:proposal, disabledIndices};
+            }
             throw new Error(command);
         } }
     };
@@ -73,6 +85,43 @@ test("popup prefills the Discord shortcut from the same binding the list shows",
     assert.equal(page.document.querySelector("#quick-entry").value, "Super+C");
     page.document.querySelector('[data-mod="Alt"]').click();
     assert.equal(page.document.querySelector("#quick-entry").value, "Alt+Super+C");
+});
+
+test("a new popup shortcut uses the configured modifier and saves on Enter", async () => {
+    const page = await popup([], {quickModifier:"Alt"});
+    await page.listeners.get("quick-edit")({payload:{window:{appId:"editor.exe"}, label:"Editor"}});
+    await tick();
+    assert.equal(page.document.querySelector('[data-mod="Alt"]').getAttribute("aria-pressed"), "true");
+    const key = new page.window.Event("keydown", {bubbles:true, cancelable:true});
+    Object.assign(key, {key:"c", code:"KeyC"});
+    page.document.querySelector("#quick-entry").dispatchEvent(key);
+    assert.equal(page.document.querySelector("#quick-entry").value, "Alt+C");
+    const enter = new page.window.Event("keydown", {bubbles:true, cancelable:true});
+    Object.assign(enter, {key:"Enter", code:"Enter"});
+    page.document.querySelector("#quick-entry").dispatchEvent(enter);
+    await tick();
+    assert.equal(page.calls.find(c => c.command === "save_config").args.config.bindings[0].shortcut, "Alt+C");
+    assert.equal(page.calls.some(c => c.command === "start_shortcut_recording"), false);
+});
+
+test("a conflicting shortcut requires explicit replacement and preserves the displaced binding", async () => {
+    const page = await popup([{label:"Push right",shortcut:"Super+C",action:"push-right",appMatch:"",enabled:true}]);
+    await page.listeners.get("quick-edit")({payload:{window:{appId:"editor.exe"}, label:"Editor"}});
+    await tick();
+    const key = new page.window.Event("keydown", {bubbles:true, cancelable:true});
+    Object.assign(key, {key:"c", code:"KeyC"});
+    page.document.querySelector("#quick-entry").dispatchEvent(key);
+    page.document.querySelector("#quick-apply").click();
+    await tick();
+    assert.equal(page.document.querySelector("#quick-conflict").hidden, false);
+    assert.match(page.document.querySelector("#quick-conflict-summary").textContent, /Push right/);
+    assert.equal(page.calls.some(c => c.command === "save_config"), false);
+    page.document.querySelector("#quick-replace").click();
+    await tick();
+    const saved = page.calls.find(c => c.command === "save_config").args.config;
+    assert.equal(saved.bindings[0].enabled, false);
+    assert.equal(saved.bindings[0].shortcut, "Super+C");
+    assert.equal(saved.bindings[1].shortcut, "Super+C");
 });
 
 test("a title that merely mentions Discord does not replace the focused app shortcut", async () => {
