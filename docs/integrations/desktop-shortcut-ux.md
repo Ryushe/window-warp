@@ -7,8 +7,8 @@
 - **Intended integration target:** `main` (remote tip and integration direction still need reconciliation)
 - **Last updated:** 2026-10-28
 - **Owning feature branch/ref:** `codex/desktop-shortcut-ux`
-- **Latest immutable recovery checkpoint:** `9b10b1d`
-- **Feature implementation commit(s):** `10f5479`
+- **Latest immutable recovery checkpoint:** `dd8f56c`
+- **Feature implementation commit(s):** `10f5479`; unverified hook investigation `dd8f56c`
 - **Inspiration / canonical references:** user-requested keyboard-first popup and cross-platform window-name discovery; `desktop/HOOK-HANDOFF.md`
 
 ## Intent and implemented contract
@@ -100,8 +100,8 @@ Do not integrate or activate the candidate until these checks pass.
 ## Interruption / resume handoff
 
 - **Owning feature branch/ref:** `codex/desktop-shortcut-ux`
-- **Latest immutable recovery checkpoint:** `9b10b1d`
-- **Feature implementation commit(s):** `10f5479`
+- **Latest immutable recovery checkpoint:** `dd8f56c`
+- **Feature implementation commit(s):** `10f5479`; unverified hook investigation `dd8f56c`
 - **Exact resume point:** investigate the failing native `--hook-only` popup test and unowned
   shortcut coexistence as described above, then perform physical Windows and
   live KDE checks and review before integration or activation.
