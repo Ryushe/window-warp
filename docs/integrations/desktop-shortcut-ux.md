@@ -7,8 +7,8 @@
 - **Intended integration target:** `main` (remote tip and integration direction still need reconciliation)
 - **Last updated:** 2026-10-28
 - **Owning feature branch/ref:** `codex/desktop-shortcut-ux`
-- **Latest immutable recovery checkpoint:** `dd8f56c`
-- **Feature implementation commit(s):** `10f5479`; unverified hook investigation `dd8f56c`
+- **Latest immutable recovery checkpoint:** `298fd63`
+- **Feature implementation commit(s):** `10f5479`; unverified hook investigations `dd8f56c` and `298fd63`
 - **Inspiration / canonical references:** user-requested keyboard-first popup and cross-platform window-name discovery; `desktop/HOOK-HANDOFF.md`
 
 ## Intent and implemented contract
@@ -150,13 +150,13 @@ Do not integrate or activate the candidate until these checks pass.
 ## Interruption / resume handoff
 
 - **Owning feature branch/ref:** `codex/desktop-shortcut-ux`
-- **Latest immutable recovery checkpoint:** `dd8f56c` (a new checkpoint must be
-  recorded after the follow-up work is committed)
-- **Feature implementation commit(s):** `10f5479`; unverified hook investigation `dd8f56c`
+- **Latest immutable recovery checkpoint:** `298fd63`
+- **Feature implementation commit(s):** `10f5479`; unverified hook investigations `dd8f56c` and `298fd63`
 - **Exact resume point:** investigate the failing cross-process focus and
   `--hook-only` coexistence fixtures, then run the remaining physical and native
   acceptance checks above before integration or activation.
-- **Working-tree state at handoff:** follow-up changes awaiting checkpoint
+- **Working-tree state at handoff:** implementation and test checkpoint committed;
+  the subsequent dossier-only commit records its immutable SHA
 
 ## Decision gates
 
