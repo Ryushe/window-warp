@@ -7,7 +7,7 @@
 - **Intended integration target:** `main` (remote tip and integration direction still need reconciliation)
 - **Last updated:** 2026-10-28
 - **Owning feature branch/ref:** `codex/desktop-shortcut-ux`
-- **Latest immutable recovery checkpoint:** `10f5479`
+- **Latest immutable recovery checkpoint:** `9b10b1d`
 - **Feature implementation commit(s):** `10f5479`
 - **Inspiration / canonical references:** user-requested keyboard-first popup and cross-platform window-name discovery; `desktop/HOOK-HANDOFF.md`
 
@@ -71,7 +71,7 @@ windows and matches names conservatively; it is not a full app inventory.
 ## Interruption / resume handoff
 
 - **Owning feature branch/ref:** `codex/desktop-shortcut-ux`
-- **Latest immutable recovery checkpoint:** `10f5479`
+- **Latest immutable recovery checkpoint:** `9b10b1d`
 - **Feature implementation commit(s):** `10f5479`
 - **Exact resume point:** run the physical Windows and live KDE checks above,
   diagnose full-suite failures, and review before integration or activation.
