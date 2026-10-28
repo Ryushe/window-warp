@@ -856,8 +856,10 @@ try:
                     if any(user.GetAsyncKeyState(key) & 0x8000 for key in (0x10, 0x11, 0x12, 0x5B, 0x5C)):
                         raise RuntimeError("A modifier is already held; no keys sent")
                     if command == "plain_press":
-                        if request["key"] not in (88,67):
-                            raise RuntimeError("Only X/C are supported by the retile fixture")
+                        if request["key"] not in (88,67,13):
+                            raise RuntimeError("Only X/C and Enter are supported by the fixture")
+                        if request["key"] == 13:
+                            checked_app_window(hwnd)
                         keys = ([0x5B] if request.get("meta",False) else []) + [request["key"]]
                     else:
                         keys = [0x11, 0x12, 0x10, request["key"]]

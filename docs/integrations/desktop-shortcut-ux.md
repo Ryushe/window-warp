@@ -39,7 +39,18 @@ windows and matches names conservatively; it is not a full app inventory.
 - Portafort reachable through Hoster's Tailscale address. Installed
   `/usr/bin/window-warp` is running; KWin reports `window-warp-session` loaded.
   The journal does not establish the cause of launch-time status flicker.
-- No independent review or physical keyboard acceptance yet.
+- Windows `node desktop/tests/windows/native.mjs --quick-only` passed using
+  isolated settings, owned windows and injected OS keys with AutoHotkey running.
+  It verified an immediate key-and-Enter save, conflict replacement, discovery
+  persistence and release on exit. Receipt:
+  `src-tauri/target/windows-validation/WARP-NATIVE-bd449b09-fe9a-4533-9350-ea78e132c46c/result.json`.
+  An intermediate run failed when its test attempted to reopen before the
+  first popup closed; the passing run waits for the popup to close first.
+- The private KDE compositor `--quick-gui` fixture passed the real popup's
+  plain-key/Enter conflict replacement and discovery persistence. Receipt:
+  `src-tauri/target/kde-validation/quick-e2e-20261028/quick-result.json`.
+- No independent review or physical keyboard acceptance yet. The focused native
+  tests inject input and do not replace physical keyboard or broad-suite checks.
 
 ## Blockers and deferred work
 

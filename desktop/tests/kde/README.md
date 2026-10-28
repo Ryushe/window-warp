@@ -33,6 +33,14 @@ python3 tests/kde/gui.py /absolute/path/to/window-warp \
 
 Run in a KDE Wayland session with `XDG_CURRENT_DESKTOP=KDE` and `QT_QPA_PLATFORM=wayland`. The runner uses the native WebKitGTK automation protocol and real Tauri commands. It checks rendering, settings persistence, enabling, pausing, startup registration, workspace capture/save, two-window reuse, forced new-window launch, per-axis maximization, fullscreen, and the workspace browser. Configuration, data, and cache directories are isolated. It refuses to start if Window Warp or either integration script is already running. It closes its process group, owned Qt fixtures, and both scripts afterward. Launched fixtures also have a 60-second exit timer. It produces screenshots, JSON results, and a log. Only owned fixture metadata is saved, and only owned fixture windows are restored.
 
+For the focused popup and app-discovery end-to-end test, use the private
+compositor (the fixture sends test keys only to its own `warp-test` display):
+
+```sh
+dbus-run-session -- bash tests/kde/nested.sh "$PWD" --quick-gui \
+  /absolute/path/to/window-warp /absolute/path/to/WebKitWebDriver ./quick-results
+```
+
 The native driver capabilities and automation environment variables match Tauri's [WebDriver implementation](https://github.com/tauri-apps/tauri/tree/dev/crates/tauri-driver/src).
 
 ### Firefox profiles and tabs

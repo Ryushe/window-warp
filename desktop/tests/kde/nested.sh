@@ -90,6 +90,9 @@ if [[ "${2:-}" == "--input-probe" ]]; then
 elif [[ "${2:-}" == "--gui" ]]; then
     shift 2
     "$fixture_python" "$root/tests/kde/gui.py" "$@"
+elif [[ "${2:-}" == "--quick-gui" ]]; then
+    shift 2
+    "$fixture_python" "$root/tests/kde/quick_e2e.py" "$@"
 else
     "$fixture_python" "$root/tests/kde/live.py" "$root/src-tauri/kwin/warp.js"
 fi

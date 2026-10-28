@@ -11,6 +11,7 @@ import {testFirefox} from "./firefox.mjs";
 
 if (process.platform !== "win32") throw new Error("This fixture requires Windows");
 const firefoxProfileLock = process.argv.includes("--firefox-profile-lock");
+const quickOnly = process.argv.includes("--quick-only");
 const firefoxOnly = process.argv.includes("--firefox-only") || firefoxProfileLock;
 const runFirefox = firefoxOnly || process.argv.includes("--firefox");
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -45,13 +46,14 @@ const override = {
     app:{appDirectoriesOverride:state, windows:[{
         label:"main", title:marker, width:1050, height:760, minWidth:760, minHeight:560,
         additionalBrowserArgs:`--remote-debugging-address=127.0.0.1 --remote-debugging-port=${port}`
-    }, {...JSON.parse(fs.readFileSync(path.join(desktop,"src-tauri/tauri.conf.json"),"utf8")).app.windows.find(w=>w.label === "radial"),additionalBrowserArgs:`--remote-debugging-address=127.0.0.1 --remote-debugging-port=${port}`}]}
+    }, ...JSON.parse(fs.readFileSync(path.join(desktop,"src-tauri/tauri.conf.json"),"utf8")).app.windows.filter(w=>["radial","quick"].includes(w.label)).map(w=>({...w,additionalBrowserArgs:`--remote-debugging-address=127.0.0.1 --remote-debugging-port=${port}`}))]}
 };
 fs.writeFileSync(path.join(output, "build-config.json"), JSON.stringify(override, null, 2));
 const actions = ["push-left", "push-right", "pull", "tile-left", "tile-right", "toggle-pause", "open-editor", "open-workspaces", "update-workspace"];
-const config = {version:1, settings:{mainMonitor:0,burnerMonitor:2}, bindings:actions.map((action,index) => ({
+const config = {version:1, settings:{mainMonitor:0,burnerMonitor:2,enableOnLaunch:false,quickModifier:"Alt"}, bindings:actions.map((action,index) => ({
     label:action, shortcut:`Ctrl+Alt+Shift+F${13+index}`, action, enabled:true, appMatch:"", mainMonitorAction:"burner", burnerLayout:"float"
 }))};
+if (quickOnly) config.bindings[0].shortcut = "Alt+C";
 fs.writeFileSync(path.join(state, "settings.json"), JSON.stringify(config, null, 2));
 const buildLog = fs.openSync(path.join(output, "build.log"), "w");
 const cargo = path.join(process.env.USERPROFILE, ".cargo/bin/cargo.exe");
@@ -137,7 +139,61 @@ try {
     });
     const press = f => native("press",{key:0x70 + f - 1});
     const paused = wanted => until(() => invoke("get_status"), s => s.enabled !== wanted, wanted ? "paused" : "active");
-    if (!firefoxOnly) {
+    if (quickOnly) {
+        await invoke("set_enabled",{enabled:true});
+        const mainWindow = await native("app_window");
+        await native("app_close",{window:mainWindow});
+        await until(()=>native("app_state",{window:mainWindow}),s=>!s.visible,"hide fixture editor");
+        await press(19);
+        const quickTarget = await until(async()=>{
+            try {return (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.type === "page" && /\/quick\.html$/.test(t.url));}
+            catch {return null;}
+        }, Boolean, "quick popup WebView", 30000);
+        const quickSocket = new WebSocket(quickTarget.webSocketDebuggerUrl);
+        await new Promise((resolve,reject)=>{quickSocket.addEventListener("open",resolve,{once:true});quickSocket.addEventListener("error",reject,{once:true});});
+        let quickId=0;
+        const quickPending=new Map();
+        quickSocket.addEventListener("message",event=>{const response=JSON.parse(event.data);const pending=quickPending.get(response.id);if(!pending)return;quickPending.delete(response.id);response.error?pending.reject(new Error(JSON.stringify(response.error))):pending.resolve(response.result);});
+        const quickEval = expression => new Promise((resolve,reject)=>{const id=++quickId;quickPending.set(id,{resolve:result=>result.exceptionDetails?reject(new Error(result.exceptionDetails.text)):resolve(result.result?.value),reject});quickSocket.send(JSON.stringify({id,method:"Runtime.evaluate",params:{expression,awaitPromise:true,returnByValue:true}}));});
+        try {
+            await until(()=>quickEval("document.querySelector('#quick-app').textContent"),v=>Boolean(v),"popup identifies focused fixture");
+            const quickWindow=await native("app_window");
+            await native("plain_press",{key:67,window:quickWindow});
+            await until(()=>quickEval("document.querySelector('#quick-entry').value"),v=>v==="Alt+C","plain key uses default Alt");
+            await native("plain_press",{key:13,window:quickWindow});
+            await until(()=>quickEval("!document.querySelector('#quick-conflict').hidden"),Boolean,"conflict review");
+            assert.match(await quickEval("document.querySelector('#quick-conflict-summary').textContent"),/push-left/);
+            assert.equal((await invoke("get_config")).bindings.length,9,"conflict preview must not save");
+            await quickEval("document.querySelector('#quick-replace').click()");
+            const saved=await until(()=>invoke("get_config"),c=>c.bindings.length===10,"popup saves binding");
+            assert.equal(saved.bindings[0].enabled,false);
+            assert.equal(saved.bindings[9].shortcut,"Alt+C");
+            checks.push("real popup accepts a plain C using default Alt, reviews conflict, and persists replacement");
+            await until(()=>native("app_window").then(()=>false,()=>true),Boolean,"first popup closes");
+            await press(19);
+            await until(()=>quickEval("document.querySelector('#quick-entry').value"),v=>v==="Alt+C","existing popup binding");
+            const reopened=await until(()=>native("app_window").catch(()=>null),Boolean,"reopened popup");
+            await native("plain_press",{key:88,window:reopened});
+            await until(()=>quickEval("document.querySelector('#quick-entry').value"),v=>v==="Alt+X","unconflicted key");
+            await native("plain_press",{key:13,window:reopened});
+            await until(()=>invoke("get_config"),c=>c.bindings[9].shortcut==="Alt+X","unconflicted shortcut saved");
+            checks.push("plain X then Enter immediately saves an unconflicted shortcut");
+        } finally {quickSocket.close();}
+        const discovery=await invoke("get_config");
+        discovery.bindings.push({label:path.basename(fixture.executable,".exe"),shortcut:"Ctrl+Alt+Shift+F24",action:"focus-app",appMatch:"not-this-app.exe",enabled:false});
+        await invoke("save_config",{config:discovery});
+        await evaluate("location.reload()");
+        await wait("document.querySelectorAll('.binding').length === 11", "discovery draft reload");
+        await click("#find-apps");
+        await wait("document.querySelector('#find-apps-result').textContent.includes('Review and save')", "open app discovery");
+        assert.match(await evaluate("document.querySelector('.binding:last-child .app-matches').value"),/python/i);
+        await click("#save");
+        await wait("document.querySelector('#message').textContent.startsWith('Saved.')", "discovered names saved");
+        const found=await invoke("get_config");
+        assert.ok(found.bindings[10].appMatches.some(name=>name.toLowerCase().includes("python")));
+        checks.push("real editor discovers the owned app identifier and persists it only after Save");
+    }
+    if (!firefoxOnly && !quickOnly) {
     await press(18); await paused(false);
     await press(18); await paused(true);
     checks.push("Win32 keyboard input resumes and pauses while retaining the pause registration");
@@ -891,13 +947,14 @@ try {
     }
     await invoke("save_workspaces",{store:previousStore});
     } else {
-        skipped.push("General native checks omitted by --firefox-only");
+        skipped.push(quickOnly ? "General native checks omitted by --quick-only" : "General native checks omitted by --firefox-only");
     }
     if (runFirefox) {
         await testFirefox({output,marker,native,invoke,evaluate,wait,click,screenshot,until,checks,report,profileLock:firefoxProfileLock});
     }
     // Exercise the real native tray callback/menu route before failure-only
     // process cleanup below. This does not click Explorer's notification area.
+    if (!quickOnly) {
     const lifecycleWindow = await native("app_window");
     const lifecycleConfig = await invoke("get_config"), lifecycleStore = await invoke("get_workspaces");
     await invoke("set_enabled",{enabled:true});
@@ -926,6 +983,7 @@ try {
     for (const key of [0x7c,0x81]) {await native("reserve",{key});await native("release",{key});}
     for (const {file,bytes} of persisted) assert.deepEqual(fs.existsSync(file)?fs.readFileSync(file):null,bytes);
     checks.push("native tray Quit exits gracefully, releases action and pause keys, and preserves saved files before fallback cleanup");
+    }
     report.passed = true;
 } catch (error) {
     report.error = String(error.stack || error);

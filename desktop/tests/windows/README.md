@@ -29,6 +29,8 @@ Node 22 or newer, Python 3, Rust, the project's dependencies and WebView2 instal
 
 ```powershell
 node desktop/tests/windows/native.mjs
+# Focus on the separate quick popup and app identifier discovery:
+node desktop/tests/windows/native.mjs --quick-only
 # Include real Firefox capture and restore with two temporary profiles:
 node desktop/tests/windows/native.mjs --firefox
 # Run only the browser acceptance checks while iterating:
