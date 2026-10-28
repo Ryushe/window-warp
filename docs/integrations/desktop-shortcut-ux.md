@@ -1,6 +1,6 @@
 # Desktop shortcut UX integration dossier
 
-- **Status:** feature and Windows hook experiment, verification incomplete; do not activate the experiment
+- **Status:** feature and Windows hook experiment, verification incomplete; user requested the current build for local use
 - **Owner:** Codex
 - **Branch:** `codex/desktop-shortcut-ux`
 - **Base commit:** `d9f24c8`
@@ -133,12 +133,15 @@ cannot silently become a tap while it waits for an earlier action.
   noted short mutex acquisitions on the hook thread and the late-dispatch hold
   edge; neither should be described as resolved.
 
-Do not activate or integrate the candidate until the focus-denied and
-coexistence failures are understood, the owned-modal and repeat paths are
-verified, and physical Wispr testing covers the opposite launch order. Run
-the existing failing native fixtures against isolated settings, then repeat the
-physical test without a competing Warp instance. Do not replace the user's
-restored AutoHotkey process while preparing the tests.
+On 2026-10-28 the user explicitly requested running this candidate in place of
+AutoHotkey. Built `298fd63` (source branch tip `c2b36bf`) as the normal debug
+app, stopped the verified AutoHotkey Warp script, and launched
+`desktop/src-tauri/target/debug/window-warp.exe` with the regular settings.
+The UI showed shortcuts active; one native Warp process and no AutoHotkey Warp
+process were observed. This local activation does not resolve the test failures
+or authorize integration. Investigate the focus-denied and coexistence failures,
+verify owned-modal and repeat paths, and test Wispr in the opposite launch order.
+Use isolated settings for further tests and coordinate around the active app.
 
 Resume by reproducing the red `--hook-only` test with the live app's shortcuts
 paused, using an isolated Cargo target. Investigate missing hook callbacks and
