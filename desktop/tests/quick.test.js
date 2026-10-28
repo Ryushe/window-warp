@@ -8,7 +8,7 @@ const html = fs.readFileSync(new URL("../ui/quick.html", import.meta.url), "utf8
 const source = fs.readFileSync(new URL("../ui/shortcut-picker.js", import.meta.url), "utf8") + "\n" + fs.readFileSync(new URL("../ui/quick.js", import.meta.url), "utf8");
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-async function popup(bindings, settings = {}) {
+async function popup(bindings, settings = {}, options = {}) {
     const { window, document } = parseHTML(html);
     Object.defineProperty(window.HTMLSelectElement.prototype, "value", {
         configurable: true,
@@ -26,7 +26,10 @@ async function popup(bindings, settings = {}) {
         event: { listen: async (name, callback) => { listeners.set(name, callback); return () => {}; } },
         core: { invoke: async (command, args) => {
             calls.push({ command, args });
-            if (command === "get_config") return structuredClone(config);
+            if (command === "get_config") {
+                if (options.waitForConfig) await options.waitForConfig;
+                return structuredClone(config);
+            }
             if (command === "show_editor") return null;
             if (command === "quick_edit") return null;
             if (command === "start_shortcut_recording" || command === "stop_shortcut_recording" || command === "hide_quick") return null;
@@ -142,6 +145,97 @@ test("only the configured editor chord opens the main window from the popup", as
     await tick();
     assert.equal(page.calls.filter(c => c.command === "show_editor").length, 1);
     assert.equal(page.calls.some(c => c.command === "hide_quick"), true);
+});
+
+test("the configured editor chord works when the current window has no app name", async () => {
+    const page = await popup([{label:"Open editor",shortcut:"Super+B",action:"open-editor",enabled:true}]);
+    await page.listeners.get("quick-edit")({payload:{}});
+    const editor = new page.window.Event("keydown", {bubbles:true, cancelable:true});
+    Object.assign(editor, {key:"b",code:"KeyB",metaKey:true});
+    page.document.dispatchEvent(editor);
+    await tick();
+    assert.equal(page.calls.filter(c => c.command === "show_editor").length, 1);
+    assert.equal(page.document.querySelector("#quick-apply").disabled, true);
+    assert.equal(page.document.querySelector("#quick-entry").value, "");
+});
+
+test("a configured editor chord waits for delayed config instead of changing the shortcut", async () => {
+    let releaseConfig;
+    const waitForConfig = new Promise(resolve => { releaseConfig = resolve; });
+    const page = await popup([
+        {label:"Open editor",shortcut:"Ctrl+Alt+K",action:"open-editor",enabled:true},
+        discord
+    ], {}, {waitForConfig});
+    const opening = page.listeners.get("quick-edit")({payload:{window:{appId:"discord.exe"},label:"Discord",shortcut:"Super+D",bindingIndex:1}});
+    const editor = new page.window.Event("keydown", {bubbles:true, cancelable:true});
+    Object.assign(editor, {key:"k",code:"KeyK",ctrlKey:true,altKey:true});
+    page.document.dispatchEvent(editor);
+    assert.equal(page.calls.some(c => c.command === "show_editor"), false);
+    releaseConfig();
+    await opening;
+    await tick();
+    assert.equal(page.calls.filter(c => c.command === "show_editor").length, 1);
+    assert.equal(page.document.querySelector("#quick-entry").value, "Super+D");
+});
+
+test("ordinary key and Enter remain ordered while config is loading", async () => {
+    let releaseConfig;
+    const waitForConfig = new Promise(resolve => { releaseConfig = resolve; });
+    const page = await popup([], {quickModifier:"Alt"}, {waitForConfig});
+    const opening = page.listeners.get("quick-edit")({payload:{window:{appId:"editor.exe"},label:"Editor"}});
+    const key = new page.window.Event("keydown", {bubbles:true, cancelable:true});
+    Object.assign(key, {key:"c",code:"KeyC"});
+    page.document.querySelector("#quick-entry").dispatchEvent(key);
+    const enter = new page.window.Event("keydown", {bubbles:true, cancelable:true});
+    Object.assign(enter, {key:"Enter",code:"Enter"});
+    page.document.querySelector("#quick-entry").dispatchEvent(enter);
+    releaseConfig();
+    await opening;
+    await tick();
+    await tick();
+    assert.equal(page.calls.find(c => c.command === "save_config").args.config.bindings[0].shortcut, "Alt+C");
+});
+
+test("an unnamed popup refreshes the editor chord instead of using a previous one", async () => {
+    const bindings = [{label:"Open editor",shortcut:"Ctrl+Alt+K",action:"open-editor",enabled:true}, discord];
+    const page = await popup(bindings);
+    await page.listeners.get("quick-edit")({payload:{window:{appId:"discord.exe"},label:"Discord"}});
+    bindings[0].shortcut = "Super+B";
+    await page.listeners.get("quick-edit")({payload:{}});
+    const editor = new page.window.Event("keydown", {bubbles:true, cancelable:true});
+    Object.assign(editor, {key:"b",code:"KeyB",metaKey:true});
+    page.document.dispatchEvent(editor);
+    await tick();
+    assert.equal(page.calls.filter(c => c.command === "show_editor").length, 1);
+});
+
+test("a queued editor chord is discarded if the popup is cancelled while config loads", async () => {
+    let releaseConfig;
+    const waitForConfig = new Promise(resolve => { releaseConfig = resolve; });
+    const page = await popup([{label:"Open editor",shortcut:"Super+B",action:"open-editor",enabled:true}], {}, {waitForConfig});
+    const opening = page.listeners.get("quick-edit")({payload:{window:{appId:"editor.exe"},label:"Editor"}});
+    const editor = new page.window.Event("keydown", {bubbles:true, cancelable:true});
+    Object.assign(editor, {key:"b",code:"KeyB",metaKey:true});
+    page.document.dispatchEvent(editor);
+    const escape = new page.window.Event("keydown", {bubbles:true, cancelable:true});
+    Object.assign(escape, {key:"Escape",code:"Escape"});
+    page.document.dispatchEvent(escape);
+    releaseConfig();
+    await opening;
+    await tick();
+    assert.equal(page.calls.some(c => c.command === "show_editor"), false);
+    assert.equal(page.calls.some(c => c.command === "hide_quick"), true);
+});
+
+test("a held editor chord cannot be recorded as the new shortcut", async () => {
+    const page = await popup([{label:"Open editor",shortcut:"Super+B",action:"open-editor",enabled:true},discord]);
+    await page.listeners.get("quick-edit")({payload:{window:{appId:"discord.exe"},label:"Discord",shortcut:"Super+D",bindingIndex:1}});
+    const repeat = new page.window.Event("keydown", {bubbles:true, cancelable:true});
+    Object.assign(repeat, {key:"b",code:"KeyB",metaKey:true,repeat:true});
+    page.document.dispatchEvent(repeat);
+    await tick();
+    assert.equal(page.calls.some(c => c.command === "show_editor"), false);
+    assert.equal(page.document.querySelector("#quick-entry").value, "Super+D");
 });
 
 test("a title that merely mentions Discord does not replace the focused app shortcut", async () => {

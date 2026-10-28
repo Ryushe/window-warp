@@ -90,6 +90,56 @@ only works when the WebView actually receives that chord.
 - The running user's original app was not replaced; shortcuts were restored to
   active after testing. Wispr coexistence and physical input remain unverified.
 
+### Follow-up: rapid switching and physical acceptance, 2026-10-28
+
+The experimental hook tracks independent app-gesture presses, commits actions
+in release/hold order, forwards unowned Win chords without replaying them,
+and keeps a single production `SetWindowsHookExW` in `windows_reserved.rs`.
+Popup work queues overlapping editor requests and loads the configured editor
+chord even for unnamed windows or delayed config responses. A committed hold
+cannot silently become a tap while it waits for an earlier action.
+
+- The user tested the isolated candidate with a copy of their settings, while
+  their AutoHotkey Warp was stopped and Wispr was already running. They reported
+  that repeated Wispr use, rapid switching between their normal shortcuts, and
+  Win+B twice all worked. This is one physical session, not proof of all launch
+  orders or indefinite reliability. The candidate was shut down, its settings
+  copy deleted, and the original AutoHotkey Warp script was restored.
+- `npm run check` and `npm test`: 149 JavaScript tests passed. The normal-access
+  Rust suite passed 106 tests with six ignored after the owned-modal adjustment.
+- `node desktop/tests/windows/ahk-focus.mjs` passed eight alternating
+  `WinActivate` / `WinWaitActive` calls in both default and no-delay modes,
+  targeting only owned windows. It installs no hook or hotkey and sends no
+  keys; it does not compare hotkey responsiveness or Wispr compatibility.
+- The native fixture at `desktop/tests/windows/native.mjs --fast-only` now
+  alternates two distinct app shortcuts between windows in separate fixture
+  processes, at 80 ms and zero spacing, with Win held and released. The last
+  run (`WARP-NATIVE-6410cdc9-41f6-4a01-b7b6-e8a15a4ad775`) failed: all
+  fixture-tagged chords reached the hook in the preceding trace run, but the
+  monitored sequence emitted 16 Windows focus-denied errors. A retry using
+  `AttachThreadInput` failed the same tests and was removed. Independent
+  `WM_ACTIVATE` callbacks can arrive out of order, so the fixture's exact
+  cross-process order and latency measurements need a better observer; the
+  focus errors remain separate evidence. Physical and injected input may have
+  different foreground-permission contexts; the cause has not been established.
+- `--hook-only` remains red: the earlier listener misses the fixture's injected
+  Win+F23 events with Warp's editor focused and its hook enabled. A temporary
+  tagged-event bypass showed the affected input did not reach Warp's callback;
+  the diagnostic and bypass were removed. This is not a physical Wispr test.
+- Owned-modal foreground acceptance has a focused unit test, but no native
+  modal acceptance yet. The strict repeat guard can miss the next press after
+  a swallowed key-up is lost; investigate recovery without mistaking hardware
+  repeats or violating the hook-maintained modifier-state rule. Review also
+  noted short mutex acquisitions on the hook thread and the late-dispatch hold
+  edge; neither should be described as resolved.
+
+Do not activate or integrate the candidate until the focus-denied and
+coexistence failures are understood, the owned-modal and repeat paths are
+verified, and physical Wispr testing covers the opposite launch order. Run
+the existing failing native fixtures against isolated settings, then repeat the
+physical test without a competing Warp instance. Do not replace the user's
+restored AutoHotkey process while preparing the tests.
+
 Resume by reproducing the red `--hook-only` test with the live app's shortcuts
 paused, using an isolated Cargo target. Investigate missing hook callbacks and
 popup focus without introducing another hook; prove configured-chord behavior,
@@ -100,12 +150,13 @@ Do not integrate or activate the candidate until these checks pass.
 ## Interruption / resume handoff
 
 - **Owning feature branch/ref:** `codex/desktop-shortcut-ux`
-- **Latest immutable recovery checkpoint:** `dd8f56c`
+- **Latest immutable recovery checkpoint:** `dd8f56c` (a new checkpoint must be
+  recorded after the follow-up work is committed)
 - **Feature implementation commit(s):** `10f5479`; unverified hook investigation `dd8f56c`
-- **Exact resume point:** investigate the failing native `--hook-only` popup test and unowned
-  shortcut coexistence as described above, then perform physical Windows and
-  live KDE checks and review before integration or activation.
-- **Working-tree state at handoff:** intended clean checkpoint
+- **Exact resume point:** investigate the failing cross-process focus and
+  `--hook-only` coexistence fixtures, then run the remaining physical and native
+  acceptance checks above before integration or activation.
+- **Working-tree state at handoff:** follow-up changes awaiting checkpoint
 
 ## Decision gates
 

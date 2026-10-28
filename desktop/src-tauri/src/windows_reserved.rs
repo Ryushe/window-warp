@@ -12,9 +12,11 @@ use crate::config::{Binding, Settings};
 use std::{
     collections::{HashMap, HashSet},
     ptr::null_mut,
-    sync::{mpsc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex, Weak,
+    },
     thread::JoinHandle,
-    time::Instant,
 };
 use tauri::{AppHandle, Emitter};
 use windows_sys::Win32::{
@@ -37,6 +39,12 @@ struct Mods {
     super_key: bool,
 }
 
+struct GestureDown {
+    press: super::gestures::HookPress,
+    required: Mods,
+    sequence: u64,
+}
+
 enum Job {
     Idle,
     Active(Vec<Armed>),
@@ -48,19 +56,23 @@ struct Session {
     app: Option<AppHandle>,
     swallowed: HashSet<u32>,
     down: HashSet<u32>,
+    /// Pull-app presses retain their own release state across queued dispatch.
+    gestures: HashMap<u32, GestureDown>,
+    gesture_sequence: u64,
+    /// Includes released presses still queued for the main thread, so pausing
+    /// can cancel those as well as presses whose keys are still down.
+    gesture_cancellations: Vec<Weak<AtomicBool>>,
+    actions: Arc<super::gestures::ActionSequencer>,
     capture: bool,
     /// True only while the shortcut popup is recording. The open-editor
     /// chord then closes it. Recording in the main list must keep that chord.
     popup_recording: bool,
-    last_down: HashMap<u32, Instant>,
     /// Foreground window at the moment Win went down, before Windows can
     /// move focus to the taskbar. Zero means unset.
     editor_hwnd: usize,
 }
 
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
-/// Shorter than a human tapping again, longer than Windows key-repeat.
-const REPEAT_MS: u128 = 80;
 
 // Only our synthetic menu mask is ignored. Other injected or physical events
 // must still update the state, even if SendInput pumps a nested callback.
@@ -114,7 +126,7 @@ pub(super) fn retain_pause() {
         slot.popup_recording = false;
         slot.swallowed.clear();
         slot.down.clear();
-        slot.last_down.clear();
+        cancel_gestures(slot);
         slot.job = if pause.is_empty() {
             Job::Idle
         } else {
@@ -131,6 +143,7 @@ pub(super) fn clear_active() {
             if matches!(slot.job, Job::Active(_)) {
                 slot.job = Job::Idle;
                 slot.swallowed.clear();
+                cancel_gestures(slot);
             }
         }
     }
@@ -217,7 +230,7 @@ pub(super) fn uninstall_shared() -> Result<(), String> {
             slot.popup_recording = false;
             slot.swallowed.clear();
             slot.down.clear();
-            slot.last_down.clear();
+            cancel_gestures(slot);
             slot.editor_hwnd = 0;
         }
     }
@@ -233,9 +246,12 @@ impl Default for Session {
             app: None,
             swallowed: HashSet::new(),
             down: HashSet::new(),
+            gestures: HashMap::new(),
+            gesture_sequence: 0,
+            gesture_cancellations: Vec::new(),
+            actions: Arc::new(super::gestures::ActionSequencer::default()),
             capture: false,
             popup_recording: false,
-            last_down: HashMap::new(),
             editor_hwnd: 0,
         }
     }
@@ -313,7 +329,51 @@ fn ensure_thread() -> Result<(), String> {
 }
 
 enum Pending {
-    Run(AppHandle, Armed),
+    Run(AppHandle, Armed, Option<super::gestures::HookPress>),
+}
+
+fn cancel_gestures(slot: &mut Session) {
+    for cancelled in slot.gesture_cancellations.drain(..) {
+        if let Some(cancelled) = cancelled.upgrade() {
+            cancelled.store(true, Ordering::SeqCst);
+        }
+    }
+    slot.gestures.clear();
+    // A stale queued dispatch from before pause may never run. New presses
+    // after resume must not wait for the old chain to drain.
+    slot.actions = Arc::new(super::gestures::ActionSequencer::default());
+}
+
+fn remember_gesture(slot: &mut Session, vk: u32, required: Mods) -> super::gestures::HookPress {
+    let press = super::gestures::HookPress::new(slot.actions.clone());
+    slot.gesture_cancellations
+        .retain(|item| item.strong_count() != 0);
+    slot.gesture_cancellations.push(press.cancellation());
+    slot.gesture_sequence = slot.gesture_sequence.wrapping_add(1);
+    slot.gestures.insert(vk, GestureDown {
+        press: press.clone(),
+        required,
+        sequence: slot.gesture_sequence,
+    });
+    press
+}
+
+fn release_gestures_for_key_up(slot: &mut Session, vk: u32) {
+    let held = mods_from(&slot.down);
+    let mut releasing: Vec<_> = slot.gestures.iter().filter_map(|(key, gesture)| {
+        let required = gesture.required;
+        let modifier_released = (required.ctrl && !held.ctrl)
+            || (required.alt && !held.alt)
+            || (required.shift && !held.shift)
+            || (required.super_key && !held.super_key);
+        (*key == vk || modifier_released).then_some((gesture.sequence, *key))
+    }).collect();
+    releasing.sort_unstable();
+    for (_, key) in releasing {
+        if let Some(gesture) = slot.gestures.remove(&key) {
+            gesture.press.release();
+        }
+    }
 }
 
 unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -334,13 +394,8 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
         drop(current);
         return CallNextHookEx(null_mut(), code, wp, lp);
     };
-    let was_down = key_is_down(&slot.down, vk);
     let super_before = mods_from(&slot.down).super_key;
-    if up {
-        slot.down.remove(&vk);
-    } else {
-        slot.down.insert(vk);
-    }
+    let was_down = update_key_state(&mut slot.down, vk, up);
     if !up && !was_down {
         let super_after = mods_from(&slot.down).super_key;
         let win_down = is_win(vk) && !super_before && super_after;
@@ -349,8 +404,8 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
         }
     }
     if up {
-        slot.last_down.remove(&vk);
         let swallowed = slot.swallowed.remove(&vk);
+        release_gestures_for_key_up(slot, vk);
         drop(current);
         super::gestures::note_release();
         return if swallowed {
@@ -359,15 +414,8 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
             CallNextHookEx(null_mut(), code, wp, lp)
         };
     }
-    let age = slot
-        .last_down
-        .get(&vk)
-        .map(|seen| seen.elapsed().as_millis())
-        .unwrap_or(0);
-    slot.last_down.insert(vk, Instant::now());
-    if is_auto_repeat(was_down, age) {
-        // Auto-repeat must not record or run the shortcut a second time.
-        // A later press is a new chord: a missed key-up used to swallow it.
+    if was_down {
+        // A held key can repeat at any interval. Only key-up starts a new press.
         let swallowed = slot.capture || slot.swallowed.contains(&vk);
         drop(current);
         return if swallowed {
@@ -375,9 +423,6 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
         } else {
             CallNextHookEx(null_mut(), code, wp, lp)
         };
-    }
-    if was_down {
-        slot.swallowed.remove(&vk);
     }
     let mods = mods_from(&slot.down);
     if slot.capture && is_chord_modifier(vk) {
@@ -406,7 +451,7 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
                     if mods.super_key {
                         suppress_start_menu();
                     }
-                    dispatch_hit(app, hit);
+                    dispatch_hit(app, hit, None);
                     return 1;
                 }
             }
@@ -460,7 +505,12 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
     };
     let pending = matched.map(|hit| {
         swallow_chord(slot, vk);
-        slot.app.clone().map(|app| Pending::Run(app, hit))
+        let press = if hit.binding.action == "pull-app" {
+            Some(remember_gesture(slot, vk, mods))
+        } else {
+            None
+        };
+        slot.app.clone().map(|app| Pending::Run(app, hit, press))
     });
     let eat = pending.is_some();
     let pending = pending.flatten();
@@ -470,8 +520,8 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
         suppress_start_menu();
     }
     match pending {
-        Some(Pending::Run(app, hit)) => {
-            dispatch_hit(Some(app), hit);
+        Some(Pending::Run(app, hit, press)) => {
+            dispatch_hit(Some(app), hit, press);
             1
         }
         None if eat => 1,
@@ -479,13 +529,28 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
     }
 }
 
-fn dispatch_hit(app: Option<AppHandle>, hit: Armed) {
+fn dispatch_hit(
+    app: Option<AppHandle>,
+    hit: Armed,
+    press: Option<super::gestures::HookPress>,
+) {
     let Some(app) = app else {
         return;
     };
     let _ = app.clone().run_on_main_thread(move || {
         if !crate::retile::fire(&hit.binding.shortcut) {
-            super::run_binding(&app, &hit.binding, &hit.settings);
+            if let Some(press) = press {
+                if let Err(message) = super::gestures::press_with_hook(
+                    &app,
+                    &hit.binding,
+                    &hit.settings,
+                    Some(press),
+                ) {
+                    let _ = app.emit("warp-error", message);
+                }
+            } else {
+                super::run_binding(&app, &hit.binding, &hit.settings);
+            }
         }
     });
 }
@@ -504,10 +569,6 @@ fn swallow_chord(slot: &mut Session, vk: u32) {
     slot.swallowed.insert(vk);
 }
 
-fn is_auto_repeat(was_down: bool, age_ms: u128) -> bool {
-    was_down && age_ms < REPEAT_MS
-}
-
 fn is_win(vk: u32) -> bool {
     matches!(vk, 0x5B | 0x5C)
 }
@@ -517,6 +578,10 @@ fn is_chord_modifier(vk: u32) -> bool {
         vk,
         0x10 | 0x11 | 0x12 | 0xA0 | 0xA1 | 0xA2 | 0xA3 | 0xA4 | 0xA5 | 0x5B | 0x5C
     )
+}
+
+fn update_key_state(down: &mut HashSet<u32>, vk: u32, up: bool) -> bool {
+    if up { down.remove(&vk) } else { !down.insert(vk) }
 }
 
 fn key_is_down(down: &HashSet<u32>, vk: u32) -> bool {
@@ -701,10 +766,87 @@ mod tests {
     }
 
     #[test]
-    fn a_quick_second_press_is_not_swallowed_as_auto_repeat() {
-        assert!(is_auto_repeat(true, 30), "Windows repeat stays inside the chord");
-        assert!(!is_auto_repeat(true, 81), "a missed key-up must not eat the next press");
-        assert!(!is_auto_repeat(false, 0));
+    fn repeat_needs_a_key_up_before_another_press() {
+        let mut down = HashSet::new();
+        assert!(!update_key_state(&mut down, b'B' as u32, false));
+        assert!(update_key_state(&mut down, b'B' as u32, false));
+        assert!(update_key_state(&mut down, b'B' as u32, false));
+        assert!(update_key_state(&mut down, b'B' as u32, true));
+        assert!(!update_key_state(&mut down, b'B' as u32, false));
+        assert!(!update_key_state(&mut down, 0x5B, false));
+        assert!(!update_key_state(&mut down, 0x5C, false), "each Windows key has its own physical state");
+    }
+
+    #[test]
+    fn pause_cancels_even_a_released_press_still_waiting_for_dispatch() {
+        let mut slot = Session::default();
+        let first = remember_gesture(&mut slot, b'D' as u32, Mods::none());
+        slot.gestures.remove(&(b'D' as u32)).unwrap().press.release();
+        let second = remember_gesture(&mut slot, b'D' as u32, Mods::none());
+        assert!(!first.is_cancelled());
+        assert!(!second.is_cancelled());
+        let old_actions = slot.actions.clone();
+        cancel_gestures(&mut slot);
+        assert!(!Arc::ptr_eq(&old_actions, &slot.actions), "resume starts a fresh action queue");
+        assert!(first.is_cancelled(), "a queued tap must not fire after pause/resume");
+        assert!(second.is_cancelled(), "a held press must also be cancelled");
+        assert!(slot.gestures.is_empty());
+        let resumed = remember_gesture(&mut slot, b'D' as u32, Mods::none());
+        assert!(!resumed.is_cancelled());
+    }
+
+    #[test]
+    fn releasing_a_required_modifier_ends_only_its_own_chords() {
+        let mut slot = Session::default();
+        // Both Windows keys are held, and the first gesture requires Win only.
+        slot.down.extend([0x5B, 0x5C, b'D' as u32]);
+        let win_only = remember_gesture(&mut slot, b'D' as u32, mods(false, false, false, true));
+        slot.down.extend([0xA2, b'F' as u32]);
+        let ctrl_win = remember_gesture(&mut slot, b'F' as u32, mods(true, false, false, true));
+
+        slot.down.remove(&0x5B);
+        release_gestures_for_key_up(&mut slot, 0x5B);
+        assert!(!win_only.is_released(), "the right Win key still satisfies Super");
+        assert!(!ctrl_win.is_released());
+
+        slot.down.remove(&0xA2);
+        release_gestures_for_key_up(&mut slot, 0xA2);
+        assert!(ctrl_win.is_released(), "releasing Ctrl finishes Ctrl+Win+F");
+        assert!(!win_only.is_released(), "Win+D does not require Ctrl");
+        assert!(slot.gestures.contains_key(&(b'D' as u32)));
+        assert!(!slot.gestures.contains_key(&(b'F' as u32)));
+
+        slot.down.remove(&0x5C);
+        release_gestures_for_key_up(&mut slot, 0x5C);
+        assert!(win_only.is_released(), "releasing the last Win key ends Win+D");
+        assert!(slot.gestures.is_empty());
+    }
+
+    #[test]
+    fn terminal_key_up_and_unrelated_modifier_release_are_distinct() {
+        let mut slot = Session::default();
+        slot.down.extend([0x5B, 0xA4, b'D' as u32]);
+        let press = remember_gesture(&mut slot, b'D' as u32, mods(false, false, false, true));
+        slot.down.remove(&0xA4);
+        release_gestures_for_key_up(&mut slot, 0xA4);
+        assert!(!press.is_released(), "an unrelated Alt release must not end Win+D");
+        slot.down.remove(&(b'D' as u32));
+        release_gestures_for_key_up(&mut slot, b'D' as u32);
+        assert!(press.is_released());
+    }
+
+    #[test]
+    fn shared_modifier_release_commits_gestures_in_press_order() {
+        let mut slot = Session::default();
+        slot.down.extend([0x5B, b'Z' as u32, b'A' as u32]);
+        // Use keys in reverse numeric order, so ordering cannot accidentally
+        // come from sorting the virtual-key codes.
+        let first = remember_gesture(&mut slot, b'Z' as u32, mods(false, false, false, true));
+        let second = remember_gesture(&mut slot, b'A' as u32, mods(false, false, false, true));
+        slot.down.remove(&0x5B);
+        release_gestures_for_key_up(&mut slot, 0x5B);
+        assert_eq!(first.release_has_predecessor(), Some(false));
+        assert_eq!(second.release_has_predecessor(), Some(true));
     }
 
     #[test]

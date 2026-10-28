@@ -9,6 +9,9 @@ const HINTS = {
     fullscreen: SECOND_MONITOR
 };
 let config;
+let configReady = Promise.resolve(null);
+let popupGeneration = 0;
+let pendingKeys = Promise.resolve();
 let quick = null;
 let recorded = "";
 let previousWindow = null;
@@ -69,6 +72,8 @@ function isEditorShortcut(event) {
     return formatShortcut(modifiers, key) === editor.shortcut;
 }
 async function closePopup(restoreFocus) {
+    popupGeneration++;
+    pendingKeys = Promise.resolve();
     const target = previousWindow;
     previousWindow = null;
     await native.core.invoke("hide_quick").catch(() => {});
@@ -77,6 +82,23 @@ async function closePopup(restoreFocus) {
     }
 }
 async function openEditor(payload) {
+    const generation = ++popupGeneration;
+    pendingKeys = Promise.resolve();
+    config = undefined;
+    quick = null;
+    // The editor chord also works when the current window has no app name.
+    // Keep keys entered while this request is pending until its result arrives.
+    const ready = native.core.invoke("get_config").then((loaded) => {
+        if (generation === popupGeneration) config = loaded;
+        return loaded;
+    }).catch((error) => {
+        if (generation === popupGeneration) {
+            document.querySelector("#quick-message").textContent = String(error);
+            document.querySelector("#quick-apply").disabled = true;
+        }
+        return null;
+    });
+    configReady = ready;
     clearConflict();
     const windowInfo = payload?.window || null;
     previousWindow = windowInfo;
@@ -89,9 +111,10 @@ async function openEditor(payload) {
     showRecorded();
     if (!named) {
         document.querySelector("#quick-apply").disabled = true;
+        await ready;
         return;
     }
-    config = await native.core.invoke("get_config");
+    if (!await ready || generation !== popupGeneration) return;
     let index = Number.isInteger(payload?.bindingIndex) ? payload.bindingIndex : -1;
     let created = false;
     if (index < 0 || !config.bindings[index]) index = bindingIndex(windowInfo, named);
@@ -123,6 +146,8 @@ async function openEditor(payload) {
 document.querySelector("#quick-behavior").addEventListener("change", () => { clearConflict(); showHint(); });
 document.querySelector("#quick-layout").addEventListener("change", () => { clearConflict(); showHint(); });
 document.querySelector("#quick-open").addEventListener("click", async () => {
+    popupGeneration++;
+    pendingKeys = Promise.resolve();
     const app = document.querySelector("#quick-app").textContent;
     await native.core.invoke("show_editor", { appMatch: app || null }).catch(() => {});
     await native.core.invoke("hide_quick").catch(() => {});
@@ -163,11 +188,11 @@ document.querySelector("#quick-apply").addEventListener("click", async () => {
         document.querySelector("#quick-message").textContent = String(error);
     }
 });
-document.addEventListener("keydown", (event) => {
-    if (!event.repeat && isEditorShortcut(event)) {
+function handleKey(event) {
+    if (isEditorShortcut(event)) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        document.querySelector("#quick-open").click();
+        if (!event.repeat) document.querySelector("#quick-open").click();
         return;
     }
     if (event.key === "Escape") { event.preventDefault(); closePopup(true); return; }
@@ -186,6 +211,29 @@ document.addEventListener("keydown", (event) => {
     root.dataset.shortcutKey = named;
     recorded = readShortcutPicker(root);
     showRecorded();
+}
+document.addEventListener("keydown", (event) => {
+    if (config || event.key === "Escape" || event.key === "Tab" || event.target?.tagName === "SELECT" || (event.target?.tagName === "BUTTON" && (event.key === " " || event.key === "Enter"))) {
+        handleKey(event);
+        return;
+    }
+    if (event.key !== "Enter" && !shortcutKeyFromEvent(event)) return;
+    // Event objects can be reused by the browser, so retain only the fields
+    // needed after the config request finishes. Prevent the picker from
+    // consuming this chord before it can be compared to the editor shortcut.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const generation = popupGeneration;
+    const ready = configReady;
+    const key = {
+        key: event.key, code: event.code, repeat: event.repeat,
+        ctrlKey: event.ctrlKey, altKey: event.altKey,
+        shiftKey: event.shiftKey, metaKey: event.metaKey,
+        target: event.target, preventDefault() {}, stopImmediatePropagation() {}
+    };
+    pendingKeys = pendingKeys.then(() => ready).then((loaded) => {
+        if (loaded && generation === popupGeneration) handleKey(key);
+    });
 }, true);
 native?.event.listen("quick-edit", (event) => openEditor(event.payload || {}));
 native?.core.invoke("quick_edit").then((pending) => { if (pending) openEditor(pending); }).catch(() => {});

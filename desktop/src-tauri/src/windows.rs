@@ -146,7 +146,66 @@ unsafe fn focus(hwnd: HWND) -> Result<(), String> {
         ShowWindow(hwnd, SW_RESTORE);
     }
     if SetForegroundWindow(hwnd) == 0 {
-        return Err("Windows prevented focus from changing. Try the shortcut again from a normal, non-administrator app.".into());
+        return Err("Windows prevented focus from changing. Try the shortcut again.".into());
+    }
+    Ok(())
+}
+
+fn foreground_owned_by(
+    target: usize,
+    mut foreground: usize,
+    mut owner_of: impl FnMut(usize) -> usize,
+) -> bool {
+    if target == 0 || foreground == 0 {
+        return false;
+    }
+    // Follow ownership, rather than accepting any window in the same process.
+    // The bound also protects against a malformed or changing owner chain.
+    for _ in 0..64 {
+        if foreground == target {
+            return true;
+        }
+        foreground = owner_of(foreground);
+        if foreground == 0 {
+            return false;
+        }
+    }
+    false
+}
+
+unsafe fn foreground_matches_target(target: HWND) -> bool {
+    let foreground = GetForegroundWindow();
+    if foreground == target && !target.is_null() {
+        return true;
+    }
+    if target.is_null() || foreground.is_null() {
+        return false;
+    }
+    let (mut target_pid, mut foreground_pid) = (0, 0);
+    GetWindowThreadProcessId(target, &mut target_pid);
+    GetWindowThreadProcessId(foreground, &mut foreground_pid);
+    if target_pid == 0 || target_pid != foreground_pid {
+        return false;
+    }
+    foreground_owned_by(target as usize, foreground as usize, |window| {
+        GetWindow(window as HWND, GW_OWNER) as usize
+    })
+}
+
+/// Ordered app taps need to see the previous focus transition before the next
+/// action decides whether to toggle back. Keep this wait off the input hook.
+unsafe fn focus_ordered(hwnd: HWND) -> Result<(), String> {
+    if let Err(error) = focus(hwnd) {
+        if !foreground_matches_target(hwnd) {
+            return Err(error);
+        }
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+    while !foreground_matches_target(hwnd) {
+        if IsWindow(hwnd) == 0 || std::time::Instant::now() >= deadline {
+            return Err("Windows did not bring the requested window to the foreground.".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
     Ok(())
 }
@@ -471,7 +530,12 @@ unsafe fn pull_app(
     settings: &Settings,
     hold_pointer: Option<POINT>,
 ) -> Result<(), String> {
-    pull_app_target(binding, settings, hold_pointer, None, None)
+    pull_app_target(binding, settings, hold_pointer, None, None, false)
+}
+
+/// Runs only from a hook-ordered tap worker.
+unsafe fn execute_hook_pull(binding: &Binding, settings: &Settings) -> Result<(), String> {
+    pull_app_target(binding, settings, None, None, None, true)
 }
 
 pub fn pull_selected(
@@ -482,7 +546,7 @@ pub fn pull_selected(
     previous: Option<&crate::workspaces::WindowInfo>,
 ) -> Result<(), String> {
     let _ = app;
-    unsafe { pull_app_target(binding, settings, None, Some(selected), previous) }
+    unsafe { pull_app_target(binding, settings, None, Some(selected), previous, false) }
 }
 unsafe fn pull_app_target(
     binding: &Binding,
@@ -490,7 +554,9 @@ unsafe fn pull_app_target(
     hold_pointer: Option<POINT>,
     selected: Option<&crate::workspaces::WindowInfo>,
     previous: Option<&crate::workspaces::WindowInfo>,
+    ordered_focus: bool,
 ) -> Result<(), String> {
+    let focus_target = |window| if ordered_focus { focus_ordered(window) } else { focus(window) };
     let active = previous
         .and_then(|w| {
             let hwnd = w.id.parse::<usize>().ok()? as HWND;
@@ -546,7 +612,7 @@ unsafe fn pull_app_target(
         let area = all[main].1;
         let direction = crate::geometry::mouse_tile_direction(area, point.x, point.y);
         place(hwnd, tile_rect(area, direction), false)?;
-        return focus(hwnd);
+        return focus_target(hwnd);
     }
     if current == all[main].0 {
         if was_active && binding.main_monitor_action == "focus-last" {
@@ -560,7 +626,7 @@ unsafe fn pull_app_target(
                 let mut pid = 0;
                 GetWindowThreadProcessId(old, &mut pid);
                 if IsWindow(old) != 0 && pid == expected_pid {
-                    return focus(old);
+                    return focus_target(old);
                 }
             }
         } else if was_active && all.len() > 1 {
@@ -594,7 +660,7 @@ unsafe fn pull_app_target(
             IsZoomed(hwnd) != 0,
         )?;
     }
-    focus(hwnd)?;
+    focus_target(hwnd)?;
     if current != all[main].0 || !was_active {
         center_pointer(all[main].1)?;
     }
@@ -991,6 +1057,19 @@ pub fn shutdown(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn foreground_accepts_owned_modal_but_not_an_unrelated_or_sibling_window() {
+        // 10 owns 20, and 20 owns 30 and 40. A modal can itself own a modal.
+        let owner = |window| match window { 20 => 10, 30 | 40 => 20, _ => 0 };
+        assert!(foreground_owned_by(10, 10, owner));
+        assert!(foreground_owned_by(10, 30, owner));
+        assert!(foreground_owned_by(20, 30, owner));
+        assert!(!foreground_owned_by(30, 40, owner), "siblings do not count as the requested window");
+        assert!(!foreground_owned_by(10, 50, owner), "an unrelated same-process window does not count");
+        assert!(!foreground_owned_by(10, 0, owner));
+        assert!(!foreground_owned_by(10, 20, |_| 20), "a cyclic owner chain terminates");
+    }
 
     struct OwnedTerminals(Vec<crate::workspaces::WindowInfo>);
     impl Drop for OwnedTerminals {

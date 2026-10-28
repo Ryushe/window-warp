@@ -11,8 +11,9 @@ import {testFirefox} from "./firefox.mjs";
 
 if (process.platform !== "win32") throw new Error("This fixture requires Windows");
 const firefoxProfileLock = process.argv.includes("--firefox-profile-lock");
+const fastOnly = process.argv.includes("--fast-only");
 const hookOnly = process.argv.includes("--hook-only");
-const quickOnly = process.argv.includes("--quick-only") || hookOnly;
+const quickOnly = process.argv.includes("--quick-only") || hookOnly || fastOnly;
 const firefoxOnly = process.argv.includes("--firefox-only") || firefoxProfileLock;
 const runFirefox = firefoxOnly || process.argv.includes("--firefox");
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -70,8 +71,14 @@ fs.closeSync(buildLog);
 if (built !== 0) throw new Error("Native fixture build failed: " + fs.readFileSync(path.join(output,"build.log"),"utf8").slice(-6000));
 const binary = path.join(output, "window-warp-fixture.exe");
 fs.copyFileSync(path.join(buildTarget,"debug/window-warp.exe"), binary);
+if (process.env.WARP_TEST_WAIT_FOR_START === "1") {
+    const signal = path.join(output, "start-test");
+    console.log("Fixture built; waiting for start-test signal in", output);
+    await until(() => fs.existsSync(signal), Boolean, "test start signal", 180000);
+}
 
-let app, helper, socket, second, startupTouched = false, calculatorPrepared = false;
+
+let app, helper, peerHelper, socket, second, startupTouched = false, calculatorPrepared = false;
 const checks = [];
 const skipped = [];
 let fixture, native;
@@ -119,7 +126,7 @@ try {
     checks.push("native WebView renders using isolated settings and browser state");
 
     helper = spawn("python", [path.join(desktop,"tests/windows/fixture.py"), "--marker", marker, "--app-pid", String(app.pid),
-        "--lifetime",runFirefox ? "1200" : "180"], {windowsHide:true, stdio:["pipe","pipe","pipe"]});
+        "--lifetime",runFirefox ? "1200" : "180", "--windows",fastOnly ? "3" : "2"], {windowsHide:true, stdio:["pipe","pipe","pipe"]});
     let helperError = "";
     helper.stderr.on("data", chunk => {helperError += chunk.toString();});
     const lines = createInterface({input:helper.stdout});
@@ -142,50 +149,316 @@ try {
     });
     const press = f => native("press",{key:0x70 + f - 1});
     const paused = wanted => until(() => invoke("get_status"), s => s.enabled !== wanted, wanted ? "paused" : "active");
-    if (hookOnly) {
+    if (fastOnly) {
+        peerHelper = spawn("python", [path.join(desktop,"tests/windows/fixture.py"), "--marker", marker+"-peer", "--windows", "1"],
+            {windowsHide:true, stdio:["pipe","pipe","pipe"]});
+        let peerError = "", peerReady, peerCommandId = 0;
+        const peerReplies = new Map();
+        peerHelper.stderr.on("data", chunk => {peerError += chunk.toString();});
+        createInterface({input:peerHelper.stdout}).on("line", line => {
+            const result = JSON.parse(line);
+            if (result.ready) { peerReady = result; return; }
+            const request = peerReplies.get(result.id);
+            if (!request) return;
+            peerReplies.delete(result.id); clearTimeout(request.timer);
+            result.error ? request.reject(new Error(result.error)) : request.resolve(result.result);
+        });
+        const peer = await until(()=>{if (peerHelper.exitCode !== null) throw new Error(peerError); return peerReady;},Boolean,"second process owned Win32 fixture");
+        const nativePeer = (command,args={}) => new Promise((resolve,reject)=>{
+            const id = ++peerCommandId;
+            const timer = setTimeout(()=>{peerReplies.delete(id);reject(new Error(`Peer fixture timeout: ${command}`));},10000);
+            peerReplies.set(id,{resolve,reject,timer});
+            peerHelper.stdin.write(JSON.stringify({id,command,...args})+"\n");
+        });
+        await native("focus", {window:fixture.windows[0]});
+        const owned = await until(async () => (await invoke("get_windows")).find(window => window.id === String(fixture.windows[0]) && window.pid === fixture.pid), Boolean, "owned fast-shortcut target", 5000);
+        const fastConfig = await invoke("get_config");
+        fastConfig.settings.mainMonitor = owned.monitor;
+        fastConfig.settings.holdDelayMs = 400;
+        fastConfig.settings.holdTileEnabled = true;
+        fastConfig.settings.holdMode = "tile";
+        fastConfig.bindings.push({label:"Test fast app shortcut", shortcut:"Super+F22", action:"pull-app", enabled:true,
+            appMatch:path.basename(fixture.executable), windowsMatch:{windowId:owned.id, processId:fixture.pid},
+            mainMonitorAction:"focus-last", burnerLayout:"float"});
+        await invoke("save_config", {config:fastConfig});
         await invoke("set_enabled", {enabled:true});
-        await native("reserve", {key:0x86, meta:true});
-        const initialEvents = (await native("hotkey_events")).length;
-        await native("hold_start", {key:0x86, meta:true});
-        try {
-            await until(()=>native("hotkey_events"),events=>events.length > initialEvents,"unowned Win+F23 delivered while held",3000);
-        } finally {
-            await native("key_up");
-            await native("release", {key:0x86});
+        await evaluate("(async()=>{window.__fastErrors=[];window.__fastErrorStop=await window.__TAURI__.event.listen('warp-error',e=>window.__fastErrors.push(e.payload));})()");
+        const readTarget = async () => (await invoke("get_windows")).find(window=>window.id === owned.id && window.pid === fixture.pid);
+        report.fastTaps = [];
+        for (let i=0; i<10; i++) {
+            await native("focus", {window:fixture.windows[2]});
+            await native("plain_press", {key:0x85, meta:true, window:fixture.windows[2]});
+            try {
+                await until(readTarget,window=>window?.active, `fast Super+F22 tap ${i+1}`,2500);
+                report.fastTaps.push(true);
+            } catch { report.fastTaps.push(false); }
         }
-        checks.push("unowned Win+F23 reaches another application's hotkey while held");
+        await native("focus", {window:fixture.windows[2]});
+        await native("activation_events");
+        await native("burst", {key:0x85, window:fixture.windows[2]});
+        const transitions = [];
+        try {
+            await until(async()=>{transitions.push(...await native("activation_events"));return transitions;},
+                events=>events.includes(fixture.windows[0]) && events.lastIndexOf(fixture.windows[2]) > events.indexOf(fixture.windows[0]),
+                "two rapid presses both run in order",4000);
+        } catch (error) {
+            report.fastErrors = await evaluate("window.__fastErrors");
+            report.burstTransitions = transitions;
+            throw error;
+        }
+        checks.push("back-to-back Super+F22 presses focus the target and return to the previous window");
+        const initial = {x:owned.workArea.x+100,y:owned.workArea.y+100,width:500,height:320};
+        await native("place", {window:fixture.windows[0], rect:initial});
+        await native("focus", {window:fixture.windows[2]});
+        await native("pointer", {x:owned.workArea.x+20,y:owned.workArea.y+20});
+        await native("hold_start", {key:0x85,meta:true,window:fixture.windows[2]});
+        try {
+            await sleep(80);
+            assert.equal((await readTarget()).active,false,"a held shortcut must not tap before release or the hold threshold");
+            await until(readTarget,window=>window?.active && JSON.stringify(window.rect)!==JSON.stringify(initial), "held Super+F22 tiles the owned window",3000);
+            const tiled = (await readTarget()).rect;
+            await native("key_up");
+            await sleep(100);
+            assert.deepEqual((await readTarget()).rect,tiled,"hold release must not trigger another window action");
+        } finally { await native("key_up").catch(()=>{}); }
+        checks.push("held Super+F22 tiles once and does not issue a tap on release");
+        await native("place", {window:fixture.windows[0], rect:initial});
+        await native("focus", {window:fixture.windows[2]});
+        await native("hold_start", {key:0x85,meta:true,window:fixture.windows[2]});
+        try {
+            await sleep(80);
+            await native("key_up", {keys:[0x5b]});
+            await until(readTarget,window=>window?.active,"modifier-first release triggers the app tap",3000);
+            await sleep(500);
+            assert.deepEqual((await readTarget()).rect,initial,"releasing the modifier must cancel the pending hold");
+        } finally { await native("key_up").catch(()=>{}); }
+        checks.push("releasing Win before F22 triggers a tap and cannot turn into a hold");
+        await native("minimize", {window:fixture.windows[0]});
+        await until(readTarget,window=>window?.minimized,"owned target minimized");
+        await native("plain_press", {key:0x85,meta:true,window:fixture.windows[2]});
+        await until(readTarget,window=>window?.active && !window.minimized,"fast shortcut restores the minimized target",3000);
+        checks.push("fast Super+F22 restores and focuses a minimized owned window");
+        await native("place", {window:fixture.windows[0],rect:initial});
+        await native("focus", {window:fixture.windows[2]});
+        await native("hold_start", {key:0x85,meta:true,window:fixture.windows[2]});
+        try {
+            await sleep(80);
+            await invoke("set_enabled", {enabled:false});
+            await native("key_up");
+            await invoke("set_enabled", {enabled:true});
+            await sleep(500);
+            const cancelled = await readTarget();
+            assert.equal(cancelled.active,false,"pausing must cancel the pending app shortcut");
+            assert.deepEqual(cancelled.rect,initial,"a cancelled hold must not tile after resume");
+        } finally { await native("key_up").catch(()=>{}); }
+        checks.push("pause and resume cancel a pending Super shortcut without a late tap or hold");
+        await native("focus", {window:fixture.windows[1]});
+        const other = await until(async()=> (await invoke("get_windows")).find(window=>window.id===String(fixture.windows[1]) && window.pid===fixture.pid), Boolean, "second owned shortcut target", 5000);
+        const overlapConfig = await invoke("get_config");
+        overlapConfig.settings.holdDelayMs = 900;
+        overlapConfig.bindings.push({...structuredClone(overlapConfig.bindings.at(-1)),label:"Test overlapping app shortcut",shortcut:"Super+F23",
+            windowsMatch:{windowId:other.id,processId:fixture.pid}});
+        await invoke("set_enabled", {enabled:false});
+        await invoke("save_config", {config:overlapConfig});
+        await invoke("set_enabled", {enabled:true});
+        await nativePeer("focus", {window:peer.windows[0]});
+        const crossProcessTarget = await until(async()=> (await invoke("get_windows")).find(window=>window.id===String(peer.windows[0]) && window.pid===peer.pid),Boolean,"second process app target",5000);
+        const switchConfig = structuredClone(overlapConfig);
+        switchConfig.bindings.at(-1).windowsMatch = {windowId:crossProcessTarget.id,processId:peer.pid};
+        await invoke("set_enabled", {enabled:false});
+        await invoke("save_config", {config:switchConfig});
+        await invoke("set_enabled", {enabled:true});
+        report.fastSwitches = [];
+        const switchFailures = [];
+        for (const spacingMs of [80, 0]) for (const releaseWin of [false, true]) {
+            if (switchFailures.length) {
+                // Cancel any unfinished action from a failed case before
+                // collecting the next case; the failure is still reported.
+                await invoke("set_enabled", {enabled:false});
+                await invoke("set_enabled", {enabled:true});
+            }
+            await native("focus", {window:fixture.windows[2]});
+            await native("activation_events");
+            await nativePeer("activation_events");
+            const events = [];
+            let releases = [];
+            const expected = Array.from({length:4},()=>[fixture.windows[0],peer.windows[0]]).flat();
+            try {
+                releases = await native("switch_burst", {window:fixture.windows[2],peer_window:peer.windows[0],peer_pid:peer.pid,release_win:releaseWin,spacing_ms:spacingMs});
+                await until(async()=> {
+                    const [local, remote] = await Promise.all([native("timed_activation_events"),nativePeer("timed_activation_events")]);
+                    events.push(...local,...remote);
+                    return events;
+                }, received=>received.length >= expected.length, "eight alternating app switches", 5000);
+                await sleep(200);
+                const [local, remote] = await Promise.all([native("timed_activation_events"),nativePeer("timed_activation_events")]);
+                events.push(...local,...remote);
+                events.sort((a,b)=>a[1]-b[1]);
+                assert.deepEqual(events.map(([id])=>id), expected, "every distinct app shortcut must focus its target once, in press order");
+                const latencyMs = events.map(([,at],index)=>at - releases[index]);
+                assert.ok(latencyMs.every(ms=>ms >= 0 && ms <= 500), `every alternating switch must activate within 500 ms of key release: ${latencyMs}`);
+            } catch (error) {
+                report.fastErrors = await evaluate("window.__fastErrors").catch(()=>["Could not retrieve fast shortcut errors"]);
+                switchFailures.push(new Error(`Alternating switches with ${spacingMs} ms spacing and Win ${releaseWin ? "released" : "held"}: ${error}`));
+            } finally {
+                events.sort((a,b)=>a[1]-b[1]);
+                report.fastSwitches.push({spacingMs,releaseWin,source:fixture.windows[2],targetA:fixture.windows[0],targetB:peer.windows[0],
+                    observed:events.map(([id])=>id),expected,releases,events,
+                    latencyMs:events.map(([,at],index)=>at - releases[index])});
+                await native("key_up").catch(()=>{});
+            }
+        }
+        if (switchFailures.length) throw new AggregateError(switchFailures,"Alternating shortcut acceptance failed: " + switchFailures.map(error=>String(error)).join("; "));
+        checks.push("eight alternating Super+F22/F23 presses switch between separate fixture processes in order, at 80 ms and zero spacing, with Win held or released between presses");
+        await invoke("set_enabled", {enabled:false});
+        await invoke("save_config", {config:overlapConfig});
+        await invoke("set_enabled", {enabled:true});
+        await native("place", {window:fixture.windows[0], rect:initial});
+        await native("place", {window:fixture.windows[1], rect:{...initial,x:initial.x+40,y:initial.y+40}});
+        await native("focus", {window:fixture.windows[2]});
+        await native("pointer", {x:owned.workArea.x+20,y:owned.workArea.y+20});
+        await native("hold_start", {key:0x85,meta:true,window:fixture.windows[2]});
+        try {
+            await sleep(80);
+            await native("held_tap", {key:0x86});
+            await until(async()=> (await invoke("get_windows")).find(window=>window.id===other.id && window.pid===fixture.pid),
+                window=>window?.active,"overlapping Super+F23 tap focuses its own target before F22 hold",700);
+            await until(readTarget,window=>window?.active && JSON.stringify(window.rect)!==JSON.stringify(initial),
+                "held Super+F22 still tiles after the other shortcut",3000);
+        } finally { await native("key_up").catch(()=>{}); }
+        checks.push("an overlapping Super app tap does not cancel or wait for an earlier held shortcut");
+        const radialConfig = await invoke("get_config");
+        radialConfig.settings.holdMode = "radial";
+        radialConfig.settings.holdDelayMs = 400;
+        const radialBinding = radialConfig.bindings.find(binding=>binding.shortcut === "Super+F22");
+        radialBinding.windowsMatch = {processId:fixture.pid,titleContains:marker};
+        await invoke("set_enabled", {enabled:false});
+        await invoke("save_config", {config:radialConfig});
+        await invoke("set_enabled", {enabled:true});
+        await native("focus", {window:fixture.windows[2]});
+        await native("pointer", {x:owned.workArea.x+Math.floor(owned.workArea.width/2),y:owned.workArea.y+Math.floor(owned.workArea.height/2)});
+        await native("hold_start", {key:0x85,meta:true,window:fixture.windows[2]});
+        try {
+            await until(()=>invoke("radial_view"),view=>view?.labels?.length === 3,"held Super shortcut opens radial",4000);
+            await native("key_up");
+            await until(()=>invoke("radial_view"),view=>view === null,"Super radial closes on release",4000);
+        } finally { await native("key_up").catch(()=>{}); }
+        checks.push("held Super app shortcut opens its radial and closes on release");
+        report.fastErrors = await evaluate("window.__fastErrors");
+        await evaluate("if(window.__fastErrorStop)window.__fastErrorStop()");
+        assert.deepEqual(report.fastErrors, [], "fast app shortcuts must not emit native errors");
+        assert.deepEqual(report.fastTaps, Array(10).fill(true), "every fast app shortcut must focus its owned target");
+        checks.push("ten rapid Super+F22 app taps focus their owned target");
+    }
+    if (hookOnly) {
+        // Install another process's listener before Warp's hook, then after it,
+        // to cover both launch orders without observing any physical input.
         const mainWindow = await native("app_window");
+        await native("observe_start");
+        report.coexistence = [];
+        const observeEditor = async (order, registered, directFocus=false) => {
+            if (directFocus) await native("focus", {window:mainWindow});
+            else await invoke("show_editor", {appMatch:null});
+            await until(()=>native("app_state",{window:mainWindow}),s=>s.foreground,"focus fixture editor",4000);
+            const initialEvents = (await native("hotkey_events")).length;
+            await native("hold_start", {key:0x86, meta:true, window:mainWindow});
+            let held, released, hotkey;
+            try {
+                if (registered) {
+                    try { await until(()=>native("hotkey_events"),events=>events.length > initialEvents,"registered unowned hotkey",3000); hotkey=true; } catch { hotkey=false; }
+                }
+                await sleep(100);
+                held = await native("observe_events");
+            } finally { await native("key_up"); }
+            await sleep(100);
+            released = await native("observe_events");
+            report.coexistence.push({order,surface:"Warp editor",...(registered ? {hotkey} : {}),held,released});
+        };
+        await observeEditor("before, Warp disabled and no registered hotkey", false);
+        await native("reserve", {key:0x86, meta:true});
+        await observeEditor("before, Warp disabled", true);
+        await native("release", {key:0x86});
+        await invoke("set_enabled", {enabled:true});
+        await observeEditor("before, no registered hotkey", false);
+        await native("focus", {window:fixture.windows[0]});
+        await observeEditor("before, direct editor focus, no registered hotkey", false, true);
+        await native("reserve", {key:0x86, meta:true});
+        for (const order of ["before", "after"]) {
+            if (order === "after") {
+                await native("observe_stop");
+                await native("observe_start");
+            }
+            // Repeat the first case, and return to it after another app has
+            // focus, so a startup anomaly is distinguishable from focus.
+            for (const [surface, window] of [["Warp editor", mainWindow], ["Warp editor", mainWindow], ["another app", fixture.windows[0]], ["Warp editor", mainWindow]]) {
+                if (surface === "Warp editor") {
+                    await invoke("show_editor", {appMatch:null});
+                    await until(()=>native("app_state",{window:mainWindow}),s=>s.foreground,"focus fixture editor",4000);
+                }
+                const initialEvents = (await native("hotkey_events")).length;
+                await native("hold_start", {key:0x86, meta:true, window});
+                let held = [], released = [], hotkey = false;
+                try {
+                    try { await until(()=>native("hotkey_events"),events=>events.length > initialEvents,"unowned Win+F23 delivered while held",3000); hotkey=true; } catch {}
+                    await sleep(100);
+                    held = await native("observe_events");
+                } finally {
+                    await native("key_up");
+                }
+                await sleep(100);
+                released = await native("observe_events");
+                report.coexistence.push({order, surface, hotkey, held, released});
+            }
+        }
+        await native("release", {key:0x86});
+        for (const [surface, window] of [["another app", fixture.windows[0]], ["Warp editor", mainWindow]]) {
+            if (surface === "Warp editor") {
+                await invoke("show_editor", {appMatch:null});
+                await until(()=>native("app_state",{window:mainWindow}),s=>s.foreground,"focus fixture editor without registered hotkey",4000);
+            }
+            await native("hold_start", {key:0x86, meta:true, window});
+            let held, released;
+            try { await sleep(100); held = await native("observe_events"); }
+            finally { await native("key_up"); }
+            await sleep(100);
+            released = await native("observe_events");
+            report.coexistence.push({order:"after, without registered hotkey", surface, held, released});
+        }
+        await native("observe_stop");
+        const hookErrors = [];
+        for (const row of report.coexistence) {
+            try {
+                if ("hotkey" in row) assert.equal(row.hotkey, true, `hotkey while held: ${row.order}, ${row.surface}`);
+                assert.deepEqual(row.held, [[0x5b,false],[0x86,false]], `down events: ${row.order}, ${row.surface}`);
+                assert.deepEqual(row.released, [[0x86,true],[0x5b,true]], `up events: ${row.order}, ${row.surface}`);
+            } catch (error) { hookErrors.push(error); }
+        }
+        if (process.env.WARP_TEST_POPUP_OBSERVER === "downstream") {
+            await invoke("set_enabled", {enabled:false});
+            await native("observe_start");
+            await invoke("set_enabled", {enabled:true});
+        }
+        if (!hookErrors.length) checks.push("unowned Win+F23 reaches another application's listener on down and up in both hook orders with Warp or another app focused");
         await native("app_close",{window:mainWindow});
         await until(()=>native("app_state",{window:mainWindow}),s=>!s.visible,"hide fixture editor");
         await native("plain_press",{key:66,meta:true});
         const quickWindow = await until(()=>native("app_window").catch(()=>null),Boolean,"Win+B opens popup",4000);
-        const quickTarget = await until(async()=>{
-            try {return (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.type === "page" && /\/quick\.html$/.test(t.url));}
-            catch {return null;}
-        },Boolean,"popup diagnostics");
-        const probe = new WebSocket(quickTarget.webSocketDebuggerUrl);
-        await new Promise((resolve,reject)=>{probe.addEventListener("open",resolve,{once:true});probe.addEventListener("error",reject,{once:true});});
-        let probeId=0;
-        const probeEval = expression => new Promise((resolve,reject)=>{
-            const id=++probeId;
-            const timer=setTimeout(()=>reject(new Error("Popup probe timed out")),5000);
-            const receive=event=>{const response=JSON.parse(event.data);if(response.id!==id)return;clearTimeout(timer);probe.removeEventListener("message",receive);response.error?reject(new Error(JSON.stringify(response.error))):resolve(response.result.result?.value);};
-            probe.addEventListener("message",receive);probe.send(JSON.stringify({id,method:"Runtime.evaluate",params:{expression,returnByValue:true}}));
-        });
-        await probeEval("window.__hookKeys=[];window.addEventListener('keydown',e=>window.__hookKeys.push({key:e.key,code:e.code,meta:e.metaKey,ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey}),true);true");
         // Let the first key cycle and popup-open dispatch finish before the
         // second distinct press, without holding the modifier between presses.
-        await sleep(200);
-        await native("plain_press",{key:66,meta:true,window:quickWindow});
+        await sleep(Number(process.env.WARP_TEST_POPUP_DELAY || 200));
+        if (["1", "transient"].includes(process.env.WARP_TEST_POPUP_OBSERVER)) await native("observe_start");
+        if (process.env.WARP_TEST_POPUP_OBSERVER === "transient") await native("observe_stop");
+        await native("plain_press",{key:66,meta:true,window:quickWindow,gap_ms:Number(process.env.WARP_TEST_INPUT_GAP || 0)});
         try {
             await until(()=>native("app_state",{window:mainWindow}),s=>s.visible && s.foreground,"second Win+B opens the main window",4000);
         } catch (error) {
-            report.popupDiagnostics = {keys:await probeEval("window.__hookKeys"),entry:await probeEval("document.querySelector('#quick-entry').value"),quick:await native("fixture_window_state",{window:quickWindow})};
-            throw error;
-        } finally {probe.close();}
+            report.popupDiagnostics = {quick:await native("fixture_window_state",{window:quickWindow}), observer:process.env.WARP_TEST_POPUP_OBSERVER === "1" ? await native("observe_events") : null};
+            hookErrors.push(error);
+        } finally {if (["1", "downstream"].includes(process.env.WARP_TEST_POPUP_OBSERVER)) await native("observe_stop");}
+        if (hookErrors.length) throw new AggregateError(hookErrors,"Native hook and popup acceptance failed: " + hookErrors.map(error=>String(error)).join("; "));
         checks.push("one further Win+B hides the popup and opens the main editor");
     }
-    if (quickOnly && !hookOnly) {
+    if (quickOnly && !hookOnly && !fastOnly) {
         await invoke("set_enabled",{enabled:true});
         const mainWindow = await native("app_window");
         await native("app_close",{window:mainWindow});
@@ -993,7 +1266,7 @@ try {
     }
     await invoke("save_workspaces",{store:previousStore});
     } else {
-        skipped.push(hookOnly ? "General native checks omitted by --hook-only" : quickOnly ? "General native checks omitted by --quick-only" : "General native checks omitted by --firefox-only");
+        skipped.push(fastOnly ? "General native checks omitted by --fast-only" : hookOnly ? "General native checks omitted by --hook-only" : quickOnly ? "General native checks omitted by --quick-only" : "General native checks omitted by --firefox-only");
     }
     if (runFirefox) {
         await testFirefox({output,marker,native,invoke,evaluate,wait,click,screenshot,until,checks,report,profileLock:firefoxProfileLock});
@@ -1052,6 +1325,7 @@ try {
     if (socket) socket.close();
     if (second?.exitCode === null) {spawnSync("taskkill.exe",["/PID",String(second.pid),"/T","/F"],{windowsHide:true,stdio:"ignore"});await exit(second,10000).catch(()=>{});}
     if (app?.exitCode === null) {spawnSync("taskkill.exe",["/PID",String(app.pid),"/T","/F"],{windowsHide:true,stdio:"ignore"});await exit(app,10000).catch(()=>{});}
+    if (peerHelper?.exitCode === null) {peerHelper.stdin.end(); await exit(peerHelper,3000).catch(()=>peerHelper.kill());}
     if (helper?.exitCode === null) {
         if (native) {
             try {await native("reserve",{key:0x81});await native("release",{key:0x81});checks.push("process exit releases the native pause key");}
