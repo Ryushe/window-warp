@@ -7,8 +7,8 @@
 - **Intended integration target:** `main` (remote tip and integration direction still need reconciliation)
 - **Last updated:** 2026-10-28
 - **Owning feature branch/ref:** `codex/desktop-shortcut-ux`
-- **Latest immutable recovery checkpoint:** `298fd63`
-- **Feature implementation commit(s):** `10f5479`; unverified hook investigations `dd8f56c` and `298fd63`
+- **Latest immutable recovery checkpoint:** `11168df`
+- **Feature implementation commit(s):** `10f5479`; unverified hook investigations `dd8f56c` and `298fd63`; popup follow-up `11168df`
 - **Inspiration / canonical references:** user-requested keyboard-first popup and cross-platform window-name discovery; `desktop/HOOK-HANDOFF.md`
 
 ## Intent and implemented contract
@@ -183,8 +183,8 @@ Do not integrate or activate the candidate until these checks pass.
 ## Interruption / resume handoff
 
 - **Owning feature branch/ref:** `codex/desktop-shortcut-ux`
-- **Latest immutable recovery checkpoint:** `298fd63`
-- **Feature implementation commit(s):** `10f5479`; unverified hook investigations `dd8f56c` and `298fd63`
+- **Latest immutable recovery checkpoint:** `11168df`
+- **Feature implementation commit(s):** `10f5479`; unverified hook investigations `dd8f56c` and `298fd63`; popup follow-up `11168df`
 - **Exact resume point:** investigate the failing cross-process focus and
   `--hook-only` coexistence fixtures, then run the remaining physical and native
   acceptance checks above before integration or activation.
