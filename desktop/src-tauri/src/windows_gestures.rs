@@ -17,10 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter};
-use windows_sys::Win32::{
-    Foundation::POINT,
-    UI::WindowsAndMessaging::GetCursorPos,
-};
+use windows_sys::Win32::{Foundation::POINT, UI::WindowsAndMessaging::GetCursorPos};
 
 struct Track {
     shortcut: String,
@@ -65,7 +62,9 @@ impl HookPress {
 
     pub(super) fn release(&self) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if self.is_released() { return; }
+        if self.is_released() {
+            return;
+        }
         if !self.is_cancelled() {
             state.release_action = Some(self.actions.commit());
         }
@@ -74,19 +73,29 @@ impl HookPress {
 
     fn commit_hold(&self) -> Option<ActionTicket> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if state.hold_committed || self.is_released() || self.is_cancelled() { return None; }
+        if state.hold_committed || self.is_released() || self.is_cancelled() {
+            return None;
+        }
         state.hold_committed = true;
         Some(self.actions.commit())
     }
 
     fn take_release_action(&self) -> Option<ActionTicket> {
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).release_action.take()
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .release_action
+            .take()
     }
 
     #[cfg(test)]
     pub(super) fn release_has_predecessor(&self) -> Option<bool> {
-        self.state.lock().unwrap_or_else(|error| error.into_inner())
-            .release_action.as_ref().map(ActionTicket::has_previous)
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .release_action
+            .as_ref()
+            .map(ActionTicket::has_previous)
     }
 
     pub(super) fn is_released(&self) -> bool {
@@ -122,10 +131,16 @@ impl Completion {
     fn wait_one(&self) -> Option<Arc<Completion>> {
         let mut done = self.done.lock().unwrap_or_else(|error| error.into_inner());
         while !*done {
-            done = self.changed.wait(done).unwrap_or_else(|error| error.into_inner());
+            done = self
+                .changed
+                .wait(done)
+                .unwrap_or_else(|error| error.into_inner());
         }
         drop(done);
-        self.previous.lock().unwrap_or_else(|error| error.into_inner()).clone()
+        self.previous
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
     }
 
     fn wait(&self) {
@@ -140,7 +155,10 @@ impl Completion {
     fn settled(&self) -> bool {
         // Called by the hook: never wait for a worker that owns either lock.
         self.done.try_lock().is_ok_and(|done| *done)
-            && self.previous.try_lock().is_ok_and(|previous| previous.is_none())
+            && self
+                .previous
+                .try_lock()
+                .is_ok_and(|previous| previous.is_none())
     }
 }
 
@@ -148,7 +166,11 @@ struct CompletionGuard(Arc<Completion>);
 
 impl Drop for CompletionGuard {
     fn drop(&mut self) {
-        let mut done = self.0.done.lock().unwrap_or_else(|error| error.into_inner());
+        let mut done = self
+            .0
+            .done
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         *done = true;
         self.0.changed.notify_all();
     }
@@ -170,26 +192,42 @@ impl ActionSequencer {
         let previous = previous.filter(|previous| !previous.settled());
         let completion = Arc::new(Completion::new(previous));
         *last = Some(completion.clone());
-        ActionTicket { _completion: CompletionGuard(completion) }
+        ActionTicket {
+            _completion: CompletionGuard(completion),
+        }
     }
 }
 
 impl ActionTicket {
     fn wait_previous(&self) {
-        let previous = self._completion.0.previous.lock()
-            .unwrap_or_else(|error| error.into_inner()).clone();
+        let previous = self
+            ._completion
+            .0
+            .previous
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
         if let Some(previous) = previous {
             previous.wait();
             // The predecessor chain has completed; retaining it would grow a
             // long-lived app's state with every shortcut.
-            *self._completion.0.previous.lock()
+            *self
+                ._completion
+                .0
+                .previous
+                .lock()
                 .unwrap_or_else(|error| error.into_inner()) = None;
         }
     }
 
     #[cfg(test)]
     fn has_previous(&self) -> bool {
-        self._completion.0.previous.lock().unwrap_or_else(|error| error.into_inner()).is_some()
+        self._completion
+            .0
+            .previous
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_some()
     }
 }
 
@@ -343,7 +381,9 @@ pub(super) fn press_with_hook(
     } else {
         let mut point = POINT::default();
         if unsafe { GetCursorPos(&mut point) } == 0 {
-            return Err(super::error("Cannot read the pointer position for the app shortcut"));
+            return Err(super::error(
+                "Cannot read the pointer position for the app shortcut",
+            ));
         }
         point
     };
@@ -367,10 +407,14 @@ pub(super) fn press_with_hook(
                 .name("app-shortcut-tap".into())
                 .spawn(move || {
                     let ticket = dispatch.take_release_action();
-                    if let Some(ticket) = ticket.as_ref() { ticket.wait_previous(); }
-                    if let Some(Err(message)) = run_unless_cancelled(&dispatch.cancelled, || unsafe {
-                        super::execute_hook_pull(&binding, &settings)
-                    }) {
+                    if let Some(ticket) = ticket.as_ref() {
+                        ticket.wait_previous();
+                    }
+                    if let Some(Err(message)) =
+                        run_unless_cancelled(&dispatch.cancelled, || unsafe {
+                            super::execute_hook_pull(&binding, &settings)
+                        })
+                    {
                         let _ = app.emit("warp-error", message);
                     }
                 })
@@ -391,12 +435,15 @@ pub(super) fn press_with_hook(
         || Arc::new(AtomicBool::new(false)),
         |press| press.cancelled.clone(),
     );
-    sessions.current.insert(id, Track {
-        shortcut: binding.shortcut.clone(),
-        released: released.clone(),
-        cancelled: cancelled.clone(),
-        hook_press: tracked_by_hook,
-    });
+    sessions.current.insert(
+        id,
+        Track {
+            shortcut: binding.shortcut.clone(),
+            released: released.clone(),
+            cancelled: cancelled.clone(),
+            hook_press: tracked_by_hook,
+        },
+    );
     let (app, binding, settings) = (app.clone(), binding.clone(), settings.clone());
     let result = std::thread::Builder::new()
         .name("app-shortcut-hold".into())
@@ -415,14 +462,23 @@ pub(super) fn press_with_hook(
                         released.store(true, Ordering::SeqCst);
                     }
                     let ticket = hook_press.as_ref().and_then(HookPress::take_release_action);
-                    if let Some(ticket) = ticket.as_ref() { ticket.wait_previous(); }
-                    finish(&app, id, &binding, &settings, held, picker.take(), tracked_by_hook, &cancelled);
+                    if let Some(ticket) = ticket.as_ref() {
+                        ticket.wait_previous();
+                    }
+                    finish(
+                        &app,
+                        id,
+                        &binding,
+                        &settings,
+                        held,
+                        picker.take(),
+                        tracked_by_hook,
+                        &cancelled,
+                    );
                     break;
                 }
                 if !held {
-                    if let Some(Action::Hold) =
-                        timing.advance(started.elapsed(), true)
-                    {
+                    if let Some(Action::Hold) = timing.advance(started.elapsed(), true) {
                         // A release or pause may have arrived after the loop's
                         // first check but before the hold threshold fired.
                         if !can_begin_hold(&cancelled, &released) {
@@ -433,16 +489,24 @@ pub(super) fn press_with_hook(
                                 Some(ticket) => Some(ticket),
                                 None => continue,
                             }
-                        } else { None };
+                        } else {
+                            None
+                        };
                         // The hold has crossed its threshold while the chord
                         // was down. A release while waiting for an earlier
                         // action must not turn this gesture into a tap.
                         held = true;
-                        if let Some(ticket) = ticket.as_ref() { ticket.wait_previous(); }
+                        if let Some(ticket) = ticket.as_ref() {
+                            ticket.wait_previous();
+                        }
                         // Tile holds remain valid after release. A radial that
                         // could not open until after release has no selection
                         // to apply, so do not display it late or run a tap.
-                        if !can_run_committed_hold(settings.hold_mode == "radial", &cancelled, &released) {
+                        if !can_run_committed_hold(
+                            settings.hold_mode == "radial",
+                            &cancelled,
+                            &released,
+                        ) {
                             continue;
                         }
                         if settings.hold_mode == "radial" {
@@ -450,15 +514,20 @@ pub(super) fn press_with_hook(
                                 crate::radial::Picker::open(
                                     &app,
                                     &binding,
-                                    crate::radial::Point { x: point.x, y: point.y },
+                                    crate::radial::Point {
+                                        x: point.x,
+                                        y: point.y,
+                                    },
                                 )
                             }) {
                                 None => break,
                                 Some(Ok(Some(opened))) => picker = Some(opened),
                                 Some(Ok(None)) => {
-                                    if let Some(Err(message)) = run_unless_cancelled(&cancelled, || unsafe {
-                                        super::pull_app(&binding, &settings, Some(point))
-                                    }) {
+                                    if let Some(Err(message)) =
+                                        run_unless_cancelled(&cancelled, || unsafe {
+                                            super::pull_app(&binding, &settings, Some(point))
+                                        })
+                                    {
                                         let _ = app.emit("warp-error", message);
                                     }
                                 }
@@ -466,9 +535,11 @@ pub(super) fn press_with_hook(
                                     let _ = app.emit("warp-error", message);
                                 }
                             }
-                        } else if let Some(Err(message)) = run_unless_cancelled(&cancelled, || unsafe {
-                            super::pull_app(&binding, &settings, Some(point))
-                        }) {
+                        } else if let Some(Err(message)) =
+                            run_unless_cancelled(&cancelled, || unsafe {
+                                super::pull_app(&binding, &settings, Some(point))
+                            })
+                        {
                             let _ = app.emit("warp-error", message);
                         }
                     }
@@ -504,16 +575,20 @@ fn finish(
     }
     if held {
         if let Some(picker) = picker {
-            if let Some(Err(message)) = run_unless_cancelled(cancelled, || picker.release(binding, settings)) {
+            if let Some(Err(message)) =
+                run_unless_cancelled(cancelled, || picker.release(binding, settings))
+            {
                 let _ = app.emit("warp-error", message);
             }
         }
         return;
     }
-    let result = run_unless_cancelled(cancelled, || if tracked_by_hook {
-        unsafe { super::execute_hook_pull(binding, settings) }
-    } else {
-        unsafe { super::execute(binding, settings) }
+    let result = run_unless_cancelled(cancelled, || {
+        if tracked_by_hook {
+            unsafe { super::execute_hook_pull(binding, settings) }
+        } else {
+            unsafe { super::execute(binding, settings) }
+        }
     });
     if let Some(Err(message)) = result {
         let _ = app.emit("warp-error", message);
@@ -523,10 +598,15 @@ fn finish(
 /// The hook calls this on every key-up, after it has forgotten that key.
 pub(super) fn note_release() {
     let Some(tracks) = SESSIONS.lock().ok().map(|sessions| {
-        sessions.current.values().filter(|track| !track.hook_press)
+        sessions
+            .current
+            .values()
+            .filter(|track| !track.hook_press)
             .map(|track| (track.shortcut.clone(), track.released.clone()))
             .collect::<Vec<_>>()
-    }) else { return; };
+    }) else {
+        return;
+    };
     for (shortcut, released) in tracks {
         if Chord::parse(&shortcut).is_ok_and(|chord| !chord.letter_down()) {
             released.store(true, Ordering::SeqCst);
@@ -557,7 +637,12 @@ mod tests {
         assert!(released_before_dispatch(Some(&first), || true));
         assert!(!released_before_dispatch(Some(&second), || false));
         assert!(first.started.elapsed() >= Duration::from_millis(500));
-        let previous = Track { shortcut: "Super+D".into(), released: first.released.clone(), cancelled: first.cancelled.clone(), hook_press: true };
+        let previous = Track {
+            shortcut: "Super+D".into(),
+            released: first.released.clone(),
+            cancelled: first.cancelled.clone(),
+            hook_press: true,
+        };
         assert!(!blocks_press(&previous, true, Some(&second), || true));
         second.release();
         assert!(released_before_dispatch(Some(&second), || true));
@@ -568,7 +653,12 @@ mod tests {
         let actions = Arc::new(ActionSequencer::default());
         let press = HookPress::new(actions.clone());
         let other = HookPress::new(actions);
-        let current = Track { shortcut: "Super+D".into(), released: press.released.clone(), cancelled: press.cancelled.clone(), hook_press: true };
+        let current = Track {
+            shortcut: "Super+D".into(),
+            released: press.released.clone(),
+            cancelled: press.cancelled.clone(),
+            hook_press: true,
+        };
         assert!(blocks_press(&current, true, Some(&press), || false));
         assert!(!blocks_press(&current, true, Some(&other), || true));
     }
@@ -580,11 +670,16 @@ mod tests {
         let tap_b = HookPress::new(actions);
         tap_b.release();
         let b_action = tap_b.take_release_action().unwrap();
-        assert!(!b_action.has_previous(), "a merely held key must not queue an action");
+        assert!(
+            !b_action.has_previous(),
+            "a merely held key must not queue an action"
+        );
         b_action.wait_previous();
         assert!(!held_a.is_released());
         drop(b_action);
-        let a_action = held_a.commit_hold().expect("B's tap must not cancel A's hold");
+        let a_action = held_a
+            .commit_hold()
+            .expect("B's tap must not cancel A's hold");
         a_action.wait_previous();
         assert!(!held_a.is_cancelled());
     }
@@ -605,7 +700,10 @@ mod tests {
         });
         assert!(received.recv_timeout(Duration::from_millis(50)).is_err());
         drop(first_action);
-        assert_eq!(received.recv_timeout(Duration::from_secs(2)).unwrap(), "second");
+        assert_eq!(
+            received.recv_timeout(Duration::from_secs(2)).unwrap(),
+            "second"
+        );
         worker.join().unwrap();
     }
 
@@ -617,7 +715,10 @@ mod tests {
         drop(middle);
         let last = actions.commit();
         let (started, received) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || { last.wait_previous(); started.send(()).unwrap(); });
+        let worker = std::thread::spawn(move || {
+            last.wait_previous();
+            started.send(()).unwrap();
+        });
         assert!(received.recv_timeout(Duration::from_millis(50)).is_err());
         drop(first);
         received.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -636,7 +737,10 @@ mod tests {
         let press = HookPress::new(Arc::new(ActionSequencer::default()));
         let mut timing = Press::new(100, true);
         press.release();
-        assert_eq!(timing.advance(Duration::from_millis(150), true), Some(Action::Hold));
+        assert_eq!(
+            timing.advance(Duration::from_millis(150), true),
+            Some(Action::Hold)
+        );
         assert!(!can_begin_hold(&press.cancelled, &press.released));
         assert!(press.commit_hold().is_none());
         assert!(released_before_dispatch(Some(&press), || true));
@@ -653,21 +757,38 @@ mod tests {
             let actions = Arc::new(ActionSequencer::default());
             let earlier = actions.commit();
             let press = HookPress::new(actions);
-            let hold = press.commit_hold().expect("hold crosses threshold before release");
+            let hold = press
+                .commit_hold()
+                .expect("hold crosses threshold before release");
             let worker_press = press.clone();
             let (ready, seen_ready) = std::sync::mpsc::channel();
             let (result, observed) = std::sync::mpsc::channel();
             let worker = std::thread::spawn(move || {
                 ready.send(()).unwrap();
                 hold.wait_previous();
-                result.send(can_run_committed_hold(radial, &worker_press.cancelled, &worker_press.released)).unwrap();
+                result
+                    .send(can_run_committed_hold(
+                        radial,
+                        &worker_press.cancelled,
+                        &worker_press.released,
+                    ))
+                    .unwrap();
             });
             seen_ready.recv_timeout(Duration::from_secs(2)).unwrap();
-            assert!(observed.recv_timeout(Duration::from_millis(50)).is_err(), "hold waits for earlier action");
+            assert!(
+                observed.recv_timeout(Duration::from_millis(50)).is_err(),
+                "hold waits for earlier action"
+            );
             press.release();
-            if cancelled { press.cancelled.store(true, Ordering::SeqCst); }
+            if cancelled {
+                press.cancelled.store(true, Ordering::SeqCst);
+            }
             drop(earlier);
-            assert_eq!(observed.recv_timeout(Duration::from_secs(2)).unwrap(), should_run, "radial={radial}, cancelled={cancelled}");
+            assert_eq!(
+                observed.recv_timeout(Duration::from_secs(2)).unwrap(),
+                should_run,
+                "radial={radial}, cancelled={cancelled}"
+            );
             worker.join().unwrap();
         }
     }
@@ -683,7 +804,9 @@ mod tests {
             assert!(!worker_cancelled.load(Ordering::SeqCst));
             ready.send(()).unwrap();
             wait_resume.recv().unwrap();
-            result.send(run_unless_cancelled(&worker_cancelled, || "action ran")).unwrap();
+            result
+                .send(run_unless_cancelled(&worker_cancelled, || "action ran"))
+                .unwrap();
         });
         seen_ready.recv_timeout(Duration::from_secs(2)).unwrap();
         cancelled.store(true, Ordering::SeqCst);

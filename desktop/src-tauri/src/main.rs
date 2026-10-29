@@ -47,12 +47,21 @@ static QUICK_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 static QUICK_FOCUS_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn advance_quick_focus_epoch() -> u64 {
-    QUICK_FOCUS_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst).wrapping_add(1)
+    QUICK_FOCUS_EPOCH
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        .wrapping_add(1)
 }
 
-fn restore_after_failed_quick_hide(open: &std::sync::atomic::AtomicBool, expected: u64, current: u64) -> bool {
+fn restore_after_failed_quick_hide(
+    open: &std::sync::atomic::AtomicBool,
+    expected: u64,
+    current: u64,
+) -> bool {
     use std::sync::atomic::Ordering;
-    expected == current && open.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+    expected == current
+        && open
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
 }
 
 #[cfg(any(windows, test))]
@@ -72,23 +81,34 @@ fn watch_unfocused_quick_click(window: tauri::Window, epoch: u64) {
     use std::sync::atomic::Ordering;
     std::thread::spawn(move || {
         loop {
-            let open = window.app_handle().state::<Runtime>().quick_open.load(Ordering::SeqCst);
+            let open = window
+                .app_handle()
+                .state::<Runtime>()
+                .quick_open
+                .load(Ordering::SeqCst);
             let current = QUICK_FOCUS_EPOCH.load(Ordering::SeqCst);
             if !quick_watch_current(epoch, current, open, window.is_focused().unwrap_or(true)) {
                 break;
             }
             if platform::mouse_down() {
-                let outside = match (window.outer_position(), window.outer_size(), platform::pointer(window.app_handle())) {
+                let outside = match (
+                    window.outer_position(),
+                    window.outer_size(),
+                    platform::pointer(window.app_handle()),
+                ) {
                     (Ok(position), Ok(size), Ok(point)) => {
                         let (x, y) = (i64::from(point.x), i64::from(point.y));
-                        x < i64::from(position.x) || y < i64::from(position.y)
+                        x < i64::from(position.x)
+                            || y < i64::from(position.y)
                             || x >= i64::from(position.x) + i64::from(size.width)
                             || y >= i64::from(position.y) + i64::from(size.height)
                     }
                     _ => false,
                 };
-                if outside && QUICK_FOCUS_EPOCH.load(Ordering::SeqCst) == epoch
-                    && QUICK_ARMED.swap(false, Ordering::SeqCst) {
+                if outside
+                    && QUICK_FOCUS_EPOCH.load(Ordering::SeqCst) == epoch
+                    && QUICK_ARMED.swap(false, Ordering::SeqCst)
+                {
                     let runtime = window.app_handle().state::<Runtime>();
                     let was_open = runtime.quick_open.swap(false, Ordering::SeqCst);
                     if was_open {
@@ -96,12 +116,16 @@ fn watch_unfocused_quick_click(window: tauri::Window, epoch: u64) {
                             let _ = window.app_handle().emit("quick-hidden", ());
                             platform::stop_recording();
                         } else if restore_after_failed_quick_hide(
-                            &runtime.quick_open, epoch, QUICK_FOCUS_EPOCH.load(Ordering::SeqCst),
+                            &runtime.quick_open,
+                            epoch,
+                            QUICK_FOCUS_EPOCH.load(Ordering::SeqCst),
                         ) {
                             QUICK_ARMED.store(true, Ordering::SeqCst);
                             // Keep watching an unfocused popup after a failed
                             // hide, but avoid retrying continuously on one press.
-                            while platform::mouse_down() && QUICK_FOCUS_EPOCH.load(Ordering::SeqCst) == epoch {
+                            while platform::mouse_down()
+                                && QUICK_FOCUS_EPOCH.load(Ordering::SeqCst) == epoch
+                            {
                                 std::thread::sleep(std::time::Duration::from_millis(10));
                             }
                             continue;
@@ -465,7 +489,9 @@ fn quick_edit(app: AppHandle) -> Option<serde_json::Value> {
 }
 #[tauri::command]
 fn quick_is_open(app: AppHandle) -> bool {
-    app.state::<Runtime>().quick_open.load(std::sync::atomic::Ordering::SeqCst)
+    app.state::<Runtime>()
+        .quick_open
+        .load(std::sync::atomic::Ordering::SeqCst)
 }
 #[tauri::command]
 fn show_editor(app: AppHandle, app_match: Option<String>) {
@@ -491,7 +517,11 @@ fn hide_quick(app: AppHandle) -> bool {
     }
     // An unsuccessful native hide leaves the popup visible. Restore its open
     // state unless a newer focus transition has already superseded this one.
-    restore_after_failed_quick_hide(&runtime.quick_open, epoch, QUICK_FOCUS_EPOCH.load(Ordering::SeqCst));
+    restore_after_failed_quick_hide(
+        &runtime.quick_open,
+        epoch,
+        QUICK_FOCUS_EPOCH.load(Ordering::SeqCst),
+    );
     false
 }
 #[tauri::command]
@@ -565,8 +595,7 @@ fn main() {
             } else {
                 tray
             };
-            tray
-                .tooltip("Window Warp")
+            tray.tooltip("Window Warp")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => show(app),
@@ -641,7 +670,9 @@ fn main() {
                         // not a click outside, and it must not drop recording.
                         #[cfg(windows)]
                         let typing_win = keep_quick_on_blur(
-                            platform::super_key_down(), platform::capture_active(), platform::mouse_down(),
+                            platform::super_key_down(),
+                            platform::capture_active(),
+                            platform::mouse_down(),
                         );
                         #[cfg(not(windows))]
                         let typing_win = false;
@@ -661,7 +692,9 @@ fn main() {
                                 #[cfg(target_os = "linux")]
                                 linux_override::set_recording(false);
                             } else if restore_after_failed_quick_hide(
-                                &runtime.quick_open, epoch, QUICK_FOCUS_EPOCH.load(Ordering::SeqCst),
+                                &runtime.quick_open,
+                                epoch,
+                                QUICK_FOCUS_EPOCH.load(Ordering::SeqCst),
                             ) {
                                 QUICK_ARMED.store(true, Ordering::SeqCst);
                                 #[cfg(windows)]

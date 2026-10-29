@@ -17,7 +17,7 @@ Download the installer for your system from the [latest release](https://github.
 sudo apt install "./Window Warp_<version>_amd64.deb"
 ```
 
-Replace `<version>` with the version in the downloaded filename. This package requires `kwin-common` version `4:5.27.11-0ubuntu3`. Other KWin versions, including Plasma 6, need a matching companion and package build. See the [KDE setup notes](desktop/README.md#kde-setup) for details.
+Run the command from the download directory and replace `<version>` with the version in the downloaded filename. `apt` installs the package and resolves its dependencies; `sudo dpkg -i` also works if the dependencies are already installed. This package requires `kwin-common` version `4:5.27.11-0ubuntu3`. Other KWin versions, including Plasma 6, need a matching companion and package build. See the [KDE setup notes](desktop/README.md#kde-setup) for details.
 
 ## What it does
 

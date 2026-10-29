@@ -388,7 +388,9 @@ pub fn capture_active() -> bool {
     reserved::capturing()
 }
 pub fn mouse_down() -> bool {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
+    };
     unsafe {
         [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
             .into_iter()
@@ -556,7 +558,13 @@ unsafe fn pull_app_target(
     previous: Option<&crate::workspaces::WindowInfo>,
     ordered_focus: bool,
 ) -> Result<(), String> {
-    let focus_target = |window| if ordered_focus { focus_ordered(window) } else { focus(window) };
+    let focus_target = |window| {
+        if ordered_focus {
+            focus_ordered(window)
+        } else {
+            focus(window)
+        }
+    };
     let active = previous
         .and_then(|w| {
             let hwnd = w.id.parse::<usize>().ok()? as HWND;
@@ -1061,14 +1069,27 @@ mod tests {
     #[test]
     fn foreground_accepts_owned_modal_but_not_an_unrelated_or_sibling_window() {
         // 10 owns 20, and 20 owns 30 and 40. A modal can itself own a modal.
-        let owner = |window| match window { 20 => 10, 30 | 40 => 20, _ => 0 };
+        let owner = |window| match window {
+            20 => 10,
+            30 | 40 => 20,
+            _ => 0,
+        };
         assert!(foreground_owned_by(10, 10, owner));
         assert!(foreground_owned_by(10, 30, owner));
         assert!(foreground_owned_by(20, 30, owner));
-        assert!(!foreground_owned_by(30, 40, owner), "siblings do not count as the requested window");
-        assert!(!foreground_owned_by(10, 50, owner), "an unrelated same-process window does not count");
+        assert!(
+            !foreground_owned_by(30, 40, owner),
+            "siblings do not count as the requested window"
+        );
+        assert!(
+            !foreground_owned_by(10, 50, owner),
+            "an unrelated same-process window does not count"
+        );
         assert!(!foreground_owned_by(10, 0, owner));
-        assert!(!foreground_owned_by(10, 20, |_| 20), "a cyclic owner chain terminates");
+        assert!(
+            !foreground_owned_by(10, 20, |_| 20),
+            "a cyclic owner chain terminates"
+        );
     }
 
     struct OwnedTerminals(Vec<crate::workspaces::WindowInfo>);

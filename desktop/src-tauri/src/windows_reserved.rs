@@ -350,24 +350,31 @@ fn remember_gesture(slot: &mut Session, vk: u32, required: Mods) -> super::gestu
         .retain(|item| item.strong_count() != 0);
     slot.gesture_cancellations.push(press.cancellation());
     slot.gesture_sequence = slot.gesture_sequence.wrapping_add(1);
-    slot.gestures.insert(vk, GestureDown {
-        press: press.clone(),
-        required,
-        sequence: slot.gesture_sequence,
-    });
+    slot.gestures.insert(
+        vk,
+        GestureDown {
+            press: press.clone(),
+            required,
+            sequence: slot.gesture_sequence,
+        },
+    );
     press
 }
 
 fn release_gestures_for_key_up(slot: &mut Session, vk: u32) {
     let held = mods_from(&slot.down);
-    let mut releasing: Vec<_> = slot.gestures.iter().filter_map(|(key, gesture)| {
-        let required = gesture.required;
-        let modifier_released = (required.ctrl && !held.ctrl)
-            || (required.alt && !held.alt)
-            || (required.shift && !held.shift)
-            || (required.super_key && !held.super_key);
-        (*key == vk || modifier_released).then_some((gesture.sequence, *key))
-    }).collect();
+    let mut releasing: Vec<_> = slot
+        .gestures
+        .iter()
+        .filter_map(|(key, gesture)| {
+            let required = gesture.required;
+            let modifier_released = (required.ctrl && !held.ctrl)
+                || (required.alt && !held.alt)
+                || (required.shift && !held.shift)
+                || (required.super_key && !held.super_key);
+            (*key == vk || modifier_released).then_some((gesture.sequence, *key))
+        })
+        .collect();
     releasing.sort_unstable();
     for (_, key) in releasing {
         if let Some(gesture) = slot.gestures.remove(&key) {
@@ -529,23 +536,16 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
     }
 }
 
-fn dispatch_hit(
-    app: Option<AppHandle>,
-    hit: Armed,
-    press: Option<super::gestures::HookPress>,
-) {
+fn dispatch_hit(app: Option<AppHandle>, hit: Armed, press: Option<super::gestures::HookPress>) {
     let Some(app) = app else {
         return;
     };
     let _ = app.clone().run_on_main_thread(move || {
         if !crate::retile::fire(&hit.binding.shortcut) {
             if let Some(press) = press {
-                if let Err(message) = super::gestures::press_with_hook(
-                    &app,
-                    &hit.binding,
-                    &hit.settings,
-                    Some(press),
-                ) {
+                if let Err(message) =
+                    super::gestures::press_with_hook(&app, &hit.binding, &hit.settings, Some(press))
+                {
                     let _ = app.emit("warp-error", message);
                 }
             } else {
@@ -557,7 +557,9 @@ fn dispatch_hit(
 
 fn open_editor(slot: &Session) -> Option<&Armed> {
     match &slot.job {
-        Job::Active(armed) => armed.iter().find(|item| item.binding.action == "open-editor"),
+        Job::Active(armed) => armed
+            .iter()
+            .find(|item| item.binding.action == "open-editor"),
         _ => None,
     }
 }
@@ -581,7 +583,11 @@ fn is_chord_modifier(vk: u32) -> bool {
 }
 
 fn update_key_state(down: &mut HashSet<u32>, vk: u32, up: bool) -> bool {
-    if up { down.remove(&vk) } else { !down.insert(vk) }
+    if up {
+        down.remove(&vk)
+    } else {
+        !down.insert(vk)
+    }
 }
 
 fn key_is_down(down: &HashSet<u32>, vk: u32) -> bool {
@@ -732,11 +738,17 @@ mod tests {
     fn only_our_injected_menu_mask_is_ignored() {
         let mut event: KBDLLHOOKSTRUCT = unsafe { std::mem::zeroed() };
         event.dwExtraInfo = MENU_MASK_TAG;
-        assert!(!is_menu_mask(&event), "a physical event must still be tracked");
+        assert!(
+            !is_menu_mask(&event),
+            "a physical event must still be tracked"
+        );
         event.flags = LLKHF_INJECTED;
         assert!(is_menu_mask(&event));
         event.dwExtraInfo = 0;
-        assert!(!is_menu_mask(&event), "other injected events must still be tracked");
+        assert!(
+            !is_menu_mask(&event),
+            "other injected events must still be tracked"
+        );
     }
 
     #[test]
@@ -774,21 +786,34 @@ mod tests {
         assert!(update_key_state(&mut down, b'B' as u32, true));
         assert!(!update_key_state(&mut down, b'B' as u32, false));
         assert!(!update_key_state(&mut down, 0x5B, false));
-        assert!(!update_key_state(&mut down, 0x5C, false), "each Windows key has its own physical state");
+        assert!(
+            !update_key_state(&mut down, 0x5C, false),
+            "each Windows key has its own physical state"
+        );
     }
 
     #[test]
     fn pause_cancels_even_a_released_press_still_waiting_for_dispatch() {
         let mut slot = Session::default();
         let first = remember_gesture(&mut slot, b'D' as u32, Mods::none());
-        slot.gestures.remove(&(b'D' as u32)).unwrap().press.release();
+        slot.gestures
+            .remove(&(b'D' as u32))
+            .unwrap()
+            .press
+            .release();
         let second = remember_gesture(&mut slot, b'D' as u32, Mods::none());
         assert!(!first.is_cancelled());
         assert!(!second.is_cancelled());
         let old_actions = slot.actions.clone();
         cancel_gestures(&mut slot);
-        assert!(!Arc::ptr_eq(&old_actions, &slot.actions), "resume starts a fresh action queue");
-        assert!(first.is_cancelled(), "a queued tap must not fire after pause/resume");
+        assert!(
+            !Arc::ptr_eq(&old_actions, &slot.actions),
+            "resume starts a fresh action queue"
+        );
+        assert!(
+            first.is_cancelled(),
+            "a queued tap must not fire after pause/resume"
+        );
         assert!(second.is_cancelled(), "a held press must also be cancelled");
         assert!(slot.gestures.is_empty());
         let resumed = remember_gesture(&mut slot, b'D' as u32, Mods::none());
@@ -806,7 +831,10 @@ mod tests {
 
         slot.down.remove(&0x5B);
         release_gestures_for_key_up(&mut slot, 0x5B);
-        assert!(!win_only.is_released(), "the right Win key still satisfies Super");
+        assert!(
+            !win_only.is_released(),
+            "the right Win key still satisfies Super"
+        );
         assert!(!ctrl_win.is_released());
 
         slot.down.remove(&0xA2);
@@ -818,7 +846,10 @@ mod tests {
 
         slot.down.remove(&0x5C);
         release_gestures_for_key_up(&mut slot, 0x5C);
-        assert!(win_only.is_released(), "releasing the last Win key ends Win+D");
+        assert!(
+            win_only.is_released(),
+            "releasing the last Win key ends Win+D"
+        );
         assert!(slot.gestures.is_empty());
     }
 
@@ -829,7 +860,10 @@ mod tests {
         let press = remember_gesture(&mut slot, b'D' as u32, mods(false, false, false, true));
         slot.down.remove(&0xA4);
         release_gestures_for_key_up(&mut slot, 0xA4);
-        assert!(!press.is_released(), "an unrelated Alt release must not end Win+D");
+        assert!(
+            !press.is_released(),
+            "an unrelated Alt release must not end Win+D"
+        );
         slot.down.remove(&(b'D' as u32));
         release_gestures_for_key_up(&mut slot, b'D' as u32);
         assert!(press.is_released());
@@ -858,10 +892,16 @@ mod tests {
         assert!(mods.super_key);
         assert!(key_is_down(&down, 0x5B));
         assert!(key_is_down(&down, 0x5C));
-        assert_eq!(shortcut_from(u32::from(b'D'), mods).as_deref(), Some("Super+D"));
+        assert_eq!(
+            shortcut_from(u32::from(b'D'), mods).as_deref(),
+            Some("Super+D")
+        );
         assert!(!key_is_down(&down, 0x11));
         down.insert(0xA2);
-        assert!(key_is_down(&down, 0x11), "left Ctrl satisfies the generic Ctrl check");
+        assert!(
+            key_is_down(&down, 0x11),
+            "left Ctrl satisfies the generic Ctrl check"
+        );
         assert_eq!(
             shortcut_from(u32::from(b'D'), mods_from(&down)).as_deref(),
             Some("Ctrl+Super+D")

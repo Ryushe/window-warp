@@ -213,7 +213,11 @@ pub fn configure_pause(app: &AppHandle, config: &Config) -> Result<(), String> {
     }
     // Leave a desktop-owned pause key alone until Warp is actually enabled.
     if !crate::linux_override::borrowing() {
-        let keys: Vec<_> = pause.bindings.iter().map(|binding| binding.shortcut.clone()).collect();
+        let keys: Vec<_> = pause
+            .bindings
+            .iter()
+            .map(|binding| binding.shortcut.clone())
+            .collect();
         if crate::linux_override::others_own(&keys).unwrap_or(false) {
             return unload_script("window-warp-pause-session");
         }

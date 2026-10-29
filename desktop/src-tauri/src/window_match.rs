@@ -75,16 +75,22 @@ fn executable_matches(value: &str, window: &WindowInfo) -> bool {
 
 pub fn matches(binding: &Binding, window: &WindowInfo) -> bool {
     if let Some(selector) = &binding.windows_match {
-        if cfg!(windows) { return selector.matches(window); }
+        if cfg!(windows) {
+            return selector.matches(window);
+        }
     }
     let identifiers = if binding.windows_match.is_some() && !cfg!(windows) {
         binding.app_matches.iter().collect::<Vec<_>>()
     } else {
-        std::iter::once(&binding.app_match).chain(binding.app_matches.iter()).collect::<Vec<_>>()
+        std::iter::once(&binding.app_match)
+            .chain(binding.app_matches.iter())
+            .collect::<Vec<_>>()
     };
-    identifiers.into_iter().any(|id| window.app_id.eq_ignore_ascii_case(id)
-        || (!window.desktop_id.is_empty() && window.desktop_id.eq_ignore_ascii_case(id))
-        || (cfg!(windows) && executable_matches(id, window)))
+    identifiers.into_iter().any(|id| {
+        window.app_id.eq_ignore_ascii_case(id)
+            || (!window.desktop_id.is_empty() && window.desktop_id.eq_ignore_ascii_case(id))
+            || (cfg!(windows) && executable_matches(id, window))
+    })
 }
 
 #[cfg(test)]
@@ -170,7 +176,10 @@ mod tests {
     fn additional_identifiers_match_without_replacing_the_original() {
         let binding: Binding = serde_json::from_value(serde_json::json!({"label":"Editor","shortcut":"Ctrl+Alt+E","action":"pull-app","appMatch":"other.exe","appMatches":["Contoso!Editor"]})).unwrap();
         assert!(matches(&binding, &fixture()));
-        let other = WindowInfo { desktop_id: "unrelated".into(), ..fixture() };
+        let other = WindowInfo {
+            desktop_id: "unrelated".into(),
+            ..fixture()
+        };
         assert!(!matches(&binding, &other));
     }
     #[test]

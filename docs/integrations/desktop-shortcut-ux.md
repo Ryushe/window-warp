@@ -235,3 +235,30 @@ Do not integrate or activate the candidate until these checks pass.
   review the merge, verify both packages, then publish and verify the requested
   release and repository rename. Do not call the release verified while the red
   tests and KDE acceptance gaps recorded above remain unresolved.
+
+### Merge-candidate checkpoint
+
+- The branding checkpoint is `f170540` on `codex/desktop-shortcut-ux` in the
+  isolated review clone. `origin/main` at `bd6f203` is merged into this feature
+  candidate for review, not promoted to main. Its hook conflicts retain the
+  independently reviewed feature versions, formatted by rustfmt. The default
+  pause binding remains covered by the reassignment regression test.
+- Merged-tree validation: 160 JavaScript tests pass; Windows Rust has 111 passes
+  and six opt-in tests ignored, outside the sandbox; `cargo fmt --check` passes.
+  Current Windows fixture receipts: `WARP-NATIVE-bf90d9ec-e99d-452e-bc6e-7c3148da8cef`
+  (`--hook-only`, failed: observer misses events and second Win+B times out),
+  `WARP-NATIVE-310984dd-2383-4658-9323-185dfe00c302` (`--fast-only`, ten
+  single taps pass but four alternating sequences fail with focus denial), and
+  `WARP-NATIVE-a1b10b81-cee5-46c0-a03c-04353b2dc713` (`--quick-only`, eight
+  pass and a no-mouse click-away case skipped because focus was denied).
+- A fresh feature-tree KDE build passes 160 JavaScript tests, 92 Rust tests
+  with one ignored, and two private-compositor quick-popup checks. The preview
+  Debian package includes the new icon and companion for KWin
+  `4:5.27.11-0ubuntu3`; rebuild from the final merged tree before publication.
+- The user's live shortcuts were restored to active after the isolated Windows
+  tests. Current available GitHub credentials are read-only; push dry-run was
+  rejected, and release publication and repository rename need suitable access.
+- Next: investigate and resolve the two failing Windows fixture suites, rerun
+  native verification against the reconciled candidate, rebuild both installers
+  from the exact final revision, then obtain GitHub access for the requested
+  merge, `window-warp` repository rename, and 0.1.1 publication.

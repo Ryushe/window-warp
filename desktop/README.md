@@ -26,9 +26,9 @@ A standalone Tauri 2 application for Windows and **KDE Plasma 5.27 and 6**, with
 
 Normal launches turn shortcuts on. Settings can turn that off. A registered login launch uses `--startup` to enable saved shortcuts and hide the editor. Shortcut fields can be changed while shortcuts are on. A new configuration uses the AutoHotkey keys: Win+X/C move windows, Win+Ctrl+X/C also center the pointer, Win+R pulls the last window, Win+; pauses, Win+Z maximizes, and Win+Q closes. App keys match `window_manager_apps.ini`, including Win+D for Discord and Win+S for Firefox. Every key can be changed. Stop the AutoHotkey script before enabling these keys.
 
-New configurations also include **Win+B** to edit the current app's shortcut, **Win+O** to browse workspaces, and **Win+Y** to capture a workspace update for review. The main screen has **Start Window Warp when I sign in**; that launch enables saved shortcuts. Existing configurations can add these actions from the editor. Opening the current-app editor pauses window shortcuts and preserves existing drafts. Resume uses saved settings; unsaved edits remain in the editor.
+New configurations also include **Win+B** to edit the current app's shortcut, **Win+O** to browse workspaces, and **Win+Y** to capture a workspace update for review. The main screen has **Start Window Warp when I sign in**; that launch enables saved shortcuts. Existing configurations can add these actions from the editor. Opening the current-app editor preserves existing drafts. Unsaved edits remain in the full editor.
 
-For a more specific Windows app shortcut, enable **Use Windows matching criteria**. Every entered criterion must match. Title text uses case-sensitive contains matching, and window classes use case-sensitive equality, matching the original AHK configuration. Executable names, full paths and packaged IDs are case-insensitive. Process IDs and window IDs can change after restart. Imported `ahk_exe`, `ahk_class`, `ahk_pid`, `ahk_id`, title and active-window rules retain these criteria, including visible owned or untitled windows. Undefined AHK groups and ambiguous rules remain visible for manual review. Windows rules stay disabled on Linux until you turn off Windows matching and enter a KDE app identifier.
+For a more specific Windows app shortcut, enable **Use Windows matching criteria**. Every entered criterion must match. Title text uses case-sensitive contains matching, and window classes use case-sensitive equality, matching the original AHK configuration. Executable names, full paths and packaged IDs are case-insensitive. Process IDs and window IDs can change after restart. Imported `ahk_exe`, `ahk_class`, `ahk_pid`, `ahk_id`, title and active-window rules retain these criteria, including visible owned or untitled windows. Undefined AHK groups and ambiguous rules remain visible for manual review. On Linux, add a KDE app identifier to use the binding across platforms.
 
 Open **Workspaces → Capture current**, choose which windows to keep, and save a name. Capture creates a review draft. Each app has editable launch arguments and an option to require a new window. **Open workspace** reuses matching windows or launches missing apps, then restores placement.
 
@@ -46,8 +46,12 @@ apps**. On KDE, install the matching Debian package with:
 sudo apt install "./Window Warp_<version>_amd64.deb"
 ```
 
-Replace `<version>` with the version in the downloaded filename. The Debian package is for Ubuntu 24.04 with KWin
-`4:5.27.11-0ubuntu3`; other KWin versions need a matching companion build.
+Run the command from the download directory and replace `<version>` with the
+version in the downloaded filename. `apt` installs the package and resolves its
+dependencies; `sudo dpkg -i` also works when those dependencies are installed.
+The Debian package is for Ubuntu/Kubuntu 24.04 amd64, Plasma 5.27.11 on Wayland,
+with KWin `4:5.27.11-0ubuntu3`. Other KWin versions, including Plasma 6, need a
+matching companion and package build.
 
 - **Turn on:** open Window Warp and click **Enable shortcuts**, or choose
   **Enable shortcuts** from its tray menu.
