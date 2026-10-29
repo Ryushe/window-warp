@@ -90,6 +90,20 @@ def wait_for(source, timeout=15):
     raise AssertionError(f"Timed out: {source}; page: {evaluate('return document.body.innerText')}")
 
 
+def wait_for_reloaded(source, timeout=15):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if evaluate(source):
+                return
+        except RuntimeError as error:
+            # WebKit may briefly invalidate the frame while location.reload completes.
+            if 'no such frame' not in str(error) or 'unload event' not in str(error):
+                raise
+        time.sleep(0.2)
+    raise AssertionError(f"Timed out waiting for reloaded page: {source}")
+
+
 def click(selector):
     element = request("POST", f"/session/{session}/element", {"using": "css selector", "value": selector})
     element_id = element["element-6066-11e4-a52e-4f735466cecf"]
@@ -727,9 +741,19 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         invoke_shortcut("toggle-pause")
         wait_for("return document.querySelector('#status').textContent.includes('Paused')")
         script_deadline = time.monotonic() + 5
-        while time.monotonic() < script_deadline and (not kwin_loaded("window-warp-pause-session") or kwin_loaded()):
+        observed_script_states = []
+        while time.monotonic() < script_deadline:
+            pause_loaded = kwin_loaded("window-warp-pause-session")
+            main_loaded = kwin_loaded()
+            observed_script_states.append((pause_loaded, main_loaded))
+            if pause_loaded and not main_loaded:
+                break
             time.sleep(0.05)
-        assert kwin_loaded("window-warp-pause-session") and not kwin_loaded()
+        pause_loaded = kwin_loaded("window-warp-pause-session")
+        main_loaded = kwin_loaded()
+        if not (pause_loaded and not main_loaded):
+            print(json.dumps({"pauseScript": pause_loaded, "mainScript": main_loaded, "observed": observed_script_states, "status": invoke("get_status")}), flush=True)
+        assert pause_loaded and not main_loaded
         click("#toggle")
         wait_for("return document.querySelector('#status').classList.contains('active')")
         assert kwin_loaded(), "App reported active but no KWin script was loaded"
@@ -745,7 +769,9 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         assert json.loads(settings[0].read_text())["bindings"][0]["shortcut"] == "Ctrl+Alt+Shift+F13"
         # A conflicting key is reviewed in the UI, then saved explicitly.
         evaluate("const input=document.querySelectorAll('[data-field=shortcut]')[1]; input.value='shift+alt+control+F13'; input.dispatchEvent(new Event('input',{bubbles:true})); return true;")
-        click(".binding:nth-child(2) .binding-summary")
+        if not evaluate("return document.querySelector('.binding:nth-child(2)').classList.contains('is-open')"):
+            click(".binding:nth-child(2) .binding-summary")
+        wait_for("const row=document.querySelector('.binding:nth-child(2)'); const button=row.querySelector('.reassign'); return row.classList.contains('is-open') && !button.disabled && button.getClientRects().length > 0")
         evaluate("document.querySelector('.binding:nth-child(2) .reassign').scrollIntoView({block:'center'}); return true;")
         click(".binding:nth-child(2) .reassign")
         wait_for("return !document.querySelector('.binding:nth-child(2) .reassignment').hidden && !document.querySelector('.binding:nth-child(2) .confirm-reassignment').disabled")
@@ -1479,7 +1505,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                     assert not any(name.startswith(("window-warp-hold-", "window-warp-gesture-")) for name in after)
                     report["checks"].append("KDE native key ownership follows reassignment between actions without removing other shortcuts")
             evaluate("location.reload(); return true;")
-            wait_for(f"return document.querySelectorAll('.binding').length === {len(config['bindings'])} && !document.querySelector('#toggle').disabled")
+            wait_for_reloaded(f"return document.querySelectorAll('.binding').length === {len(config['bindings'])} && !document.querySelector('#toggle').disabled")
             click("#show-settings")
             evaluate("document.querySelector('#hold-enabled').scrollIntoView({block:'center'}); return true;")
             screenshot = request("GET", f"/session/{session}/screenshot")
