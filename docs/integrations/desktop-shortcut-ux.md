@@ -100,6 +100,12 @@ already-unfocused watcher path. The dialog screenshot was visually reviewed.
 The existing Win+B and cross-process focus/coexistence limitations below remain
 open and are not resolved by this popup work.
 
+KDE quick-popup E2E for `11168df` is deferred: Portafort's private compositor
+harness is available, but the checked host had no matching Linux build, Cargo,
+or WebKitWebDriver. The installed app predates this change. Run the isolated
+`--quick-gui` harness once those prerequisites are available; no live KDE
+session or system packages were changed during this check.
+
 For local use, the updated normal Windows build from `11168df` was started
 from `desktop/src-tauri/target/popup-runtime/window-warp.exe` with the user's
 regular settings; the previous native instance was stopped first. The UI showed
