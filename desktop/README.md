@@ -38,15 +38,15 @@ Firefox captures its profile, tab URLs, and selected tab from its last readable 
 
 ## Install, turn on/off, and uninstall
 
-On Windows, run `Window Warp_0.1.0_x64-setup.exe`. It installs for your Windows
+Download the appropriate installer from the [latest release](https://github.com/Ryushe/windows_warp/releases/latest). On Windows, run the x64 setup executable. It installs for your Windows
 account and adds Window Warp to the Start menu and **Settings → Apps → Installed
 apps**. On KDE, install the matching Debian package with:
 
 ```sh
-sudo apt install "./Window Warp_0.1.0_amd64.deb"
+sudo apt install "./Window Warp_<version>_amd64.deb"
 ```
 
-The current Debian package is for Ubuntu 24.04 with KWin
+Replace `<version>` with the version in the downloaded filename. The Debian package is for Ubuntu 24.04 with KWin
 `4:5.27.11-0ubuntu3`; other KWin versions need a matching companion build.
 
 - **Turn on:** open Window Warp and click **Enable shortcuts**, or choose
@@ -128,7 +128,7 @@ Manual acceptance on each OS: enable the app; push a floating window across two 
 - `src-tauri/src/app_actions.rs`: application control shortcuts and pending editor/workspace requests.
 - `src-tauri/src/radial.rs` and `ui/radial.*`: stable window candidates, shared angular selection, and the temporary picker overlay.
 - `src-tauri/src/config.rs`: versioned configuration, canonical shortcut syntax, validation.
-- `src-tauri/src/windows.rs`: Win32 window enumeration, positioning, focus, and global shortcut registration.
+- `src-tauri/src/windows.rs`: Win32 window enumeration, positioning, and focus; `windows_reserved.rs` owns the shared keyboard hook.
 - `src-tauri/src/linux.rs`: KWin session integration via qdbus, with arguments passed directly without a shell.
 - `src-tauri/src/linux_control.rs`: authenticated session-bus command queue with correlated replies and input cancellation.
 - `src-tauri/src/workspaces.rs`: workspace storage, matching, launch, restore, and cancellation.
@@ -143,7 +143,9 @@ Settings live in Tauri's per-user configuration directory under `com.windowwarp.
 
 For a new shortcut in the popup, press a key and Enter. Settings chooses the
 default modifier; the popup buttons can adjust it. If a key is already used,
-the popup offers to replace it and keeps the displaced binding disabled.
+choose **Replace** to take it, or **Replace and edit old** to assign the
+displaced action a new key immediately. Press the popup shortcut again to open
+the main editor, or click outside the popup to close it.
 
 Under Shortcuts, **Find open apps** compares open app identifiers with shortcut
 names and existing identifiers. Unambiguous matches are added to the draft;
@@ -167,8 +169,8 @@ The overlay is clamped to the work area containing the original pointer. Native
 pointer updates run only while a picker is visible. On KDE, KWin positions and
 focuses the overlay, including on Wayland. More than four labels use a compact
 layout to keep all eight readable without overlap. Native Windows and KDE fixtures verify selection on release, dead-zone
-cancellation and pause/resume while held. Rapid Escape cancellation on Windows
-has a known intermittent failure; see PARITY.md.
+cancellation and pause/resume while held. Windows tests also cover rapid Escape
+and focus-loss cancellation; see [PARITY.md](PARITY.md) for the evidence and remaining coverage.
 
 
 ## Importing the original INIs
@@ -191,20 +193,6 @@ Unsupported shared actions (including move-and-center), compound AHK match
 expressions and unrecognized key syntax remain visible with the original
 settings and an explanation. They are not silently converted. Full migration
 parity still depends on the remaining action and packaged-launch features.
-
-
-## Current preview artifacts (2026-10-25)
-
-The current feature-branch builds are available locally after validation:
-
-- Windows x64 NSIS: `src-tauri/target/release/bundle/nsis/Window Warp_0.1.0_x64-setup.exe`
-- Ubuntu 24.04 amd64 Debian package, requiring `kwin-common (= 4:5.27.11-0ubuntu3)`: `src-tauri/target/release/bundle/deb/Window Warp_0.1.0_amd64.deb`
-
-Their embedded executables and package metadata were inspected without installing
-them. The preview includes the recent terminal, Firefox, tiling and gesture
-changes. Tray handlers and graceful shutdown pass on Windows and Plasma5.27. Full parity,
-installer behavior and full Plasma6 application behavior remain under validation; see PARITY.md,
-including X11 gestures, physical-display/login coverage and installer execution.
 
 
 Terminal restoration checks fresh shell/profile/distribution identity while

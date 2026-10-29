@@ -1,6 +1,6 @@
 [package]
 name = "window-warp"
-version = "0.1.0"
+version = "0.1.1"
 description = "Window shortcuts for Windows and KDE Plasma"
 edition = "2021"
 rust-version = "1.90"

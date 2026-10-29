@@ -211,3 +211,27 @@ Do not integrate or activate the candidate until these checks pass.
 ## Decision record
 
 - 2026-10-28 — selected key-first popup and conservative open-window discovery.
+
+## Branding and release preparation, 2026-10-28
+
+- The user selected the ivory and cyan portal logo, requested a wide README
+  banner, a Window Warp repository name, and a Windows/KDE release.
+- Feature base: `6cd6da003b0896c11f7b7e125686ee5db6733b1e` on
+  `codex/desktop-shortcut-ux`. Intended stable target: `origin/main`, observed
+  at `bd6f2039e86e7a3cf22394b0d552156b2c38d7e1`. The histories diverge at
+  `d9f24c8`; a non-committing merge check reports conflicts in the two Windows
+  hook/gesture files, requiring review and retesting.
+- Branding changes update the packaged and tray icons, README banner and install
+  documentation. Version 0.1.1 is prepared because 0.1.0 is already published.
+- The Windows JavaScript checks and tests passed. Windows Rust tests passed 111
+  with six ignored outside the sandbox; sandboxed CIM and lock tests failed.
+  The 0.1.1 Windows NSIS installer built. A fresh KDE package build and the
+  pending native Windows and KDE acceptance checks are not yet release receipts.
+- The original checkout has inaccessible OneDrive Git objects. A complete branch
+  history was exported using a separate clone's remote objects and this branch's
+  local objects, then imported into the separate review clone. The original
+  working tree and active app remain intact.
+- Next: complete native input and popup verification, reconcile and independently
+  review the merge, verify both packages, then publish and verify the requested
+  release and repository rename. Do not call the release verified while the red
+  tests and KDE acceptance gaps recorded above remain unresolved.

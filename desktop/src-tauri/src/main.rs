@@ -559,21 +559,13 @@ fn main() {
             app.manage(pause.clone());
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &pause, &quit])?;
-            let mut rgba = vec![0u8; 32 * 32 * 4];
-            for y in 0..32 {
-                for x in 0..32 {
-                    let offset = (y * 32 + x) * 4;
-                    let mark = (6..14).contains(&x) || (18..26).contains(&x);
-                    let ink = mark && (7..25).contains(&y);
-                    rgba[offset..offset + 4].copy_from_slice(if ink {
-                        &[185, 241, 125, 255]
-                    } else {
-                        &[21, 31, 27, 255]
-                    });
-                }
-            }
-            TrayIconBuilder::new()
-                .icon(tauri::image::Image::new_owned(rgba, 32, 32))
+            let tray = TrayIconBuilder::new();
+            let tray = if let Some(icon) = app.default_window_icon() {
+                tray.icon(icon.clone())
+            } else {
+                tray
+            };
+            tray
                 .tooltip("Window Warp")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {

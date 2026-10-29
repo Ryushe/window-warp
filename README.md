@@ -1,4 +1,4 @@
-![Window Warp](src/banner.jpg)
+![Window Warp](src/banner-window-warp.png)
 
 # Window Warp
 
@@ -8,15 +8,16 @@ The app lives in [`desktop/`](desktop/README.md). It does not need AutoHotkey.
 
 ## Install
 
-Windows: run `Window Warp_0.1.0_x64-setup.exe` from the GitHub release. It installs for your account and adds a Start menu entry.
+Download the installer for your system from the [latest release](https://github.com/Ryushe/windows_warp/releases/latest).
 
-KDE Plasma 5.27 or 6, on Wayland:
+- **Windows:** run the x64 setup executable. It installs for your account and adds a Start menu entry.
+- **KDE Plasma:** the published Debian package targets Ubuntu/Kubuntu 24.04 amd64 with Plasma 5.27.11 on Wayland:
 
 ```sh
-sudo apt install "./Window Warp_0.1.0_amd64.deb"
+sudo apt install "./Window Warp_<version>_amd64.deb"
 ```
 
-The current Debian package targets Ubuntu 24.04 with a matching KWin build. Other KWin versions need a matching companion.
+Replace `<version>` with the version in the downloaded filename. This package requires `kwin-common` version `4:5.27.11-0ubuntu3`. Other KWin versions, including Plasma 6, need a matching companion and package build. See the [KDE setup notes](desktop/README.md#kde-setup) for details.
 
 ## What it does
 
@@ -27,7 +28,8 @@ The current Debian package targets Ubuntu 24.04 with a matching KWin build. Othe
 - Bring an app to the main monitor. If it is already there, switch back to the previous app or move it to the second monitor.
 - Hold an app shortcut to tile from the pointer, or to open a radial window picker.
 - Save workspaces, including window positions, Firefox tabs, and terminal sessions, then open them again.
-- Edit every shortcut. Record the key, then turn Super, Ctrl, Alt, and Shift on with buttons.
+- Edit shortcuts and resolve duplicate assignments. Record a key and adjust Super, Ctrl, Alt, and Shift with the modifier buttons.
+- Find identifiers for open apps, review missing or ambiguous matches, and save multiple identifiers for different systems.
 - Pause from the app, the tray, or a shortcut. Closing the window keeps Warp in the tray.
 
 ## Using it
@@ -40,7 +42,9 @@ Open Window Warp and turn shortcuts on, or use the tray menu. The editor has thr
 
 Themes are Warp, Dracula, Ink, Light, or a custom palette. Custom CSS is under Appearance.
 
-Win+B opens a small editor for the app you are in. Press the new key, then Enter.
+Win+B opens a small editor for the app you are in. Press a key and Enter to assign it using the default modifier from Settings; use the popup's buttons to change modifiers. If the key is already assigned, choose **Replace** to take it, or **Replace and edit old** to immediately give the displaced action a new key. Press Win+B again to open the full editor, or click outside the popup to close it.
+
+To adapt shortcuts between Windows and KDE, open the apps you want to match and choose **Find open apps** on the Shortcuts page. Review the results and save the draft. You can also enter additional app identifiers manually.
 
 ## Default shortcuts
 
@@ -56,7 +60,7 @@ Win+B opens a small editor for the app you are in. Press the new key, then Enter
 | Win+Z | Maximize or restore |
 | Win+Q | Close the window |
 
-New installs also include app shortcuts from the old AutoHotkey setup, such as Win+D for Discord and Win+S for Firefox. Every key can be changed.
+New installs also include app shortcuts from the old AutoHotkey setup, such as Win+D for Discord and Win+S for Firefox. Every key can be changed; desktop and other application shortcuts may need to be reassigned if they conflict.
 
 ## AutoHotkey
 
