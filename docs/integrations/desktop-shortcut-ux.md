@@ -256,12 +256,13 @@ Do not integrate or activate the candidate until these checks pass.
   Debian package includes the new icon and companion for KWin
   `4:5.27.11-0ubuntu3`; rebuild from the final merged tree before publication.
 - The user's live shortcuts were restored to active after the isolated Windows
-  tests. Current available GitHub credentials are read-only; push dry-run was
-  rejected, and release publication and repository rename need suitable access.
+  tests. Hoster's credentials lack write access; the user's Windows Git credential
+  manager was subsequently verified as `Ryushe` with repository admin and push.
+  GitHub repository `Ryushe/windows_warp` was renamed to `Ryushe/window-warp`.
 - Next: investigate and resolve the two failing Windows fixture suites, rerun
   native verification against the reconciled candidate, rebuild both installers
-  from the exact final revision, then obtain GitHub access for the requested
-  merge, `window-warp` repository rename, and 0.1.1 publication.
+  from the exact final revision, then complete the requested merge and 0.1.1
+  publication using the verified Windows credentials.
 
 ### Focus diagnostic follow-up
 
@@ -289,3 +290,12 @@ Do not integrate or activate the candidate until these checks pass.
   ruled out. User shortcuts were restored after cleanup. Diagnose upstream
   delivery/focus with the regular app fully absent before altering the hook;
   physical-input behavior and the root cause remain unresolved.
+
+- The earlier startup-only diagnostic left an owned test process behind, which
+  was identified and stopped. Its window overlapped the `93ba37c6` run; it was
+  not shown to have registered a hook. A subsequent clean run with the regular
+  app and orphan fully absent (`WARP-NATIVE-c1bd8330-9054-4a4c-b2f7-0a73bea94c29`)
+  still failed: the first Win+B opened the popup and the second tagged chord was
+  not seen before focus loss. The test fixture's unconditional `ShowWindow` and
+  focus fallback are a concrete hypothesis for that loss, not a proven cause.
+  The user's app was restarted and its shortcuts restored to active.

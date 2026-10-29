@@ -8,7 +8,7 @@ The app lives in [`desktop/`](desktop/README.md). It does not need AutoHotkey.
 
 ## Install
 
-Download the installer for your system from the [latest release](https://github.com/Ryushe/windows_warp/releases/latest).
+Download the installer for your system from the [latest release](https://github.com/Ryushe/window-warp/releases/latest).
 
 - **Windows:** run the x64 setup executable. It installs for your account and adds a Start menu entry.
 - **KDE Plasma:** the published Debian package targets Ubuntu/Kubuntu 24.04 amd64 with Plasma 5.27.11 on Wayland:

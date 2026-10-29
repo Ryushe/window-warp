@@ -38,7 +38,7 @@ Firefox captures its profile, tab URLs, and selected tab from its last readable 
 
 ## Install, turn on/off, and uninstall
 
-Download the appropriate installer from the [latest release](https://github.com/Ryushe/windows_warp/releases/latest). On Windows, run the x64 setup executable. It installs for your Windows
+Download the appropriate installer from the [latest release](https://github.com/Ryushe/window-warp/releases/latest). On Windows, run the x64 setup executable. It installs for your Windows
 account and adds Window Warp to the Start menu and **Settings → Apps → Installed
 apps**. On KDE, install the matching Debian package with:
 
