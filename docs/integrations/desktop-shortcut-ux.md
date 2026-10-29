@@ -277,3 +277,15 @@ Do not integrate or activate the candidate until these checks pass.
   diagnostic apps exited, and the user's live shortcuts were restored to active.
   Continue by diagnosing that startup failure and the foreground-policy result;
   do not count either diagnostic as a release pass.
+
+- A no-input retry established the startup timeout was sandbox loopback denial:
+  outside the sandbox the diagnostic WebView appeared successfully. The later
+  native-access hook trace (`WARP-NATIVE-93ba37c6-cdff-425d-bb1d-f0ee8c054a15`)
+  reproduced the failing fixture. The first Win+B reached the hook and opened
+  the popup; the second tagged Win/B events did not appear in the hook trace,
+  and the popup lost focus and closed. Missing F23 observer events likewise did
+  not appear in Warp's hook trace, though the registered F23 hotkey fired. The
+  user's paused app retained its pause-only hook, so another consumer cannot be
+  ruled out. User shortcuts were restored after cleanup. Diagnose upstream
+  delivery/focus with the regular app fully absent before altering the hook;
+  physical-input behavior and the root cause remain unresolved.
