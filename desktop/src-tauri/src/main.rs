@@ -43,6 +43,119 @@ use tauri::{
     AppHandle, Emitter, Manager,
 };
 
+static QUICK_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static QUICK_FOCUS_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn advance_quick_focus_epoch() -> u64 {
+    QUICK_FOCUS_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst).wrapping_add(1)
+}
+
+fn restore_after_failed_quick_hide(open: &std::sync::atomic::AtomicBool, expected: u64, current: u64) -> bool {
+    use std::sync::atomic::Ordering;
+    expected == current && open.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+}
+
+#[cfg(any(windows, test))]
+fn keep_quick_on_blur(super_down: bool, recording: bool, mouse_down: bool) -> bool {
+    // A click outside must win over an in-progress Win chord. Losing focus
+    // without a mouse click while recording can be Windows releasing Win.
+    !mouse_down && (super_down || recording)
+}
+
+#[cfg(any(windows, test))]
+fn quick_watch_current(expected: u64, current: u64, open: bool, focused: bool) -> bool {
+    expected == current && open && !focused
+}
+
+#[cfg(windows)]
+fn watch_unfocused_quick_click(window: tauri::Window, epoch: u64) {
+    use std::sync::atomic::Ordering;
+    std::thread::spawn(move || {
+        loop {
+            let open = window.app_handle().state::<Runtime>().quick_open.load(Ordering::SeqCst);
+            let current = QUICK_FOCUS_EPOCH.load(Ordering::SeqCst);
+            if !quick_watch_current(epoch, current, open, window.is_focused().unwrap_or(true)) {
+                break;
+            }
+            if platform::mouse_down() {
+                let outside = match (window.outer_position(), window.outer_size(), platform::pointer(window.app_handle())) {
+                    (Ok(position), Ok(size), Ok(point)) => {
+                        let (x, y) = (i64::from(point.x), i64::from(point.y));
+                        x < i64::from(position.x) || y < i64::from(position.y)
+                            || x >= i64::from(position.x) + i64::from(size.width)
+                            || y >= i64::from(position.y) + i64::from(size.height)
+                    }
+                    _ => false,
+                };
+                if outside && QUICK_FOCUS_EPOCH.load(Ordering::SeqCst) == epoch
+                    && QUICK_ARMED.swap(false, Ordering::SeqCst) {
+                    let runtime = window.app_handle().state::<Runtime>();
+                    let was_open = runtime.quick_open.swap(false, Ordering::SeqCst);
+                    if was_open {
+                        if window.hide().is_ok() {
+                            let _ = window.app_handle().emit("quick-hidden", ());
+                            platform::stop_recording();
+                        } else if restore_after_failed_quick_hide(
+                            &runtime.quick_open, epoch, QUICK_FOCUS_EPOCH.load(Ordering::SeqCst),
+                        ) {
+                            QUICK_ARMED.store(true, Ordering::SeqCst);
+                            // Keep watching an unfocused popup after a failed
+                            // hide, but avoid retrying continuously on one press.
+                            while platform::mouse_down() && QUICK_FOCUS_EPOCH.load(Ordering::SeqCst) == epoch {
+                                std::thread::sleep(std::time::Duration::from_millis(10));
+                            }
+                            continue;
+                        }
+                    }
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    });
+}
+
+#[cfg(test)]
+mod quick_focus_tests {
+    use super::{keep_quick_on_blur, quick_watch_current, restore_after_failed_quick_hide};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn mouse_click_dismisses_even_during_a_super_chord_or_recording() {
+        assert!(!keep_quick_on_blur(false, false, true));
+        assert!(!keep_quick_on_blur(true, false, true));
+        assert!(!keep_quick_on_blur(true, true, true));
+    }
+
+    #[test]
+    fn win_or_recording_focus_loss_without_click_is_preserved() {
+        assert!(keep_quick_on_blur(true, false, false));
+        assert!(keep_quick_on_blur(false, true, false));
+        assert!(!keep_quick_on_blur(false, false, false));
+    }
+
+    #[test]
+    fn newer_blur_has_its_own_watcher_even_if_an_older_one_is_exiting() {
+        let old_blur = 10;
+        let refocused = 11;
+        let new_blur = 12;
+        assert!(!quick_watch_current(old_blur, refocused, true, true));
+        assert!(!quick_watch_current(old_blur, new_blur, true, false));
+        assert!(quick_watch_current(new_blur, new_blur, true, false));
+        assert!(!quick_watch_current(new_blur, new_blur, false, false));
+    }
+
+    #[test]
+    fn failed_hide_restores_open_state_only_without_a_newer_focus_transition() {
+        let open = AtomicBool::new(false);
+        assert!(restore_after_failed_quick_hide(&open, 10, 10));
+        assert!(open.load(Ordering::SeqCst));
+        open.store(false, Ordering::SeqCst);
+        assert!(!restore_after_failed_quick_hide(&open, 10, 11));
+        assert!(!open.load(Ordering::SeqCst));
+    }
+}
+
 #[derive(Default)]
 struct Runtime {
     enabled: Mutex<bool>,
@@ -351,6 +464,10 @@ fn quick_edit(app: AppHandle) -> Option<serde_json::Value> {
         .and_then(|edit| edit.clone())
 }
 #[tauri::command]
+fn quick_is_open(app: AppHandle) -> bool {
+    app.state::<Runtime>().quick_open.load(std::sync::atomic::Ordering::SeqCst)
+}
+#[tauri::command]
 fn show_editor(app: AppHandle, app_match: Option<String>) {
     show(&app);
     if let Some(app_match) = app_match.filter(|name| !name.is_empty()) {
@@ -358,13 +475,24 @@ fn show_editor(app: AppHandle, app_match: Option<String>) {
     }
 }
 #[tauri::command]
-fn hide_quick(app: AppHandle) {
-    app.state::<Runtime>()
-        .quick_open
-        .store(false, std::sync::atomic::Ordering::SeqCst);
-    if let Some(window) = app.get_webview_window("quick") {
-        let _ = window.hide();
+fn hide_quick(app: AppHandle) -> bool {
+    use std::sync::atomic::Ordering;
+    let runtime = app.state::<Runtime>();
+    let epoch = advance_quick_focus_epoch();
+    let was_open = runtime.quick_open.swap(false, Ordering::SeqCst);
+    if !was_open {
+        return false;
     }
+    let Some(window) = app.get_webview_window("quick") else {
+        return false;
+    };
+    if window.hide().is_ok() {
+        return true;
+    }
+    // An unsuccessful native hide leaves the popup visible. Restore its open
+    // state unless a newer focus transition has already superseded this one.
+    restore_after_failed_quick_hide(&runtime.quick_open, epoch, QUICK_FOCUS_EPOCH.load(Ordering::SeqCst));
+    false
 }
 #[tauri::command]
 fn focus_captured(app: AppHandle, id: String, pid: u32) -> Result<(), String> {
@@ -509,33 +637,44 @@ fn main() {
             // the choice before the key was released, so nothing was picked
             // and the window could stay up. Escape and key release dismiss it.
             if window.label() == "quick" {
-                use std::sync::atomic::{AtomicBool, Ordering};
-                static QUICK_ARMED: AtomicBool = AtomicBool::new(false);
+                use std::sync::atomic::Ordering;
                 match event {
                     tauri::WindowEvent::Focused(true) => {
+                        advance_quick_focus_epoch();
                         QUICK_ARMED.store(true, Ordering::SeqCst);
                     }
                     tauri::WindowEvent::Focused(false) => {
+                        let epoch = advance_quick_focus_epoch();
                         // Win's own release moves focus to the taskbar. That is
                         // not a click outside, and it must not drop recording.
                         #[cfg(windows)]
-                        let typing_win = platform::super_key_down()
-                            || platform::capture_super_held()
-                            || (platform::capture_active() && !platform::mouse_down());
+                        let typing_win = keep_quick_on_blur(
+                            platform::super_key_down(), platform::capture_active(), platform::mouse_down(),
+                        );
                         #[cfg(not(windows))]
                         let typing_win = false;
                         if typing_win {
-                        } else if QUICK_ARMED.swap(false, Ordering::SeqCst) {
-                            window
-                                .app_handle()
-                                .state::<Runtime>()
-                                .quick_open
-                                .store(false, Ordering::SeqCst);
-                            let _ = window.hide();
                             #[cfg(windows)]
-                            platform::stop_recording();
-                            #[cfg(target_os = "linux")]
-                            linux_override::set_recording(false);
+                            watch_unfocused_quick_click(window.clone(), epoch);
+                        } else if QUICK_ARMED.swap(false, Ordering::SeqCst) {
+                            let runtime = window.app_handle().state::<Runtime>();
+                            let was_open = runtime.quick_open.swap(false, Ordering::SeqCst);
+                            let closed = !was_open || window.hide().is_ok();
+                            if closed {
+                                if was_open {
+                                    let _ = window.app_handle().emit("quick-hidden", ());
+                                }
+                                #[cfg(windows)]
+                                platform::stop_recording();
+                                #[cfg(target_os = "linux")]
+                                linux_override::set_recording(false);
+                            } else if restore_after_failed_quick_hide(
+                                &runtime.quick_open, epoch, QUICK_FOCUS_EPOCH.load(Ordering::SeqCst),
+                            ) {
+                                QUICK_ARMED.store(true, Ordering::SeqCst);
+                                #[cfg(windows)]
+                                watch_unfocused_quick_click(window.clone(), epoch);
+                            }
                         }
                     }
                     _ => {}
@@ -571,6 +710,7 @@ fn main() {
             stop_shortcut_recording,
             hide_quick,
             quick_edit,
+            quick_is_open,
             show_editor,
             focus_captured,
             radial::radial_view,

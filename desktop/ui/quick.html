@@ -23,27 +23,24 @@
       <button type="button" class="clear-shortcut">Clear</button>
     </div>
     <p id="quick-hint">Press a key, then Enter. Super, Ctrl, Alt, and Shift are the buttons below. Escape closes this.</p>
-    <p class="behavior-heading">Behavior</p>
-    <label>If it is already on the main monitor
-      <select id="quick-behavior">
-        <option value="focus-last">Switch back to the previous app</option>
-        <option value="burner">Move to the second monitor</option>
-      </select>
-    </label>
-    <label>On the second monitor
-      <select id="quick-layout">
-        <option value="float">Keep size and place</option>
-        <option value="tile-left">Left half</option>
-        <option value="tile-right">Right half</option>
-        <option value="fullscreen">Fill the monitor</option>
-      </select>
-    </label>
-    <p id="quick-message" role="status"></p>
-    <div id="quick-conflict" hidden>
-      <p id="quick-conflict-summary"></p>
-      <button id="quick-replace" type="button">Replace shortcut</button>
-      <button id="quick-keep" type="button">Keep existing shortcut</button>
+    <div id="quick-behavior-section">
+      <p class="behavior-heading">Behavior</p>
+      <label>If it is already on the main monitor
+        <select id="quick-behavior">
+          <option value="focus-last">Switch back to the previous app</option>
+          <option value="burner">Move to the second monitor</option>
+        </select>
+      </label>
+      <label>On the second monitor
+        <select id="quick-layout">
+          <option value="float">Keep size and place</option>
+          <option value="tile-left">Left half</option>
+          <option value="tile-right">Right half</option>
+          <option value="fullscreen">Fill the monitor</option>
+        </select>
+      </label>
     </div>
+    <p id="quick-message" role="status"></p>
     <div class="quick-actions">
       <button id="quick-open" type="button">Go to Warp</button>
       <span>
@@ -51,6 +48,18 @@
         <button id="quick-cancel" type="button">Cancel</button>
       </span>
     </div>
+  </div>
+  <div id="quick-conflict" class="quick-conflict-backdrop" hidden>
+    <section class="quick-conflict-dialog" role="alertdialog" aria-modal="true" aria-labelledby="quick-conflict-title" aria-describedby="quick-conflict-summary">
+      <h2 id="quick-conflict-title">Shortcut already in use</h2>
+      <p id="quick-conflict-summary"></p>
+      <div class="quick-conflict-actions">
+        <button id="quick-replace-edit" class="primary" type="button">Replace and edit old</button>
+        <button id="quick-replace" type="button">Replace</button>
+        <button id="quick-keep" type="button">Keep existing</button>
+      </div>
+      <p id="quick-conflict-error" role="status"></p>
+    </section>
   </div>
 </body>
 </html>

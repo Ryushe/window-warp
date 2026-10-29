@@ -16,10 +16,16 @@ let quick = null;
 let recorded = "";
 let previousWindow = null;
 let conflictProposal = null;
+let conflictSaving = false;
+let saving = false;
+let editVersion = 0;
+let previewVersion = 0;
 
 function clearConflict() {
     conflictProposal = null;
     document.querySelector("#quick-conflict").hidden = true;
+    if (!saving) document.querySelector(".quick-sheet").removeAttribute("inert");
+    document.querySelector("#quick-conflict-error").textContent = "";
 }
 
 function baseName(value) {
@@ -42,7 +48,14 @@ function showRecorded() {
     entry.placeholder = recorded ? "" : "Press a key";
     syncShortcutPicker(document.querySelector(".quick-sheet"), recorded);
 }
+document.querySelector("#quick-entry").addEventListener("keydown", (event) => {
+    if (saving) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+    }
+}, true);
 watchShortcutPicker(document.querySelector(".quick-sheet"), (shortcut) => {
+    editVersion++;
     clearConflict();
     recorded = shortcut;
     document.querySelector("#quick-entry").value = shortcut;
@@ -74,15 +87,37 @@ function isEditorShortcut(event) {
 async function closePopup(restoreFocus) {
     popupGeneration++;
     pendingKeys = Promise.resolve();
+    clearConflict();
     const target = previousWindow;
     previousWindow = null;
-    await native.core.invoke("hide_quick").catch(() => {});
-    if (restoreFocus && target?.id) {
+    const wasOpen = await native.core.invoke("hide_quick").catch(() => false);
+    if (wasOpen && restoreFocus && target?.id) {
         native.core.invoke("focus_captured", { id: String(target.id), pid: target.pid }).catch(() => {});
     }
 }
+function editBinding(index, { blank = false } = {}) {
+    const binding = config.bindings[index];
+    editVersion++;
+    quick = { index, created: false };
+    document.querySelector("#quick-app").textContent = binding.label;
+    document.querySelector("#quick-behavior-section").hidden = !["pull-app", "focus-app"].includes(binding.action);
+    document.querySelector("#quick-behavior").value = binding.mainMonitorAction || "burner";
+    document.querySelector("#quick-layout").value = binding.burnerLayout || "float";
+    document.querySelector("#quick-apply").disabled = false;
+    const claimed = binding.enabled === false && config.bindings.some((other, otherIndex) =>
+        otherIndex !== index && other.enabled !== false && other.shortcut === binding.shortcut);
+    recorded = blank || claimed ? "" : binding.shortcut || "";
+    showRecorded();
+    if (!recorded) {
+        const modifier = config.settings?.quickModifier || "Super";
+        document.querySelector(`[data-mod="${modifier}"]`)?.setAttribute("aria-pressed", "true");
+    }
+    showHint();
+    document.querySelector("#quick-entry")?.focus();
+}
 async function openEditor(payload) {
     const generation = ++popupGeneration;
+    editVersion++;
     pendingKeys = Promise.resolve();
     config = undefined;
     quick = null;
@@ -128,23 +163,11 @@ async function openEditor(payload) {
     if (payload.label) binding.label = payload.label;
     if (payload.mainMonitorAction) binding.mainMonitorAction = payload.mainMonitorAction;
     if (payload.burnerLayout) binding.burnerLayout = payload.burnerLayout;
-    quick = { index, created };
-    document.querySelector("#quick-app").textContent = binding.label || named;
-    document.querySelector("#quick-behavior").value = binding.mainMonitorAction || "burner";
-    document.querySelector("#quick-layout").value = binding.burnerLayout || "float";
-    document.querySelector("#quick-apply").disabled = false;
-    recorded = binding.shortcut || preset;
-    showRecorded();
-    if (!recorded) {
-        const modifier = config.settings?.quickModifier || "Super";
-        const button = document.querySelector(`[data-mod="${modifier}"]`);
-        if (button) button.setAttribute("aria-pressed", "true");
-    }
-    showHint();
-    document.querySelector("#quick-entry")?.focus();
+    editBinding(index);
+    quick.created = created;
 }
-document.querySelector("#quick-behavior").addEventListener("change", () => { clearConflict(); showHint(); });
-document.querySelector("#quick-layout").addEventListener("change", () => { clearConflict(); showHint(); });
+document.querySelector("#quick-behavior").addEventListener("change", () => { editVersion++; clearConflict(); showHint(); });
+document.querySelector("#quick-layout").addEventListener("change", () => { editVersion++; clearConflict(); showHint(); });
 document.querySelector("#quick-open").addEventListener("click", async () => {
     popupGeneration++;
     pendingKeys = Promise.resolve();
@@ -154,38 +177,97 @@ document.querySelector("#quick-open").addEventListener("click", async () => {
 });
 document.querySelector("#quick-cancel").addEventListener("click", () => closePopup(true));
 async function saveQuick(value) {
-    await native.core.invoke("save_config", {config:value});
+    const generation = popupGeneration;
+    if (!await persistConfig(value)) return;
+    if (generation !== popupGeneration) return;
     quick = null;
     await closePopup(true);
 }
-document.querySelector("#quick-keep").addEventListener("click", clearConflict);
-document.querySelector("#quick-replace").addEventListener("click", async () => {
-    if (!conflictProposal) return;
-    try { await saveQuick(conflictProposal.config); }
-    catch (error) { document.querySelector("#quick-message").textContent = String(error); }
+async function persistConfig(value) {
+    if (saving) return false;
+    saving = true;
+    const sheet = document.querySelector(".quick-sheet");
+    const apply = document.querySelector("#quick-apply");
+    sheet.setAttribute("inert", "");
+    apply.disabled = true;
+    try {
+        await native.core.invoke("save_config", {config:value});
+        return true;
+    } finally {
+        saving = false;
+        if (!conflictProposal) sheet.removeAttribute("inert");
+        apply.disabled = !quick;
+    }
+}
+document.querySelector("#quick-keep").addEventListener("click", () => {
+    if (conflictSaving) return;
+    clearConflict();
+    document.querySelector("#quick-entry")?.focus();
 });
+document.querySelector("#quick-conflict").addEventListener("click", (event) => {
+    if (!conflictSaving && event.target === event.currentTarget) {
+        clearConflict();
+        document.querySelector("#quick-entry")?.focus();
+    }
+});
+async function replaceConflict(editOld) {
+    if (!conflictProposal || conflictSaving || saving) return;
+    const proposal = conflictProposal;
+    const generation = popupGeneration;
+    conflictSaving = true;
+    const buttons = document.querySelectorAll(".quick-conflict-actions button");
+    buttons.forEach(button => { button.disabled = true; });
+    try {
+        if (!editOld) {
+            await saveQuick(proposal.config);
+        } else {
+            if (!await persistConfig(proposal.config)) return;
+            if (generation !== popupGeneration || !await native.core.invoke("quick_is_open").catch(() => false) || generation !== popupGeneration) return;
+            config = proposal.config;
+            clearConflict();
+            document.querySelector("#quick-message").textContent = "Choose a new shortcut for the previous action.";
+            editBinding(proposal.disabledIndices[0], { blank: true });
+        }
+    } catch (error) {
+        if (generation === popupGeneration && conflictProposal === proposal) document.querySelector("#quick-conflict-error").textContent = String(error);
+    } finally {
+        conflictSaving = false;
+        buttons.forEach(button => { button.disabled = false; });
+    }
+}
+document.querySelector("#quick-replace").addEventListener("click", () => replaceConflict(false));
+document.querySelector("#quick-replace-edit").addEventListener("click", () => replaceConflict(true));
 document.querySelector("#quick-apply").addEventListener("click", async () => {
-    if (!quick) return;
+    if (!quick || saving) return;
     if (!recorded) {
         document.querySelector("#quick-message").textContent = "Choose a modifier and a key first.";
         return;
     }
     const binding = config.bindings[quick.index];
     binding.shortcut = recorded;
-    binding.mainMonitorAction = document.querySelector("#quick-behavior").value;
-    binding.burnerLayout = document.querySelector("#quick-layout").value;
+    if (["pull-app", "focus-app"].includes(binding.action)) {
+        binding.mainMonitorAction = document.querySelector("#quick-behavior").value;
+        binding.burnerLayout = document.querySelector("#quick-layout").value;
+    }
+    const generation = popupGeneration;
+    const version = editVersion;
+    const preview = ++previewVersion;
+    const index = quick.index;
     try {
-        const proposal = await native.core.invoke("preview_shortcut_reassignment", {config, index:quick.index});
+        const proposal = await native.core.invoke("preview_shortcut_reassignment", {config, index});
+        if (generation !== popupGeneration || version !== editVersion || preview !== previewVersion || quick?.index !== index) return;
         if (proposal.disabledIndices.length) {
             conflictProposal = proposal;
             const names = proposal.disabledIndices.map(index => proposal.config.bindings[index].label);
-            document.querySelector("#quick-conflict-summary").textContent = `${recorded} is used by ${names.join(", ")}. Replacing it disables those shortcuts but keeps their settings.`;
+            document.querySelector("#quick-conflict-summary").textContent = `${recorded} is used by ${names.join(", ")}. Replace it, or replace it and choose a new key for the previous action.`;
             document.querySelector("#quick-conflict").hidden = false;
+            document.querySelector(".quick-sheet").setAttribute("inert", "");
+            document.querySelector("#quick-keep").focus();
             return;
         }
-        await saveQuick(config);
+        await saveQuick(proposal.config);
     } catch (error) {
-        document.querySelector("#quick-message").textContent = String(error);
+        if (generation === popupGeneration && version === editVersion && preview === previewVersion) document.querySelector("#quick-message").textContent = String(error);
     }
 });
 function handleKey(event) {
@@ -193,6 +275,27 @@ function handleKey(event) {
         event.preventDefault();
         event.stopImmediatePropagation();
         if (!event.repeat) document.querySelector("#quick-open").click();
+        return;
+    }
+    if (saving && !conflictProposal) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+    }
+    if (conflictProposal) {
+        if (conflictSaving) return;
+        if (event.key === "Escape") {
+            event.preventDefault();
+            clearConflict();
+            document.querySelector("#quick-entry")?.focus();
+        } else if (event.key === "Tab") {
+            const buttons = [...document.querySelectorAll(".quick-conflict-actions button")].filter(button => !button.disabled);
+            const index = buttons.indexOf(document.activeElement);
+            if (buttons.length && ((event.shiftKey && index <= 0) || (!event.shiftKey && index === buttons.length - 1))) {
+                event.preventDefault();
+                buttons[event.shiftKey ? buttons.length - 1 : 0].focus();
+            }
+        }
         return;
     }
     if (event.key === "Escape") { event.preventDefault(); closePopup(true); return; }
@@ -205,6 +308,7 @@ function handleKey(event) {
     if (event.key === "Tab" || event.target?.tagName === "SELECT" || (event.target?.tagName === "BUTTON" && event.key === " ")) return;
     const named = shortcutKeyFromEvent(event);
     if (!named) return;
+    editVersion++;
     clearConflict();
     event.preventDefault();
     const root = document.querySelector(".quick-sheet");
@@ -236,4 +340,15 @@ document.addEventListener("keydown", (event) => {
     });
 }, true);
 native?.event.listen("quick-edit", (event) => openEditor(event.payload || {}));
+native?.event.listen("quick-hidden", async () => {
+    const generation = popupGeneration;
+    const open = await native.core.invoke("quick_is_open").catch(() => false);
+    if (open || generation !== popupGeneration) return;
+    popupGeneration++;
+    editVersion++;
+    pendingKeys = Promise.resolve();
+    previousWindow = null;
+    quick = null;
+    clearConflict();
+});
 native?.core.invoke("quick_edit").then((pending) => { if (pending) openEditor(pending); }).catch(() => {});

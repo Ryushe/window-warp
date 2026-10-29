@@ -338,6 +338,13 @@ summary { cursor: pointer; }
 #quick-shortcut, #quick-entry, .key-field input { font-family: "Cascadia Mono", Consolas, ui-monospace, monospace; color: var(--chord); }
 body.quick-body { display: block; min-height: 100vh; overflow: auto; background: var(--bg); }
 body.quick-body .quick-sheet { min-height: 100vh; padding: 22px 20px; }
+.quick-conflict-backdrop { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 18px; background: rgba(0, 0, 0, .55); }
+.quick-conflict-dialog { width: min(100%, 380px); max-height: calc(100vh - 36px); overflow: auto; padding: 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--raised); box-shadow: var(--shadow); }
+.quick-conflict-dialog h2 { margin: 0 0 8px; font-size: 19px; }
+.quick-conflict-dialog p { margin: 0; color: var(--muted); line-height: 1.45; }
+.quick-conflict-actions { display: grid; gap: 8px; margin-top: 18px; }
+.quick-conflict-actions button { width: 100%; }
+.quick-conflict-dialog #quick-conflict-error:not(:empty) { margin-top: 12px; color: var(--danger); }
 [hidden] { display: none !important; }
 @keyframes rise {
   from { opacity: 0; transform: translateY(8px); }

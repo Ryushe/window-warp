@@ -889,6 +889,43 @@ try:
                 result = list(activation_timings)
                 activation_events.clear()
                 activation_timings.clear()
+            elif command == "click_owned":
+                # Click only a visible title bar belonging to this helper. Do
+                # not raise the target first: the focus transition is what the
+                # click-away test needs to exercise.
+                hwnd = int(request["window"])
+                if hwnd not in windows or not user.IsWindowVisible(hwnd):
+                    raise RuntimeError("Click target must be a visible helper-owned window")
+                old = w.POINT()
+                rect = w.RECT()
+                if not user.GetCursorPos(c.byref(old)) or not user.GetWindowRect(hwnd, c.byref(rect)):
+                    raise c.WinError(c.get_last_error())
+                point = w.POINT(rect.left + 80, rect.top + 14)
+                hit = user.WindowFromPoint(point)
+                if hit != hwnd and not user.IsChild(hwnd, hit):
+                    raise RuntimeError("Owned title bar is covered; no click sent")
+                pressed = False
+                try:
+                    if not user.SetCursorPos(point.x, point.y):
+                        raise c.WinError(c.get_last_error())
+                    hit = user.WindowFromPoint(point)
+                    if hit != hwnd and not user.IsChild(hwnd, hit):
+                        raise RuntimeError("Owned title bar became covered; no click sent")
+                    event = INPUT(type=0, mi=MOUSEINPUT(dwFlags=2))
+                    if user.SendInput(1, c.byref(event), c.sizeof(INPUT)) != 1:
+                        raise c.WinError(c.get_last_error())
+                    pressed = True
+                    time.sleep(0.08)
+                finally:
+                    try:
+                        if pressed:
+                            event = INPUT(type=0, mi=MOUSEINPUT(dwFlags=4))
+                            if user.SendInput(1, c.byref(event), c.sizeof(INPUT)) != 1:
+                                raise c.WinError(c.get_last_error())
+                    finally:
+                        current = w.POINT()
+                        if user.GetCursorPos(c.byref(current)) and (current.x, current.y) == (point.x, point.y):
+                            user.SetCursorPos(old.x, old.y)
             elif command == "pointer_position":
                 point = w.POINT()
                 if not user.GetCursorPos(c.byref(point)):

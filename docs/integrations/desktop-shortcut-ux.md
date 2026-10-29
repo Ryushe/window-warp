@@ -70,7 +70,37 @@ windows and matches names conservatively; it is not a full app inventory.
 
 ## Windows hook investigation, 2026-10-28
 
-The running pre-experiment build swallows Win while an active Super shortcut
+### Popup replacement and click-away follow-up
+
+The quick popup now presents a separate in-window conflict dialog with Replace,
+Replace and edit old, and Keep existing. Replacing keeps the displaced binding
+disabled with its existing settings; when another enabled binding owns its key,
+the quick editor displays the displaced key as unassigned. Editing it uses the
+validated reassignment proposal so a newly assigned key re-enables the binding.
+Unclaimed, deliberately disabled shortcuts retain their displayed key. A
+non-app action is edited by its existing binding index without changing its
+action or app-related settings. Delayed previews, saves and click-away events
+are guarded so they do not apply stale choices or revive an old popup.
+
+The quick window closes on an outside click, including while recording. A
+temporary Windows mouse-state watcher handles outside clicks while a preserved
+Win-related blur leaves the popup unfocused; it adds no keyboard hook and
+records no input. It polls at 10 ms, so a complete click between polls can be
+missed. The no-mouse focus transition into this watcher remains unverified in
+native E2E because Windows denied the isolated fixture's synthetic focus
+change; test it physically before treating all click-away paths as proven.
+
+Validation: `npm test` passed 160 tests, the full normal-access Windows Rust
+suite passed 111 with six ignored, and isolated `--quick-only` E2E receipt
+`WARP-NATIVE-8d56f259-957d-4e1b-9864-b7b6f16d0e06` passed replacement,
+reopening/reassigning the displaced action, Replace and edit old, ordinary
+click-away and focused-recording click-away. That run used a temporary
+aggregate hook-state diagnostic, removed afterward; it explicitly skipped the
+already-unfocused watcher path. The dialog screenshot was visually reviewed.
+The existing Win+B and cross-process focus/coexistence limitations below remain
+open and are not resolved by this popup work.
+
+The pre-experiment build swallows Win while an active Super shortcut
 exists and replays unclaimed chords on release. That can disrupt other apps'
 hold-to-talk shortcuts. The experimental single-hook change passes unclaimed
 keys through immediately and masks the Start menu with a tagged injected event.

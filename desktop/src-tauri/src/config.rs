@@ -543,6 +543,27 @@ mod tests {
         assert!(validated.preview_reassignment(100).is_err());
     }
     #[test]
+    fn displaced_binding_can_be_reenabled_with_a_fresh_shortcut() {
+        let mut config = Config::default();
+        let old_label = config.bindings[0].label.clone();
+        let claimed_key = config.bindings[0].shortcut.clone();
+        config.bindings[1].shortcut = claimed_key.clone();
+
+        let mut replaced = config.preview_reassignment(1).unwrap().config;
+        replaced.validate().unwrap();
+        assert!(!replaced.bindings[0].enabled);
+        assert!(replaced.bindings[1].enabled);
+
+        replaced.bindings[0].shortcut = "Ctrl+Alt+F24".into();
+        let mut updated = replaced.preview_reassignment(0).unwrap().config;
+        updated.validate().unwrap();
+        assert_eq!(updated.bindings[0].label, old_label);
+        assert_eq!(updated.bindings[0].shortcut, "Ctrl+Alt+F24");
+        assert!(updated.bindings[0].enabled);
+        assert_eq!(updated.bindings[1].shortcut, claimed_key);
+        assert!(updated.bindings[1].enabled);
+    }
+    #[test]
     fn aliases_and_order_cannot_hide_conflicts() {
         let mut config = Config::default();
         config.bindings[0].shortcut = "alt+control+left".into();
