@@ -262,3 +262,18 @@ Do not integrate or activate the candidate until these checks pass.
   native verification against the reconciled candidate, rebuild both installers
   from the exact final revision, then obtain GitHub access for the requested
   merge, `window-warp` repository rename, and 0.1.1 publication.
+
+### Focus diagnostic follow-up
+
+- Candidate checkpoint: `168bae7` on `codex/desktop-shortcut-ux` in the isolated
+  review clone. An opt-in focus diagnostic used a separate source snapshot and
+  fixture target, with the regular app paused. In
+  `WARP-NATIVE-687700b9-1e51-4735-ab92-b1203e2b0ba7`, Windows denied all 16
+  `SetForegroundWindow` calls aimed at the other fixture process, while 30 calls
+  aimed at the foreground fixture's process succeeded. This does not establish
+  the root cause or justify a foreground workaround.
+- A separate hook-only diagnostic did not reach its input tests: its WebView did
+  not become available within 45 seconds. It produced no hook trace. Both
+  diagnostic apps exited, and the user's live shortcuts were restored to active.
+  Continue by diagnosing that startup failure and the foreground-policy result;
+  do not count either diagnostic as a release pass.
