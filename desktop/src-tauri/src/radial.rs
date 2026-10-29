@@ -279,9 +279,10 @@ mod tests {
     }
     #[test]
     fn title_order_numeric_identity_duplicates_and_limit() {
-        let binding = crate::config::Config::default().bindings[0].clone();
+        let mut binding = crate::config::Config::default().bindings[0].clone();
+        binding.app_match = "fixture".into();
         let make = |id: &str, title: &str| -> WindowInfo {
-            serde_json::from_value(serde_json::json!({"id":id,"pid":1,"title":title,"appId":"","desktopId":"","path":"", "rect":{"x":0,"y":0,"width":10,"height":10},"workArea":{"x":0,"y":0,"width":100,"height":100},"monitor":1,"monitorName":"a","maximizedHorizontal":false,"maximizedVertical":false,"fullscreen":false,"minimized":false,"active":false})).unwrap()
+            serde_json::from_value(serde_json::json!({"id":id,"pid":1,"title":title,"appId":"fixture","desktopId":"","path":"", "rect":{"x":0,"y":0,"width":10,"height":10},"workArea":{"x":0,"y":0,"width":100,"height":100},"monitor":1,"monitorName":"a","maximizedHorizontal":false,"maximizedVertical":false,"fullscreen":false,"minimized":false,"active":false})).unwrap()
         };
         let mut input = vec![make("10", "same"), make("2", "same"), make("1", "Alpha")];
         input.extend((11..22).map(|i| make(&i.to_string(), "zeta")));
