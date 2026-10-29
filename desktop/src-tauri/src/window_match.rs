@@ -87,9 +87,10 @@ pub fn matches(binding: &Binding, window: &WindowInfo) -> bool {
             .collect::<Vec<_>>()
     };
     identifiers.into_iter().any(|id| {
-        window.app_id.eq_ignore_ascii_case(id)
-            || (!window.desktop_id.is_empty() && window.desktop_id.eq_ignore_ascii_case(id))
-            || (cfg!(windows) && executable_matches(id, window))
+        !id.is_empty()
+            && (window.app_id.eq_ignore_ascii_case(id)
+                || (!window.desktop_id.is_empty() && window.desktop_id.eq_ignore_ascii_case(id))
+                || (cfg!(windows) && executable_matches(id, window)))
     })
 }
 
@@ -181,6 +182,18 @@ mod tests {
             ..fixture()
         };
         assert!(!matches(&binding, &other));
+    }
+    #[test]
+    fn empty_primary_identifier_does_not_match_an_unidentified_window() {
+        let binding: Binding = serde_json::from_value(serde_json::json!({"label":"Editor","shortcut":"Ctrl+Alt+E","action":"pull-app","appMatch":"","appMatches":["Contoso!Editor"]})).unwrap();
+        let unidentified = WindowInfo {
+            app_id: String::new(),
+            desktop_id: String::new(),
+            path: String::new(),
+            ..fixture()
+        };
+        assert!(!matches(&binding, &unidentified));
+        assert!(matches(&binding, &fixture()));
     }
     #[test]
     fn empty_predicate_is_rejected_and_numeric_handle_is_normalized_without_precision_loss() {
