@@ -100,6 +100,13 @@ already-unfocused watcher path. The dialog screenshot was visually reviewed.
 The existing Win+B and cross-process focus/coexistence limitations below remain
 open and are not resolved by this popup work.
 
+For local use, the updated normal Windows build from `11168df` was started
+from `desktop/src-tauri/target/popup-runtime/window-warp.exe` with the user's
+regular settings; the previous native instance was stopped first. The UI showed
+shortcuts active, and only one Warp process was observed. This is a local debug
+activation, not a packaged release or evidence that the skipped watcher path
+or older Win+B/coexistence issues are fixed.
+
 The pre-experiment build swallows Win while an active Super shortcut
 exists and replays unclaimed chords on release. That can disrupt other apps'
 hold-to-talk shortcuts. The experimental single-hook change passes unclaimed
@@ -164,14 +171,12 @@ cannot silently become a tap while it waits for an earlier action.
   edge; neither should be described as resolved.
 
 On 2026-10-28 the user explicitly requested running this candidate in place of
-AutoHotkey. Built `298fd63` (source branch tip `c2b36bf`) as the normal debug
-app, stopped the verified AutoHotkey Warp script, and launched
-`desktop/src-tauri/target/debug/window-warp.exe` with the regular settings.
-The UI showed shortcuts active; one native Warp process and no AutoHotkey Warp
-process were observed. This local activation does not resolve the test failures
-or authorize integration. Investigate the focus-denied and coexistence failures,
-verify owned-modal and repeat paths, and test Wispr in the opposite launch order.
-Use isolated settings for further tests and coordinate around the active app.
+AutoHotkey. The verified AutoHotkey Warp script was stopped; the later popup
+build activation is recorded above. This local activation does not resolve the
+test failures or authorize integration. Investigate the focus-denied and
+coexistence failures, verify owned-modal and repeat paths, and test Wispr in the
+opposite launch order. Use isolated settings for further tests and coordinate
+around the active app.
 
 Resume by reproducing the red `--hook-only` test with the live app's shortcuts
 paused, using an isolated Cargo target. Investigate missing hook callbacks and
