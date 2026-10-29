@@ -726,6 +726,9 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         wait_for("return document.querySelector('#status').classList.contains('active')")
         invoke_shortcut("toggle-pause")
         wait_for("return document.querySelector('#status').textContent.includes('Paused')")
+        script_deadline = time.monotonic() + 5
+        while time.monotonic() < script_deadline and (not kwin_loaded("window-warp-pause-session") or kwin_loaded()):
+            time.sleep(0.05)
         assert kwin_loaded("window-warp-pause-session") and not kwin_loaded()
         click("#toggle")
         wait_for("return document.querySelector('#status').classList.contains('active')")
@@ -735,12 +738,15 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         (output / "window-warp-kde.png").write_bytes(base64.b64decode(screenshot))
         click("#toggle")
         wait_for("return document.querySelector('#status').textContent.includes('Paused')")
+        wait_for("return !document.querySelector('#toggle').disabled")
         assert not kwin_loaded(), "Pause did not unload the KWin script"
         settings = list(Path(temporary).glob("config/**/settings.json"))
         assert len(settings) == 1
         assert json.loads(settings[0].read_text())["bindings"][0]["shortcut"] == "Ctrl+Alt+Shift+F13"
         # A conflicting key is reviewed in the UI, then saved explicitly.
         evaluate("const input=document.querySelectorAll('[data-field=shortcut]')[1]; input.value='shift+alt+control+F13'; input.dispatchEvent(new Event('input',{bubbles:true})); return true;")
+        click(".binding:nth-child(2) .binding-summary")
+        evaluate("document.querySelector('.binding:nth-child(2) .reassign').scrollIntoView({block:'center'}); return true;")
         click(".binding:nth-child(2) .reassign")
         wait_for("return !document.querySelector('.binding:nth-child(2) .reassignment').hidden && !document.querySelector('.binding:nth-child(2) .confirm-reassignment').disabled")
         assert "Push window left" in evaluate("return document.querySelector('.binding:nth-child(2) .reassignment-summary').textContent")
@@ -748,10 +754,13 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         evaluate("document.querySelector('.binding:nth-child(2)').scrollIntoView({block:'center'}); return true;")
         screenshot = request("GET", f"/session/{session}/screenshot")
         (output / "window-warp-reassignment-kde.png").write_bytes(base64.b64decode(screenshot))
+        evaluate("document.querySelector('.binding:nth-child(2) .cancel-reassignment').scrollIntoView({block:'center'}); return true;")
         click(".binding:nth-child(2) .cancel-reassignment")
         assert evaluate("return document.querySelector('[data-field=enabled]').checked")
+        evaluate("document.querySelector('.binding:nth-child(2) .reassign').scrollIntoView({block:'center'}); return true;")
         click(".binding:nth-child(2) .reassign")
         wait_for("return !document.querySelector('.binding:nth-child(2) .confirm-reassignment').disabled")
+        evaluate("document.querySelector('.binding:nth-child(2) .confirm-reassignment').scrollIntoView({block:'center'}); return true;")
         click(".binding:nth-child(2) .confirm-reassignment")
         assert not evaluate("return document.querySelector('[data-field=enabled]').checked")
         assert invoke("get_config")["bindings"][0]["enabled"], "Review must not auto-save"
@@ -782,13 +791,48 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         assert len(captured["items"]) == 2, "Native capture did not find both Qt fixtures"
         assert any(item["window"]["active"] for item in captured["items"]), "Owned fixture must be active for editor capture"
         invoke("set_enabled", {"enabled": True})
+        main_handle = request("GET", f"/session/{session}/window")
+        old_bindings = invoke("get_config")["bindings"]
         invoke_shortcut("open-editor")
-        wait_for("return document.querySelectorAll('.binding').length === 10 && document.querySelector('#status').textContent.includes('Paused')")
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not invoke("quick_is_open"):
+            time.sleep(0.1)
+        assert invoke("quick_is_open"), "The current-app shortcut did not open its quick popup"
         expected_app = next(item["window"]["appId"] for item in captured["items"] if item["window"]["active"])
-        assert evaluate("return document.querySelector('.binding:last-child [data-field=appMatch]').value") == expected_app
-        evaluate("const input=document.querySelector('.binding:last-child [data-field=shortcut]'); input.value='Ctrl+Alt+Shift+F22'; input.dispatchEvent(new Event('input',{bubbles:true})); return true;")
-        click("#save")
-        wait_for("return document.querySelector('#message').textContent.startsWith('Saved.')")
+        quick_handle = None
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and quick_handle is None:
+            for handle in request("GET", f"/session/{session}/window/handles"):
+                request("POST", f"/session/{session}/window", {"handle": handle})
+                if "quick.html" in request("GET", f"/session/{session}/url"):
+                    quick_handle = handle
+                    break
+            if quick_handle is None:
+                time.sleep(0.1)
+        assert quick_handle is not None, "The current-app shortcut did not open its quick popup"
+        wait_for("return Boolean(document.querySelector('#quick-app')?.textContent)")
+        assert expected_app.casefold() in evaluate("return document.querySelector('#quick-app').textContent").casefold()
+        for modifier in ["Ctrl", "Alt", "Shift", "Super"]:
+            selected = evaluate(f"return document.querySelector('#quick-mods [data-mod={modifier}]').getAttribute('aria-pressed') === 'true'")
+            if selected != (modifier != "Super"):
+                click(f"#quick-mods [data-mod={modifier}]")
+        click("#quick-entry")
+        from wayland_input import Input
+        with Input() as keys:
+            keys.key(88, True); keys.key(88, False)  # F12
+            wait_for("return document.querySelector('#quick-entry').value === 'Ctrl+Alt+Shift+F12'")
+            keys.key(28, True); keys.key(28, False)  # Enter
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            new_bindings = invoke("get_config")["bindings"]
+            if len(new_bindings) == len(old_bindings) + 1:
+                break
+            time.sleep(0.1)
+        assert len(new_bindings) == len(old_bindings) + 1, f"Quick popup save did not add a binding: before={len(old_bindings)} after={len(new_bindings)}"
+        assert new_bindings[-1]["appMatch"].casefold() == expected_app.casefold()
+        assert new_bindings[-1]["shortcut"] == "Ctrl+Alt+Shift+F12"
+        assert invoke("get_status")["enabled"], "The quick popup should preserve active shortcuts"
+        request("POST", f"/session/{session}/window", {"handle": main_handle})
         screenshot = request("GET", f"/session/{session}/screenshot")
         (output / "window-warp-current-app-kde.png").write_bytes(base64.b64decode(screenshot))
         expected = {}
@@ -920,6 +964,11 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             state_item["window"] = hold_windows[0]
             config = invoke("get_config")
             hold_index = len(config["bindings"]) - 1
+            # Reserve the two chords this isolated hold/reassignment fixture uses.
+            # The expanded default shortcut list may already assign J or K.
+            for index, binding in enumerate(config["bindings"]):
+                if index != hold_index and binding["shortcut"] in ("Ctrl+Alt+Shift+J", "Ctrl+Alt+Shift+K"):
+                    binding["enabled"] = False
             config["bindings"][hold_index]["appMatch"] = state_item["window"]["appId"]
             next(binding for binding in config["bindings"] if binding["action"] == "toggle-pause")["shortcut"] = "Ctrl+Alt+Shift+P"
             config["bindings"][1].update({"action":"focus-app", "appMatch":state_item["window"]["appId"]})
@@ -1431,7 +1480,8 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                     report["checks"].append("KDE native key ownership follows reassignment between actions without removing other shortcuts")
             evaluate("location.reload(); return true;")
             wait_for(f"return document.querySelectorAll('.binding').length === {len(config['bindings'])} && !document.querySelector('#toggle').disabled")
-            evaluate("document.querySelector('#hold-delay').closest('details').open=true; document.querySelector('#hold-enabled').scrollIntoView({block:'center'}); return true;")
+            click("#show-settings")
+            evaluate("document.querySelector('#hold-enabled').scrollIntoView({block:'center'}); return true;")
             screenshot = request("GET", f"/session/{session}/screenshot")
             (output / "window-warp-hold-kde.png").write_bytes(base64.b64decode(screenshot))
         if "--firefox" in sys.argv:
