@@ -299,3 +299,15 @@ Do not integrate or activate the candidate until these checks pass.
   not seen before focus loss. The test fixture's unconditional `ShowWindow` and
   focus fallback are a concrete hypothesis for that loss, not a proven cause.
   The user's app was restarted and its shortcuts restored to active.
+
+- Fixture-only popup experiment `WARP-NATIVE-5c8649a6-03bf-48fd-b60d-695062f2c94c`
+  removed the second press's focus and window-restoration operations; the
+  second tagged chord was still absent from the hook and the popup then blurred.
+  This rules out those specific fixture actions, not the entire fixture.
+- Separate paired input-queue attachment prototype
+  `WARP-NATIVE-7552beee-a8ce-4d2b-b49f-a560afcd930b` improved cross-process
+  activation: eight alternating targets activated in order at 80 ms spacing.
+  Zero-spacing order also matched, but the latency limit failed at roughly
+  930 ms and one focus-denied error remained. No prototype code was promoted.
+  Assess the latency, modifier state, hung-window behavior, and Wispr coexistence
+  before considering a fix. The user's regular app was restarted and activated.
