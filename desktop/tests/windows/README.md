@@ -90,6 +90,12 @@ keyboard delivery. It does not prove elevated-window control, actual login
 launches, physical monitor removal, or all terminal
 profile variants. Those remain separate acceptance checks in `../../PARITY.md`.
 
+The rapid-switch case records both owned processes' foreground transitions on
+one WinEvent callback queue. Its timestamps record delivery to that observer,
+which can be later than the actual focus change. It reports per-press latency
+only when every expected transition is present in order; missing, extra, or
+reordered transitions remain failures rather than being paired to the wrong key.
+
 `--firefox` additionally requires Firefox at its standard Program Files path, or
 `WARP_FIREFOX_BINARY` naming the installed executable. It creates two profiles
 and local HTML pages inside the run directory, verifies session capture, reused

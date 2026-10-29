@@ -64,6 +64,10 @@ user.IsIconic.argtypes = [w.HWND]
 user.IsZoomed.argtypes = [w.HWND]
 user.SetForegroundWindow.argtypes = [w.HWND]
 user.GetForegroundWindow.restype = w.HWND
+WINEVENTPROC = c.WINFUNCTYPE(None, w.HANDLE, w.DWORD, w.HWND, w.LONG, w.LONG, w.DWORD, w.DWORD)
+user.SetWinEventHook.argtypes = [w.DWORD, w.DWORD, w.HMODULE, WINEVENTPROC, w.DWORD, w.DWORD, w.DWORD]
+user.SetWinEventHook.restype = w.HANDLE
+user.UnhookWinEvent.argtypes = [w.HANDLE]
 ENUMWINDOWS = c.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
 user.EnumWindows.argtypes = [ENUMWINDOWS, w.LPARAM]
 user.IsWindowVisible.argtypes = [w.HWND]
@@ -642,6 +646,17 @@ close_fixture = {"window": None, "requests": 0, "allow": False}
 hotkey_events = []
 activation_events = []
 activation_timings = []
+foreground_events = []
+foreground_targets = set()
+foreground_hook = None
+
+@WINEVENTPROC
+def record_foreground(_hook, _event, hwnd, _object, _child, _thread, _event_time):
+    # The callback is delivered on this fixture's message loop. Store only the
+    # explicitly verified test windows, and timestamp delivery with the same
+    # monotonic clock used for test key releases.
+    if int(hwnd or 0) in foreground_targets:
+        foreground_events.append((int(hwnd), time.perf_counter() * 1000))
 
 @WNDPROC
 def procedure(hwnd, message, wp, lp):
@@ -889,6 +904,28 @@ try:
                 result = list(activation_timings)
                 activation_events.clear()
                 activation_timings.clear()
+            elif command == "foreground_start":
+                if foreground_hook:
+                    raise RuntimeError("Foreground observer already started")
+                peer = int(request["peer_window"])
+                peer_pid = w.DWORD()
+                user.GetWindowThreadProcessId(peer, c.byref(peer_pid))
+                title = c.create_unicode_buffer(1024)
+                user.GetWindowTextW(peer, title, len(title))
+                if peer_pid.value != request["peer_pid"] or not title.value.startswith(args.marker):
+                    raise RuntimeError("Foreground observer peer is not the owned fixture")
+                foreground_targets.clear()
+                foreground_targets.update(windows)
+                foreground_targets.add(peer)
+                foreground_events.clear()
+                # EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT: this observes
+                # window focus changes; it is not another keyboard hook.
+                foreground_hook = user.SetWinEventHook(3, 3, None, record_foreground, 0, 0, 0)
+                if not foreground_hook:
+                    raise c.WinError(c.get_last_error())
+            elif command == "foreground_events":
+                result = list(foreground_events)
+                foreground_events.clear()
             elif command == "click_owned":
                 # Click only a visible title bar belonging to this helper. Do
                 # not raise the target first: the focus transition is what the
@@ -1084,6 +1121,8 @@ try:
         except Exception as error:
             print(json.dumps({"id": request["id"], "error": str(error)}), flush=True)
 finally:
+    if foreground_hook:
+        user.UnhookWinEvent(foreground_hook)
     if switch_worker is not None:
         switch_worker.join(timeout=3)
     stop_observer()

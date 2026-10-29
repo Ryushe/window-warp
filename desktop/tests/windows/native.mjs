@@ -8,6 +8,7 @@ import {createInterface} from "node:readline";
 import {createServer} from "node:net";
 import {randomUUID} from "node:crypto";
 import {testFirefox} from "./firefox.mjs";
+import {summarizeForeground} from "./foreground-timing.mjs";
 
 if (process.platform !== "win32") throw new Error("This fixture requires Windows");
 const firefoxProfileLock = process.argv.includes("--firefox-profile-lock");
@@ -268,6 +269,9 @@ try {
         await invoke("set_enabled", {enabled:false});
         await invoke("save_config", {config:switchConfig});
         await invoke("set_enabled", {enabled:true});
+        // Observe both processes from one WinEvent queue rather than merging
+        // WM_ACTIVATE callbacks delivered on independent process threads.
+        await native("foreground_start", {peer_window:peer.windows[0],peer_pid:peer.pid});
         report.fastSwitches = [];
         const switchFailures = [];
         for (const spacingMs of [80, 0]) for (const releaseWin of [false, true]) {
@@ -280,31 +284,34 @@ try {
             await native("focus", {window:fixture.windows[2]});
             await native("activation_events");
             await nativePeer("activation_events");
+            // Let the setup focus notification reach the observer before
+            // clearing it; this wait is outside the measured key burst.
+            await sleep(100);
+            await native("foreground_events");
             const events = [];
             let releases = [];
             const expected = Array.from({length:4},()=>[fixture.windows[0],peer.windows[0]]).flat();
             try {
                 releases = await native("switch_burst", {window:fixture.windows[2],peer_window:peer.windows[0],peer_pid:peer.pid,release_win:releaseWin,spacing_ms:spacingMs});
                 await until(async()=> {
-                    const [local, remote] = await Promise.all([native("timed_activation_events"),nativePeer("timed_activation_events")]);
-                    events.push(...local,...remote);
+                    events.push(...await native("foreground_events"));
                     return events;
                 }, received=>received.length >= expected.length, "eight alternating app switches", 5000);
                 await sleep(200);
-                const [local, remote] = await Promise.all([native("timed_activation_events"),nativePeer("timed_activation_events")]);
-                events.push(...local,...remote);
-                events.sort((a,b)=>a[1]-b[1]);
-                assert.deepEqual(events.map(([id])=>id), expected, "every distinct app shortcut must focus its target once, in press order");
-                const latencyMs = events.map(([,at],index)=>at - releases[index]);
+                events.push(...await native("foreground_events"));
+                const {observed,latencyMs} = summarizeForeground(expected,releases,events);
+                assert.deepEqual(observed, expected, "every distinct app shortcut must focus its target once, in press order");
+                assert.notEqual(latencyMs, null, "each foreground event must correspond to one key release");
+                // Delivery to the observer is an upper bound on when the
+                // foreground event occurred, not the exact activation time.
                 assert.ok(latencyMs.every(ms=>ms >= 0 && ms <= 500), `every alternating switch must activate within 500 ms of key release: ${latencyMs}`);
             } catch (error) {
                 report.fastErrors = await evaluate("window.__fastErrors").catch(()=>["Could not retrieve fast shortcut errors"]);
                 switchFailures.push(new Error(`Alternating switches with ${spacingMs} ms spacing and Win ${releaseWin ? "released" : "held"}: ${error}`));
             } finally {
-                events.sort((a,b)=>a[1]-b[1]);
+                const {observed,latencyMs} = summarizeForeground(expected,releases,events);
                 report.fastSwitches.push({spacingMs,releaseWin,source:fixture.windows[2],targetA:fixture.windows[0],targetB:peer.windows[0],
-                    observed:events.map(([id])=>id),expected,releases,events,
-                    latencyMs:events.map(([,at],index)=>at - releases[index])});
+                    observed,expected,releases,events,latencyMs});
                 await native("key_up").catch(()=>{});
             }
         }
