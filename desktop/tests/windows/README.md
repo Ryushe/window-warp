@@ -29,6 +29,8 @@ Node 22 or newer, Python 3, Rust, the project's dependencies and WebView2 instal
 
 ```powershell
 node desktop/tests/windows/native.mjs
+# Focus on the separate quick popup and app identifier discovery:
+node desktop/tests/windows/native.mjs --quick-only
 # Include real Firefox capture and restore with two temporary profiles:
 node desktop/tests/windows/native.mjs --firefox
 # Run only the browser acceptance checks while iterating:
@@ -87,6 +89,12 @@ The test injects OS keyboard events; it does not substitute a direct callback fo
 keyboard delivery. It does not prove elevated-window control, actual login
 launches, physical monitor removal, or all terminal
 profile variants. Those remain separate acceptance checks in `../../PARITY.md`.
+
+The rapid-switch case records both owned processes' foreground transitions on
+one WinEvent callback queue. Its timestamps record delivery to that observer,
+which can be later than the actual focus change. It reports per-press latency
+only when every expected transition is present in order; missing, extra, or
+reordered transitions remain failures rather than being paired to the wrong key.
 
 `--firefox` additionally requires Firefox at its standard Program Files path, or
 `WARP_FIREFOX_BINARY` naming the installed executable. It creates two profiles

@@ -18,6 +18,12 @@ next press is ignored. Pausing leaves only the pause chord installed, so
 that key can turn shortcuts back on. Every other Windows hotkey is
 returned.
 
+Opening the quick popup does not start global recording. Its focused picker
+accepts ordinary keys and uses the configured default modifier for a new
+shortcut. Explicit recording requests still use the hook and keep the
+recording rules above. Verify the popup and second open-editor press with a
+physical keyboard before treating this behavior as accepted.
+
 The popup is the `quick` window. It has to stay in
 `desktop/src-tauri/capabilities/default.json` with `main` and `radial`.
 Without that, the page cannot read the binding or hear `quick-edit`,

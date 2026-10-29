@@ -1,6 +1,9 @@
 //! Application-level shortcuts, separate from per-platform window operations.
 use serde_json::json;
-use std::sync::atomic::Ordering;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
 use tauri::{AppHandle, Emitter, Manager};
 
 fn app_label(window: &crate::workspaces::WindowInfo) -> String {
@@ -46,31 +49,102 @@ pub fn is_control(action: &str) -> bool {
     )
 }
 
+// A second editor press can arrive while the first is still opening the
+// popup. Preserve those presses until the opening operation finishes.
+#[derive(Default)]
+struct ControlQueue {
+    editor_active: bool,
+    pending_editor: usize,
+}
+
+impl ControlQueue {
+    fn start(&mut self, busy: &AtomicBool, editor: bool) -> bool {
+        if busy.swap(true, Ordering::SeqCst) {
+            if editor && self.editor_active {
+                self.pending_editor = self.pending_editor.saturating_add(1);
+            }
+            return false;
+        }
+        self.editor_active = editor;
+        true
+    }
+
+    fn next_editor(&mut self) -> bool {
+        if self.pending_editor == 0 {
+            return false;
+        }
+        self.pending_editor -= 1;
+        true
+    }
+
+    fn clear(&mut self, busy: &AtomicBool) {
+        self.editor_active = false;
+        self.pending_editor = 0;
+        busy.store(false, Ordering::SeqCst);
+    }
+}
+
+static CONTROL_QUEUE: Mutex<ControlQueue> = Mutex::new(ControlQueue {
+    editor_active: false,
+    pending_editor: 0,
+});
+
+struct ControlGuard<'a> {
+    busy: &'a AtomicBool,
+    armed: bool,
+}
+
+impl Drop for ControlGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            CONTROL_QUEUE
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear(self.busy);
+        }
+    }
+}
+
 pub fn dispatch(app: &AppHandle, action: &str) {
     if !is_control(action) {
         return;
     }
     let runtime = app.state::<crate::Runtime>();
     let needs_capture_slot = action != "toggle-pause";
-    if needs_capture_slot && runtime.control_busy.swap(true, Ordering::SeqCst) {
-        return;
+    if needs_capture_slot {
+        let mut queue = CONTROL_QUEUE.lock().unwrap_or_else(|e| e.into_inner());
+        if !queue.start(&runtime.control_busy, action == "open-editor") {
+            return;
+        }
     }
     let app = app.clone();
-    let action = action.to_string();
+    let mut action = action.to_string();
     tauri::async_runtime::spawn_blocking(move || {
-        struct Reset<'a>(Option<&'a std::sync::atomic::AtomicBool>);
-        impl Drop for Reset<'_> {
-            fn drop(&mut self) {
-                if let Some(busy) = self.0 {
-                    busy.store(false, Ordering::SeqCst);
-                }
-            }
-        }
         let runtime = app.state::<crate::Runtime>();
-        let _reset = Reset(needs_capture_slot.then_some(&runtime.control_busy));
-        if let Err(error) = run(&app, &action) {
-            let _ = app.emit("warp-error", error);
-            crate::show(&app);
+        let mut guard = ControlGuard {
+            busy: &runtime.control_busy,
+            armed: needs_capture_slot,
+        };
+        loop {
+            if let Err(error) = run(&app, &action) {
+                let _ = app.emit("warp-error", error);
+                crate::show(&app);
+                // A failed operation should not replay queued editor presses.
+                break;
+            }
+            if !needs_capture_slot {
+                break;
+            }
+            let mut queue = CONTROL_QUEUE.lock().unwrap_or_else(|e| e.into_inner());
+            if queue.next_editor() {
+                action = "open-editor".to_string();
+            } else {
+                // Disarm under the lock: a new dispatch must not have its
+                // busy flag cleared by this worker's Drop implementation.
+                guard.armed = false;
+                queue.clear(&runtime.control_busy);
+                break;
+            }
         }
     });
 }
@@ -146,10 +220,6 @@ fn run(app: &AppHandle, action: &str) -> Result<(), String> {
             app.state::<crate::Runtime>()
                 .quick_open
                 .store(true, std::sync::atomic::Ordering::SeqCst);
-            #[cfg(windows)]
-            {
-                let _ = crate::platform::start_recording(app.clone(), true);
-            }
             let _ = window.center();
             window.show().map_err(|e| e.to_string())?;
             let _ = window.set_focus();
@@ -179,8 +249,55 @@ fn run(app: &AppHandle, action: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::app_binding_index;
+    use super::{app_binding_index, ControlQueue};
     use crate::workspaces::WindowInfo;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn editor_presses_wait_for_the_popup_operation() {
+        let busy = AtomicBool::new(false);
+        let mut queue = ControlQueue::default();
+
+        assert!(
+            queue.start(&busy, true),
+            "first press starts opening the popup"
+        );
+        assert!(
+            !queue.start(&busy, true),
+            "second press must wait until opening finishes"
+        );
+        assert!(
+            !queue.start(&busy, true),
+            "a third distinct press is also preserved"
+        );
+        assert!(
+            queue.next_editor(),
+            "second press opens the main editor after the popup"
+        );
+        assert!(queue.next_editor(), "third press runs after the second");
+        assert!(!queue.next_editor());
+        queue.clear(&busy);
+        assert!(!busy.load(Ordering::SeqCst));
+        assert!(queue.start(&busy, true), "later presses can start normally");
+    }
+
+    #[test]
+    fn unrelated_busy_actions_do_not_queue_editor_presses() {
+        let busy = AtomicBool::new(false);
+        let mut queue = ControlQueue::default();
+
+        assert!(queue.start(&busy, false));
+        assert!(!queue.start(&busy, true));
+        assert!(!queue.next_editor());
+        queue.clear(&busy);
+        assert!(queue.start(&busy, true));
+        assert!(!queue.start(&busy, false));
+        assert!(
+            !queue.next_editor(),
+            "other controls keep their existing busy behavior"
+        );
+        queue.clear(&busy);
+    }
 
     fn window(app_id: &str, title: &str) -> WindowInfo {
         serde_json::from_value(serde_json::json!({

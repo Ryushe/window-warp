@@ -340,6 +340,20 @@ test("Windows selectors cannot fall back to a broader KDE app match",()=>{
     assert.throws(()=>f.warp.run(binding),/Windows window-match/);
 });
 
+test("KDE uses additional identifiers while preserving Windows criteria",()=>{
+    const binding={label:"Firefox",shortcut:"Ctrl+Alt+J",action:"focus-app",appMatch:"firefox.exe",windowsMatch:{executable:"firefox.exe"},appMatches:["org.mozilla.firefox"]};
+    const f=fixture([binding]);
+    f.window.resourceClass="unrelated";
+    f.window.desktopFileName="org.mozilla.firefox";
+    f.workspace.activeWindow=null;
+    f.trigger("Firefox");
+    assert.equal(f.workspace.activeWindow,f.window);
+    f.window.desktopFileName="firefox.exe";
+    f.workspace.activeWindow=null;
+    f.trigger("Firefox");
+    assert.equal(f.workspace.activeWindow,null);
+});
+
 for (const legacy of [false,true]) test(`radial selection preserves the pre-picker active window on Plasma ${legacy ? 5 : 6}`, () => {
     const binding = {label:"App",shortcut:"Ctrl+Alt+J",action:"pull-app",appMatch:"firefox",mainMonitorAction:"burner",burnerLayout:"tile-right"};
     const settings = {mainMonitor:1,burnerMonitor:2};

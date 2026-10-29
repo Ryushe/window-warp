@@ -62,7 +62,7 @@ pub fn snapshot_for_binding(
     app: &AppHandle,
     binding: &crate::config::Binding,
 ) -> Result<Vec<crate::workspaces::WindowInfo>, String> {
-    if binding.windows_match.is_some() {
+    if binding.windows_match.is_some() && binding.app_matches.is_empty() {
         return Err("Windows window-match rules cannot run on KDE. Adapt the binding to a KDE app identifier first.".into());
     }
     snapshot(app)
@@ -159,7 +159,7 @@ pub fn pull_selected(
     selected: &crate::workspaces::WindowInfo,
     previous: Option<&crate::workspaces::WindowInfo>,
 ) -> Result<(), String> {
-    if binding.windows_match.is_some() {
+    if binding.windows_match.is_some() && binding.app_matches.is_empty() {
         return Err("Windows window-match rules cannot run on KDE. Adapt the binding to a KDE app identifier first.".into());
     }
     crate::linux_control::input_request(

@@ -17,9 +17,12 @@ parser.add_argument("--marker", required=True)
 parser.add_argument("--app-pid", type=int, default=0)
 parser.add_argument("--standalone", action="store_true")
 parser.add_argument("--lifetime", type=int, default=180)
+parser.add_argument("--windows", type=int, default=2)
 args = parser.parse_args()
 if not 1 <= args.lifetime <= 1200:
     raise ValueError("Fixture lifetime must be between 1 and 1200 seconds")
+if not 1 <= args.windows <= 3:
+    raise ValueError("Fixture supports one to three owned windows")
 user = c.WinDLL("user32", use_last_error=True)
 kernel = c.WinDLL("kernel32", use_last_error=True)
 # Match Tauri's per-monitor pixel coordinates when placing windows or the pointer.
@@ -61,6 +64,10 @@ user.IsIconic.argtypes = [w.HWND]
 user.IsZoomed.argtypes = [w.HWND]
 user.SetForegroundWindow.argtypes = [w.HWND]
 user.GetForegroundWindow.restype = w.HWND
+WINEVENTPROC = c.WINFUNCTYPE(None, w.HANDLE, w.DWORD, w.HWND, w.LONG, w.LONG, w.DWORD, w.DWORD)
+user.SetWinEventHook.argtypes = [w.DWORD, w.DWORD, w.HMODULE, WINEVENTPROC, w.DWORD, w.DWORD, w.DWORD]
+user.SetWinEventHook.restype = w.HANDLE
+user.UnhookWinEvent.argtypes = [w.HANDLE]
 ENUMWINDOWS = c.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
 user.EnumWindows.argtypes = [ENUMWINDOWS, w.LPARAM]
 user.IsWindowVisible.argtypes = [w.HWND]
@@ -92,6 +99,7 @@ kernel.GetProcessTimes.argtypes = [w.HANDLE, c.POINTER(w.FILETIME), c.POINTER(w.
 kernel.GetSystemTimeAsFileTime.argtypes = [c.POINTER(w.FILETIME)]
 user.EnumChildWindows.argtypes = [w.HWND, ENUMWINDOWS, w.LPARAM]
 user.IsWindow.argtypes = [w.HWND]
+user.IsChild.argtypes = [w.HWND, w.HWND]
 user.PostMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
 user.GetClassNameW.argtypes = [w.HWND, w.LPWSTR, c.c_int]
 user.GetWindowTextW.argtypes = [w.HWND, w.LPWSTR, c.c_int]
@@ -586,10 +594,78 @@ def tray_menu(action):
         raise c.WinError(c.get_last_error())
     return {"tray": tray, "popup": popup, "items": items, "selected": action}
 
+# Independent pass-through hook in the *fixture process*, modelling another
+# application's listener. Store only tagged fixture input, never physical keys.
+class KBDLLHOOKSTRUCT(c.Structure):
+    _fields_ = [("vkCode", w.DWORD), ("scanCode", w.DWORD), ("flags", w.DWORD),
+                ("time", w.DWORD), ("dwExtraInfo", c.c_size_t)]
+HOOKPROC = c.WINFUNCTYPE(LRESULT, c.c_int, w.WPARAM, w.LPARAM)
+user.SetWindowsHookExW.argtypes = [c.c_int, HOOKPROC, w.HINSTANCE, w.DWORD]
+user.SetWindowsHookExW.restype = w.HANDLE
+user.CallNextHookEx.argtypes = [w.HANDLE, c.c_int, w.WPARAM, w.LPARAM]
+user.CallNextHookEx.restype = LRESULT
+user.UnhookWindowsHookEx.argtypes = [w.HANDLE]
+observer_events = queue.Queue()
+observer_stop = threading.Event()
+observer_ready = queue.Queue()
+observer_thread = None
+
+@HOOKPROC
+def observe_input(code, wp, lp):
+    if code == 0:
+        event = c.cast(lp, c.POINTER(KBDLLHOOKSTRUCT)).contents
+        if event.dwExtraInfo == 0x57525453 and event.vkCode in (0x5b, 0x42, 0x86):
+            observer_events.put((int(event.vkCode), bool(event.flags & 0x80)))
+    return user.CallNextHookEx(None, code, wp, lp)
+
+def observe_worker():
+    hook = user.SetWindowsHookExW(13, observe_input, kernel.GetModuleHandleW(None), 0)
+    observer_ready.put(bool(hook))
+    if not hook:
+        return
+    try:
+        message = w.MSG()
+        while not observer_stop.is_set():
+            while user.PeekMessageW(c.byref(message), None, 0, 0, 1):
+                user.TranslateMessage(c.byref(message))
+                user.DispatchMessageW(c.byref(message))
+            time.sleep(0.005)
+    finally:
+        user.UnhookWindowsHookEx(hook)
+
+def stop_observer():
+    global observer_thread
+    observer_stop.set()
+    if observer_thread:
+        observer_thread.join(timeout=2)
+        if observer_thread.is_alive():
+            raise RuntimeError("Fixture input observer did not stop")
+        observer_thread = None
+
 close_fixture = {"window": None, "requests": 0, "allow": False}
+hotkey_events = []
+activation_events = []
+activation_timings = []
+foreground_events = []
+foreground_targets = set()
+foreground_hook = None
+
+@WINEVENTPROC
+def record_foreground(_hook, _event, hwnd, _object, _child, _thread, _event_time):
+    # The callback is delivered on this fixture's message loop. Store only the
+    # explicitly verified test windows, and timestamp delivery with the same
+    # monotonic clock used for test key releases.
+    if int(hwnd or 0) in foreground_targets:
+        foreground_events.append((int(hwnd), time.perf_counter() * 1000))
 
 @WNDPROC
 def procedure(hwnd, message, wp, lp):
+    if message == 0x0006 and (wp & 0xffff):
+        activation_events.append(int(hwnd))
+        activation_timings.append((int(hwnd), time.perf_counter() * 1000))
+    if message == 0x0312:
+        hotkey_events.append(int(wp))
+        return 0
     if message == 0x10 and hwnd == close_fixture["window"]:
         close_fixture["requests"] += 1
         if not close_fixture["allow"]:
@@ -603,7 +679,7 @@ window_class = WNDCLASS(lpfnWndProc=procedure, hInstance=instance,
 if not user.RegisterClassW(c.byref(window_class)):
     raise c.WinError(c.get_last_error())
 windows = []
-for index in range(1 if args.standalone else 2):
+for index in range(1 if args.standalone else args.windows):
     hwnd = user.CreateWindowExW(0, class_name, f"{args.marker}-{index}", 0x10CF0000,
                                 150 + index * 80, 120 + index * 80, 500, 320,
                                 None, None, instance, None)
@@ -626,10 +702,49 @@ original_pointer = None
 last_pointer = None
 
 def send_keys(keys, release=False):
-    events = [INPUT(type=1, ki=KEYBDINPUT(wVk=key, dwFlags=2 if release else 0)) for key in keys]
+    events = [INPUT(type=1, ki=KEYBDINPUT(wVk=key, dwFlags=2 if release else 0, dwExtraInfo=0x57525453)) for key in keys]
     inputs = (INPUT * len(events))(*events)
     if user.SendInput(len(inputs), inputs, c.sizeof(INPUT)) != len(inputs):
         raise c.WinError(c.get_last_error())
+
+def switch_burst_worker(request, allowed_windows):
+    held = []
+    release_times = []
+    error = None
+    try:
+        def down(key):
+            held.append(key)
+            send_keys([key])
+        def up(key):
+            send_keys([key], release=True)
+            held.remove(key)
+        if user.GetForegroundWindow() not in allowed_windows:
+            raise RuntimeError("Foreground left the owned switch fixture; no chords sent")
+        if not request.get("release_win"):
+            down(0x5b)
+        for index, key in enumerate([0x85, 0x86] * 4):
+            if user.GetForegroundWindow() not in allowed_windows:
+                raise RuntimeError("Foreground left the owned switch fixture; no further chords sent")
+            if request.get("release_win"):
+                down(0x5b)
+            down(key)
+            release_times.append(time.perf_counter() * 1000)
+            up(key)
+            if request.get("release_win"):
+                up(0x5b)
+            if index < 7 and request.get("spacing_ms"):
+                time.sleep(request["spacing_ms"] / 1000)
+        if not request.get("release_win"):
+            up(0x5b)
+    except Exception as caught:
+        error = str(caught)
+    finally:
+        if held:
+            try:
+                send_keys(list(reversed(held)), release=True)
+            except Exception as caught:
+                error = f"{error or 'Input cleanup failed'}: {caught}"
+    print(json.dumps({"id": request["id"], **({"error": error} if error else {"result": release_times})}), flush=True)
 
 def owned(hwnd):
     pid = w.DWORD()
@@ -641,6 +756,7 @@ def owned(hwnd):
 
 deadline = time.monotonic() + args.lifetime
 next_firefox_scan = 0
+switch_worker = None
 try:
     while time.monotonic() < deadline:
         if firefox_scope is not None and time.monotonic() >= next_firefox_scan:
@@ -659,7 +775,21 @@ try:
             if command == "quit":
                 break
             result = True
-            if command == "app_window":
+            if command == "observe_start":
+                if observer_thread is not None:
+                    raise RuntimeError("Fixture input observer is already running")
+                observer_stop.clear()
+                while not observer_events.empty(): observer_events.get_nowait()
+                observer_thread = threading.Thread(target=observe_worker, daemon=True)
+                observer_thread.start()
+                if not observer_ready.get(timeout=3):
+                    raise RuntimeError("Cannot start fixture input observer")
+            elif command == "observe_stop":
+                stop_observer()
+            elif command == "observe_events":
+                result = []
+                while not observer_events.empty(): result.append(observer_events.get_nowait())
+            elif command == "app_window":
                 found = []
                 @ENUMWINDOWS
                 def find_window(hwnd, _):
@@ -685,6 +815,10 @@ try:
                     raise c.WinError(c.get_last_error())
                 result = {"window": hwnd, "pid": args.app_pid, "className": app_class_name,
                           "visible": bool(user.IsWindowVisible(hwnd)), "foreground": user.GetForegroundWindow() == hwnd}
+            elif command == "fixture_window_state":
+                hwnd = int(request["window"])
+                checked_app_window(hwnd)
+                result = {"visible": bool(user.IsWindowVisible(hwnd)), "foreground": user.GetForegroundWindow() == hwnd}
             elif command == "tray_menu":
                 result = tray_menu(request["action"])
             elif command == "calculator_begin":
@@ -751,7 +885,8 @@ try:
                     result = None
             elif command == "reserve":
                 key = request["key"]
-                if not user.RegisterHotKey(windows[0], key, 0x4007, key):
+                modifiers = 0x4008 if request.get("meta") else 0x4007
+                if not user.RegisterHotKey(windows[0], key, modifiers, key):
                     raise c.WinError(c.get_last_error())
                 reserved.add(key)
             elif command == "release":
@@ -759,6 +894,75 @@ try:
                 if not user.UnregisterHotKey(windows[0], key):
                     raise c.WinError(c.get_last_error())
                 reserved.discard(key)
+            elif command == "hotkey_events":
+                result = list(hotkey_events)
+            elif command == "activation_events":
+                result = list(activation_events)
+                activation_events.clear()
+                activation_timings.clear()
+            elif command == "timed_activation_events":
+                result = list(activation_timings)
+                activation_events.clear()
+                activation_timings.clear()
+            elif command == "foreground_start":
+                if foreground_hook:
+                    raise RuntimeError("Foreground observer already started")
+                peer = int(request["peer_window"])
+                peer_pid = w.DWORD()
+                user.GetWindowThreadProcessId(peer, c.byref(peer_pid))
+                title = c.create_unicode_buffer(1024)
+                user.GetWindowTextW(peer, title, len(title))
+                if peer_pid.value != request["peer_pid"] or not title.value.startswith(args.marker):
+                    raise RuntimeError("Foreground observer peer is not the owned fixture")
+                foreground_targets.clear()
+                foreground_targets.update(windows)
+                foreground_targets.add(peer)
+                foreground_events.clear()
+                # EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT: this observes
+                # window focus changes; it is not another keyboard hook.
+                foreground_hook = user.SetWinEventHook(3, 3, None, record_foreground, 0, 0, 0)
+                if not foreground_hook:
+                    raise c.WinError(c.get_last_error())
+            elif command == "foreground_events":
+                result = list(foreground_events)
+                foreground_events.clear()
+            elif command == "click_owned":
+                # Click only a visible title bar belonging to this helper. Do
+                # not raise the target first: the focus transition is what the
+                # click-away test needs to exercise.
+                hwnd = int(request["window"])
+                if hwnd not in windows or not user.IsWindowVisible(hwnd):
+                    raise RuntimeError("Click target must be a visible helper-owned window")
+                old = w.POINT()
+                rect = w.RECT()
+                if not user.GetCursorPos(c.byref(old)) or not user.GetWindowRect(hwnd, c.byref(rect)):
+                    raise c.WinError(c.get_last_error())
+                point = w.POINT(rect.left + 80, rect.top + 14)
+                hit = user.WindowFromPoint(point)
+                if hit != hwnd and not user.IsChild(hwnd, hit):
+                    raise RuntimeError("Owned title bar is covered; no click sent")
+                pressed = False
+                try:
+                    if not user.SetCursorPos(point.x, point.y):
+                        raise c.WinError(c.get_last_error())
+                    hit = user.WindowFromPoint(point)
+                    if hit != hwnd and not user.IsChild(hwnd, hit):
+                        raise RuntimeError("Owned title bar became covered; no click sent")
+                    event = INPUT(type=0, mi=MOUSEINPUT(dwFlags=2))
+                    if user.SendInput(1, c.byref(event), c.sizeof(INPUT)) != 1:
+                        raise c.WinError(c.get_last_error())
+                    pressed = True
+                    time.sleep(0.08)
+                finally:
+                    try:
+                        if pressed:
+                            event = INPUT(type=0, mi=MOUSEINPUT(dwFlags=4))
+                            if user.SendInput(1, c.byref(event), c.sizeof(INPUT)) != 1:
+                                raise c.WinError(c.get_last_error())
+                    finally:
+                        current = w.POINT()
+                        if user.GetCursorPos(c.byref(current)) and (current.x, current.y) == (point.x, point.y):
+                            user.SetCursorPos(old.x, old.y)
             elif command == "pointer_position":
                 point = w.POINT()
                 if not user.GetCursorPos(c.byref(point)):
@@ -792,11 +996,13 @@ try:
                         raise RuntimeError("Repeated key must already be fixture-held")
                     send_keys([key])
                 else:
-                    if not all(key in held_keys for key in [0x11, 0x12, 0x10]) or key in held_keys:
-                        raise RuntimeError("Tap requires fixture-held modifiers and a fresh key")
+                    held_modifiers = all(modifier in held_keys for modifier in [0x11, 0x12, 0x10])
+                    safe_super_overlap = 0x5b in held_keys and 0x85 in held_keys and key == 0x86
+                    if (not held_modifiers and not safe_super_overlap) or key in held_keys:
+                        raise RuntimeError("Tap requires fixture-held modifiers and a fresh allowed key")
                     send_keys([key])
                     send_keys([key], release=True)
-            elif command in ("focus", "press", "plain_press", "hold_start", "place"):
+            elif command in ("focus", "press", "plain_press", "hold_start", "burst", "switch_burst", "place"):
                 hwnd = int(request.get("window", windows[0]))
                 owned(hwnd)
                 # Activating or typing into a maximized window must preserve
@@ -830,7 +1036,8 @@ try:
                         if not user.GetWindowRect(hwnd, c.byref(rect)):
                             raise c.WinError(c.get_last_error())
                         click_point = w.POINT(rect.left+80, rect.top+14)
-                        if user.WindowFromPoint(click_point) != hwnd:
+                        hit = user.WindowFromPoint(click_point)
+                        if hit != hwnd and not user.IsChild(hwnd, hit):
                             raise RuntimeError("Owned title bar is covered; no click sent")
                         if not user.SetCursorPos(click_point.x, click_point.y):
                             raise c.WinError(c.get_last_error())
@@ -852,19 +1059,61 @@ try:
                             last_pointer = (point.x,point.y)
                 if user.GetForegroundWindow() != hwnd:
                     raise RuntimeError(f"Owned fixture could not take focus for {command}; no keys sent (requested={hwnd}, foreground={user.GetForegroundWindow()})")
-                if command in ("press", "plain_press", "hold_start"):
+                if command in ("press", "plain_press", "hold_start", "burst", "switch_burst"):
                     if any(user.GetAsyncKeyState(key) & 0x8000 for key in (0x10, 0x11, 0x12, 0x5B, 0x5C)):
                         raise RuntimeError("A modifier is already held; no keys sent")
-                    if command == "plain_press":
-                        if request["key"] not in (88,67):
-                            raise RuntimeError("Only X/C are supported by the retile fixture")
+                    if command == "switch_burst":
+                        if switch_worker is not None and switch_worker.is_alive():
+                            raise RuntimeError("A switch burst is already running")
+                        if request.get("spacing_ms", 0) not in (0, 80):
+                            raise RuntimeError("Switch fixture supports only zero or 80 ms spacing")
+                        peer = int(request["peer_window"])
+                        pid = w.DWORD()
+                        user.GetWindowThreadProcessId(peer, c.byref(pid))
+                        title = c.create_unicode_buffer(512)
+                        user.GetWindowTextW(peer, title, len(title))
+                        if pid.value != request["peer_pid"] or not title.value.startswith(args.marker):
+                            raise RuntimeError("The peer target is not the named fixture window")
+                        # Keep both fixture windows' message loops running while
+                        # input is injected, so WM_ACTIVATE timing is meaningful.
+                        switch_worker = threading.Thread(target=switch_burst_worker,
+                            args=(request.copy(), set(windows) | {peer}), daemon=True)
+                        switch_worker.start()
+                        continue
+                    elif command == "burst":
+                        if request["key"] != 0x85:
+                            raise RuntimeError("Burst is limited to the fixture's F22 shortcut")
+                        sequence = [(0x5b,False),(0x85,False),(0x85,True),(0x85,False),(0x85,True),(0x5b,True)]
+                        events = (INPUT * len(sequence))(*(INPUT(type=1, ki=KEYBDINPUT(wVk=key, dwFlags=2 if up else 0, dwExtraInfo=0x57525453)) for key,up in sequence))
+                        held_keys = [0x5b, 0x85]
+                        if user.SendInput(len(events), events, c.sizeof(INPUT)) != len(events):
+                            raise c.WinError(c.get_last_error())
+                        held_keys = []
+                    elif command == "plain_press":
+                        if request["key"] not in (66,88,67,13,0x85):
+                            raise RuntimeError("Only B/X/C, Enter and F22 are supported by the fixture")
+                        if request["key"] == 13:
+                            checked_app_window(hwnd)
                         keys = ([0x5B] if request.get("meta",False) else []) + [request["key"]]
+                    elif request.get("meta") and command == "hold_start":
+                        keys = [0x5B, request["key"]]
                     else:
                         keys = [0x11, 0x12, 0x10, request["key"]]
+                    if command == "burst":
+                        print(json.dumps({"id": request["id"], "result": True}), flush=True)
+                        continue
                     held_keys = keys.copy()
-                    send_keys(keys)
+                    gap = min(max(float(request.get("gap_ms", 0)), 0), 50) / 1000
+                    def transmit(sequence, release=False):
+                        if not gap:
+                            send_keys(sequence, release=release)
+                        else:
+                            for item in sequence:
+                                send_keys([item], release=release)
+                                time.sleep(gap)
+                    transmit(keys)
                     if command in ("press", "plain_press"):
-                        send_keys(list(reversed(keys)), release=True)
+                        transmit(list(reversed(keys)), release=True)
                         held_keys = []
             else:
                 raise RuntimeError("Unknown fixture command")
@@ -872,6 +1121,11 @@ try:
         except Exception as error:
             print(json.dumps({"id": request["id"], "error": str(error)}), flush=True)
 finally:
+    if foreground_hook:
+        user.UnhookWinEvent(foreground_hook)
+    if switch_worker is not None:
+        switch_worker.join(timeout=3)
+    stop_observer()
     if app_process_handle is not None:
         kernel.CloseHandle(app_process_handle)
     if firefox_scope is not None:

@@ -55,6 +55,8 @@
         <button id="add" type="button" disabled>Add shortcut</button>
       </header>
       <label class="search-field">Search<input id="search" type="search" placeholder="Search names, keys, or apps"></label>
+      <div class="section-title"><div><strong>App identifiers</strong><p>Open your apps, then find their names on this device. Review the results before saving.</p></div><button id="find-apps" type="button">Find open apps</button></div>
+      <p id="find-apps-result" role="status" aria-live="polite"></p>
       <div id="bindings"></div>
       <div class="empty" id="empty" hidden>No shortcuts yet. Add a shortcut to create one.</div>
       <div class="editor-footer"><span id="save-status">Stored on this device</span><span class="footer-actions"><button id="discard" type="button" disabled>Cancel changes</button><button id="save" class="primary" type="button" disabled>Save changes</button></span></div>
@@ -93,6 +95,7 @@
         <label class="enabled-field"><input type="checkbox" id="startup" disabled> Start Window Warp when I sign in</label>
         <small class="startup-note">Signing in also turns your saved shortcuts on. Uncheck this to start it yourself.</small>
         <label class="enabled-field"><input type="checkbox" id="enable-on-launch" checked> Turn shortcuts on when Window Warp opens</label>
+        <label>Default modifier for new popup shortcuts<select id="quick-modifier"><option value="Super">Super</option><option value="Ctrl">Ctrl</option><option value="Alt">Alt</option><option value="Shift">Shift</option></select><small>Open the popup, press a key, then Enter. You can change the modifier in the popup.</small></label>
       </section>
       <section class="group">
         <h2>Monitors</h2>
@@ -166,6 +169,7 @@
       <div class="binding-body"><div class="binding-inner">
       <div class="binding-top"><label class="label-field">Name<input data-field="label" maxlength="120" placeholder="e.g. Focus Firefox"></label><div class="key-field"><label>Shortcut<input data-field="shortcut" readonly placeholder="Click, then press C, X, or another key" spellcheck="false"></label><div class="mod-row"><button type="button" data-mod="Super" aria-pressed="false">Super</button><button type="button" data-mod="Ctrl" aria-pressed="false">Ctrl</button><button type="button" data-mod="Alt" aria-pressed="false">Alt</button><button type="button" data-mod="Shift" aria-pressed="false">Shift</button><button type="button" class="clear-shortcut">Clear</button></div></div></div>
       <div class="binding-bottom"><label>Action<select data-field="action"><optgroup label="Movement"><option value="push">Push window</option><option value="pull">Bring the last window back</option><option value="tile">Tile window</option><option value="toggle-maximize">Maximize or restore</option><option value="close-window">Close the window</option></optgroup><optgroup label="Focus"><option value="pull-app">Bring an app to the main monitor</option><option value="focus-app">Cycle that app's windows</option></optgroup><optgroup label="Controls"><option value="toggle-pause">Pause or resume shortcuts</option><option value="open-editor">Edit the shortcut for this app</option><option value="open-workspaces">Browse workspaces</option><option value="update-workspace">Save the open windows as a workspace</option></optgroup></select></label><label class="match-field" hidden>App identifier<input data-field="appMatch" maxlength="32768" spellcheck="false"><small class="match-hint"></small></label></div>
+      <label class="alternative-matches" hidden>Additional app identifiers<textarea class="app-matches" rows="3" spellcheck="false" placeholder="One identifier per line"></textarea><small>Any listed identifier can match. Windows-specific criteria take precedence on Windows.</small></label>
       <div class="push-options" hidden><label>Direction<select class="push-direction"><option value="left">Left</option><option value="right">Right</option></select></label><label class="enabled-field"><input class="push-center" type="checkbox"> Center the pointer</label></div>
       <div class="tile-options" hidden><label>Side<select class="tile-side"><option value="left">Left half</option><option value="right">Right half</option><option value="up">Top half</option><option value="down">Bottom half</option></select></label></div>
       <div class="windows-match-field" hidden>

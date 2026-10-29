@@ -26,9 +26,9 @@ A standalone Tauri 2 application for Windows and **KDE Plasma 5.27 and 6**, with
 
 Normal launches turn shortcuts on. Settings can turn that off. A registered login launch uses `--startup` to enable saved shortcuts and hide the editor. Shortcut fields can be changed while shortcuts are on. A new configuration uses the AutoHotkey keys: Win+X/C move windows, Win+Ctrl+X/C also center the pointer, Win+R pulls the last window, Win+; pauses, Win+Z maximizes, and Win+Q closes. App keys match `window_manager_apps.ini`, including Win+D for Discord and Win+S for Firefox. Every key can be changed. Stop the AutoHotkey script before enabling these keys.
 
-New configurations also include **Win+B** to edit the current app's shortcut, **Win+O** to browse workspaces, and **Win+Y** to capture a workspace update for review. The main screen has **Start Window Warp when I sign in**; that launch enables saved shortcuts. Existing configurations can add these actions from the editor. Opening the current-app editor pauses window shortcuts and preserves existing drafts. Resume uses saved settings; unsaved edits remain in the editor.
+New configurations also include **Win+B** to edit the current app's shortcut, **Win+O** to browse workspaces, and **Win+Y** to capture a workspace update for review. The main screen has **Start Window Warp when I sign in**; that launch enables saved shortcuts. Existing configurations can add these actions from the editor. Opening the current-app editor preserves existing drafts. Unsaved edits remain in the full editor.
 
-For a more specific Windows app shortcut, enable **Use Windows matching criteria**. Every entered criterion must match. Title text uses case-sensitive contains matching, and window classes use case-sensitive equality, matching the original AHK configuration. Executable names, full paths and packaged IDs are case-insensitive. Process IDs and window IDs can change after restart. Imported `ahk_exe`, `ahk_class`, `ahk_pid`, `ahk_id`, title and active-window rules retain these criteria, including visible owned or untitled windows. Undefined AHK groups and ambiguous rules remain visible for manual review. Windows rules stay disabled on Linux until you turn off Windows matching and enter a KDE app identifier.
+For a more specific Windows app shortcut, enable **Use Windows matching criteria**. Every entered criterion must match. Title text uses case-sensitive contains matching, and window classes use case-sensitive equality, matching the original AHK configuration. Executable names, full paths and packaged IDs are case-insensitive. Process IDs and window IDs can change after restart. Imported `ahk_exe`, `ahk_class`, `ahk_pid`, `ahk_id`, title and active-window rules retain these criteria, including visible owned or untitled windows. Undefined AHK groups and ambiguous rules remain visible for manual review. On Linux, add a KDE app identifier to use the binding across platforms.
 
 Open **Workspaces → Capture current**, choose which windows to keep, and save a name. Capture creates a review draft. Each app has editable launch arguments and an option to require a new window. **Open workspace** reuses matching windows or launches missing apps, then restores placement.
 
@@ -38,24 +38,20 @@ Firefox captures its profile, tab URLs, and selected tab from its last readable 
 
 ## Install, turn on/off, and uninstall
 
-Download the installers from the [latest release](https://github.com/Ryushe/windows_warp/releases/latest).
-
-On Windows, run `Window.Warp_0.1.0_x64-setup.exe`. It installs for your Windows
+Download the appropriate installer from the [latest release](https://github.com/Ryushe/window-warp/releases/latest). On Windows, run the x64 setup executable. It installs for your Windows
 account and adds Window Warp to the Start menu and **Settings → Apps → Installed
-apps**. The published KDE package targets Ubuntu/Kubuntu 24.04 amd64 with
-Plasma 5.27.11 on Wayland. From the download directory, run:
+apps**. On KDE, install the matching Debian package with:
 
 ```sh
-sudo apt install ./Window.Warp_0.1.0_amd64.deb
+sudo apt install "./Window Warp_<version>_amd64.deb"
 ```
 
-`apt` installs the local `.deb` and resolves its dependencies. In an environment
-where dependencies are already installed,
-`sudo dpkg -i ./Window.Warp_0.1.0_amd64.deb` also works; this was the command used
-for the disposable package acceptance test.
-
-The package requires `kwin-common (= 4:5.27.11-0ubuntu3)`. Other KWin versions,
-including Plasma 6, need a matching companion and package build.
+Run the command from the download directory and replace `<version>` with the
+version in the downloaded filename. `apt` installs the package and resolves its
+dependencies; `sudo dpkg -i` also works when those dependencies are installed.
+The Debian package is for Ubuntu/Kubuntu 24.04 amd64, Plasma 5.27.11 on Wayland,
+with KWin `4:5.27.11-0ubuntu3`. Other KWin versions, including Plasma 6, need a
+matching companion and package build.
 
 - **Turn on:** open Window Warp and click **Enable shortcuts**, or choose
   **Enable shortcuts** from its tray menu.
@@ -136,7 +132,7 @@ Manual acceptance on each OS: enable the app; push a floating window across two 
 - `src-tauri/src/app_actions.rs`: application control shortcuts and pending editor/workspace requests.
 - `src-tauri/src/radial.rs` and `ui/radial.*`: stable window candidates, shared angular selection, and the temporary picker overlay.
 - `src-tauri/src/config.rs`: versioned configuration, canonical shortcut syntax, validation.
-- `src-tauri/src/windows.rs`: Win32 window enumeration, positioning, focus, and global shortcut registration.
+- `src-tauri/src/windows.rs`: Win32 window enumeration, positioning, and focus; `windows_reserved.rs` owns the shared keyboard hook.
 - `src-tauri/src/linux.rs`: KWin session integration via qdbus, with arguments passed directly without a shell.
 - `src-tauri/src/linux_control.rs`: authenticated session-bus command queue with correlated replies and input cancellation.
 - `src-tauri/src/workspaces.rs`: workspace storage, matching, launch, restore, and cancellation.
@@ -148,6 +144,19 @@ Manual acceptance on each OS: enable the app; push a floating window across two 
 - `src-tauri/kwin/control.js`: command dispatch between the application and the persistent window manager.
 
 Settings live in Tauri's per-user configuration directory under `com.windowwarp.desktop/settings.json`; workspaces use `workspaces.json` beside it. The editor displays the settings path. Use **Import AutoHotkey settings** to select existing INI files. The originals are never modified.
+
+For a new shortcut in the popup, press a key and Enter. Settings chooses the
+default modifier; the popup buttons can adjust it. If a key is already used,
+choose **Replace** to take it, or **Replace and edit old** to assign the
+displaced action a new key immediately. Press the popup shortcut again to open
+the main editor, or click outside the popup to close it.
+
+Under Shortcuts, **Find open apps** compares open app identifiers with shortcut
+names and existing identifiers. Unambiguous matches are added to the draft;
+missing or ambiguous apps are listed for review. Open the apps first and save
+the reviewed changes. Additional identifiers can also be edited manually, one
+per line. Windows-specific matching criteria remain authoritative on Windows;
+additional identifiers provide KDE matches for those bindings.
 
 ## Radial window picker
 
@@ -164,8 +173,8 @@ The overlay is clamped to the work area containing the original pointer. Native
 pointer updates run only while a picker is visible. On KDE, KWin positions and
 focuses the overlay, including on Wayland. More than four labels use a compact
 layout to keep all eight readable without overlap. Native Windows and KDE fixtures verify selection on release, dead-zone
-cancellation and pause/resume while held. Rapid Escape cancellation on Windows
-has a known intermittent failure; see PARITY.md.
+cancellation and pause/resume while held. Windows tests also cover rapid Escape
+and focus-loss cancellation; see [PARITY.md](PARITY.md) for the evidence and remaining coverage.
 
 
 ## Importing the original INIs
@@ -188,20 +197,6 @@ Unsupported shared actions (including move-and-center), compound AHK match
 expressions and unrecognized key syntax remain visible with the original
 settings and an explanation. They are not silently converted. Full migration
 parity still depends on the remaining action and packaged-launch features.
-
-
-## Current preview artifacts (2026-10-25)
-
-The current feature-branch builds are available locally after validation:
-
-- Windows x64 NSIS: `src-tauri/target/release/bundle/nsis/Window Warp_0.1.0_x64-setup.exe`
-- Ubuntu 24.04 amd64 Debian package, requiring `kwin-common (= 4:5.27.11-0ubuntu3)`: `src-tauri/target/release/bundle/deb/Window Warp_0.1.0_amd64.deb`
-
-Their embedded executables and package metadata were inspected without installing
-them. The preview includes the recent terminal, Firefox, tiling and gesture
-changes. Tray handlers and graceful shutdown pass on Windows and Plasma5.27. Full parity,
-installer behavior and full Plasma6 application behavior remain under validation; see PARITY.md,
-including X11 gestures, physical-display/login coverage and installer execution.
 
 
 Terminal restoration checks fresh shell/profile/distribution identity while

@@ -8,12 +8,17 @@ import {createInterface} from "node:readline";
 import {createServer} from "node:net";
 import {randomUUID} from "node:crypto";
 import {testFirefox} from "./firefox.mjs";
+import {summarizeForeground} from "./foreground-timing.mjs";
 
 if (process.platform !== "win32") throw new Error("This fixture requires Windows");
 const firefoxProfileLock = process.argv.includes("--firefox-profile-lock");
+const fastOnly = process.argv.includes("--fast-only");
+const hookOnly = process.argv.includes("--hook-only");
+const quickOnly = process.argv.includes("--quick-only") || hookOnly || fastOnly;
 const firefoxOnly = process.argv.includes("--firefox-only") || firefoxProfileLock;
 const runFirefox = firefoxOnly || process.argv.includes("--firefox");
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const buildTarget = process.env.WARP_TEST_CARGO_TARGET_DIR || path.join(desktop, "src-tauri/target");
 const marker = "WARP-NATIVE-" + randomUUID();
 const output = path.join(desktop, "src-tauri/target/windows-validation", marker);
 const state = path.join(output, "state");
@@ -45,35 +50,43 @@ const override = {
     app:{appDirectoriesOverride:state, windows:[{
         label:"main", title:marker, width:1050, height:760, minWidth:760, minHeight:560,
         additionalBrowserArgs:`--remote-debugging-address=127.0.0.1 --remote-debugging-port=${port}`
-    }, {...JSON.parse(fs.readFileSync(path.join(desktop,"src-tauri/tauri.conf.json"),"utf8")).app.windows.find(w=>w.label === "radial"),additionalBrowserArgs:`--remote-debugging-address=127.0.0.1 --remote-debugging-port=${port}`}]}
+    }, ...JSON.parse(fs.readFileSync(path.join(desktop,"src-tauri/tauri.conf.json"),"utf8")).app.windows.filter(w=>["radial","quick"].includes(w.label)).map(w=>({...w,additionalBrowserArgs:`--remote-debugging-address=127.0.0.1 --remote-debugging-port=${port}`}))]}
 };
 fs.writeFileSync(path.join(output, "build-config.json"), JSON.stringify(override, null, 2));
 const actions = ["push-left", "push-right", "pull", "tile-left", "tile-right", "toggle-pause", "open-editor", "open-workspaces", "update-workspace"];
-const config = {version:1, settings:{mainMonitor:0,burnerMonitor:2}, bindings:actions.map((action,index) => ({
+const config = {version:1, settings:{mainMonitor:0,burnerMonitor:2,enableOnLaunch:false,quickModifier:"Alt"}, bindings:actions.map((action,index) => ({
     label:action, shortcut:`Ctrl+Alt+Shift+F${13+index}`, action, enabled:true, appMatch:"", mainMonitorAction:"burner", burnerLayout:"float"
 }))};
+if (quickOnly) config.bindings[0].shortcut = "Alt+C";
+if (hookOnly) config.bindings.find(binding => binding.action === "open-editor").shortcut = "Super+B";
 fs.writeFileSync(path.join(state, "settings.json"), JSON.stringify(config, null, 2));
 const buildLog = fs.openSync(path.join(output, "build.log"), "w");
 const cargo = path.join(process.env.USERPROFILE, ".cargo/bin/cargo.exe");
 console.log("Building isolated native fixture:", output);
 const build = spawn(cargo, ["rustc", "--manifest-path", "src-tauri/Cargo.toml", "--offline", "--features", "tauri/custom-protocol", "--", "-C", "debuginfo=0"], {
-    cwd:desktop, env:{...process.env, CARGO_INCREMENTAL:"0", CARGO_BUILD_JOBS:"1", TAURI_CONFIG:JSON.stringify(override)},
+    cwd:desktop, env:{...process.env, CARGO_TARGET_DIR:buildTarget, CARGO_INCREMENTAL:"0", CARGO_BUILD_JOBS:"1", TAURI_CONFIG:JSON.stringify(override)},
     windowsHide:true, stdio:["ignore",buildLog,buildLog]
 });
 const built = await exit(build, 600000);
 fs.closeSync(buildLog);
 if (built !== 0) throw new Error("Native fixture build failed: " + fs.readFileSync(path.join(output,"build.log"),"utf8").slice(-6000));
 const binary = path.join(output, "window-warp-fixture.exe");
-fs.copyFileSync(path.join(desktop,"src-tauri/target/debug/window-warp.exe"), binary);
+fs.copyFileSync(path.join(buildTarget,"debug/window-warp.exe"), binary);
+if (process.env.WARP_TEST_WAIT_FOR_START === "1") {
+    const signal = path.join(output, "start-test");
+    console.log("Fixture built; waiting for start-test signal in", output);
+    await until(() => fs.existsSync(signal), Boolean, "test start signal", 180000);
+}
 
-let app, helper, socket, second, startupTouched = false, calculatorPrepared = false;
+
+let app, helper, peerHelper, socket, second, startupTouched = false, calculatorPrepared = false;
 const checks = [];
 const skipped = [];
 let fixture, native;
 let report = {passed:false, checks, skipped};
 const appLog = fs.openSync(path.join(output,"app.log"), "w");
 try {
-    const appEnvironment = firefoxProfileLock ? {...process.env, APPDATA:path.join(output,"firefox-discovery")} : process.env;
+    const appEnvironment = {...process.env, ...(firefoxProfileLock ? {APPDATA:path.join(output,"firefox-discovery")} : {})};
     app = spawn(binary, [], {cwd:output, env:appEnvironment, windowsHide:true, stdio:["ignore",appLog,appLog]});
     const target = await until(async () => {
         try { return (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t => t.type === "page" && /^https?:\/\/tauri\.localhost\/(?:index.html)?$/.test(t.url)); }
@@ -114,7 +127,7 @@ try {
     checks.push("native WebView renders using isolated settings and browser state");
 
     helper = spawn("python", [path.join(desktop,"tests/windows/fixture.py"), "--marker", marker, "--app-pid", String(app.pid),
-        "--lifetime",runFirefox ? "1200" : "180"], {windowsHide:true, stdio:["pipe","pipe","pipe"]});
+        "--lifetime",runFirefox ? "1200" : "180", "--windows",fastOnly ? "3" : "2"], {windowsHide:true, stdio:["pipe","pipe","pipe"]});
     let helperError = "";
     helper.stderr.on("data", chunk => {helperError += chunk.toString();});
     const lines = createInterface({input:helper.stdout});
@@ -137,7 +150,467 @@ try {
     });
     const press = f => native("press",{key:0x70 + f - 1});
     const paused = wanted => until(() => invoke("get_status"), s => s.enabled !== wanted, wanted ? "paused" : "active");
-    if (!firefoxOnly) {
+    if (fastOnly) {
+        peerHelper = spawn("python", [path.join(desktop,"tests/windows/fixture.py"), "--marker", marker+"-peer", "--windows", "1"],
+            {windowsHide:true, stdio:["pipe","pipe","pipe"]});
+        let peerError = "", peerReady, peerCommandId = 0;
+        const peerReplies = new Map();
+        peerHelper.stderr.on("data", chunk => {peerError += chunk.toString();});
+        createInterface({input:peerHelper.stdout}).on("line", line => {
+            const result = JSON.parse(line);
+            if (result.ready) { peerReady = result; return; }
+            const request = peerReplies.get(result.id);
+            if (!request) return;
+            peerReplies.delete(result.id); clearTimeout(request.timer);
+            result.error ? request.reject(new Error(result.error)) : request.resolve(result.result);
+        });
+        const peer = await until(()=>{if (peerHelper.exitCode !== null) throw new Error(peerError); return peerReady;},Boolean,"second process owned Win32 fixture");
+        const nativePeer = (command,args={}) => new Promise((resolve,reject)=>{
+            const id = ++peerCommandId;
+            const timer = setTimeout(()=>{peerReplies.delete(id);reject(new Error(`Peer fixture timeout: ${command}`));},10000);
+            peerReplies.set(id,{resolve,reject,timer});
+            peerHelper.stdin.write(JSON.stringify({id,command,...args})+"\n");
+        });
+        await native("focus", {window:fixture.windows[0]});
+        const owned = await until(async () => (await invoke("get_windows")).find(window => window.id === String(fixture.windows[0]) && window.pid === fixture.pid), Boolean, "owned fast-shortcut target", 5000);
+        const fastConfig = await invoke("get_config");
+        fastConfig.settings.mainMonitor = owned.monitor;
+        fastConfig.settings.holdDelayMs = 400;
+        fastConfig.settings.holdTileEnabled = true;
+        fastConfig.settings.holdMode = "tile";
+        fastConfig.bindings.push({label:"Test fast app shortcut", shortcut:"Super+F22", action:"pull-app", enabled:true,
+            appMatch:path.basename(fixture.executable), windowsMatch:{windowId:owned.id, processId:fixture.pid},
+            mainMonitorAction:"focus-last", burnerLayout:"float"});
+        await invoke("save_config", {config:fastConfig});
+        await invoke("set_enabled", {enabled:true});
+        await evaluate("(async()=>{window.__fastErrors=[];window.__fastErrorStop=await window.__TAURI__.event.listen('warp-error',e=>window.__fastErrors.push(e.payload));})()");
+        const readTarget = async () => (await invoke("get_windows")).find(window=>window.id === owned.id && window.pid === fixture.pid);
+        report.fastTaps = [];
+        for (let i=0; i<10; i++) {
+            await native("focus", {window:fixture.windows[2]});
+            await native("plain_press", {key:0x85, meta:true, window:fixture.windows[2]});
+            try {
+                await until(readTarget,window=>window?.active, `fast Super+F22 tap ${i+1}`,2500);
+                report.fastTaps.push(true);
+            } catch { report.fastTaps.push(false); }
+        }
+        await native("focus", {window:fixture.windows[2]});
+        await native("activation_events");
+        await native("burst", {key:0x85, window:fixture.windows[2]});
+        const transitions = [];
+        try {
+            await until(async()=>{transitions.push(...await native("activation_events"));return transitions;},
+                events=>events.includes(fixture.windows[0]) && events.lastIndexOf(fixture.windows[2]) > events.indexOf(fixture.windows[0]),
+                "two rapid presses both run in order",4000);
+        } catch (error) {
+            report.fastErrors = await evaluate("window.__fastErrors");
+            report.burstTransitions = transitions;
+            throw error;
+        }
+        checks.push("back-to-back Super+F22 presses focus the target and return to the previous window");
+        const initial = {x:owned.workArea.x+100,y:owned.workArea.y+100,width:500,height:320};
+        await native("place", {window:fixture.windows[0], rect:initial});
+        await native("focus", {window:fixture.windows[2]});
+        await native("pointer", {x:owned.workArea.x+20,y:owned.workArea.y+20});
+        await native("hold_start", {key:0x85,meta:true,window:fixture.windows[2]});
+        try {
+            await sleep(80);
+            assert.equal((await readTarget()).active,false,"a held shortcut must not tap before release or the hold threshold");
+            await until(readTarget,window=>window?.active && JSON.stringify(window.rect)!==JSON.stringify(initial), "held Super+F22 tiles the owned window",3000);
+            const tiled = (await readTarget()).rect;
+            await native("key_up");
+            await sleep(100);
+            assert.deepEqual((await readTarget()).rect,tiled,"hold release must not trigger another window action");
+        } finally { await native("key_up").catch(()=>{}); }
+        checks.push("held Super+F22 tiles once and does not issue a tap on release");
+        await native("place", {window:fixture.windows[0], rect:initial});
+        await native("focus", {window:fixture.windows[2]});
+        await native("hold_start", {key:0x85,meta:true,window:fixture.windows[2]});
+        try {
+            await sleep(80);
+            await native("key_up", {keys:[0x5b]});
+            await until(readTarget,window=>window?.active,"modifier-first release triggers the app tap",3000);
+            await sleep(500);
+            assert.deepEqual((await readTarget()).rect,initial,"releasing the modifier must cancel the pending hold");
+        } finally { await native("key_up").catch(()=>{}); }
+        checks.push("releasing Win before F22 triggers a tap and cannot turn into a hold");
+        await native("minimize", {window:fixture.windows[0]});
+        await until(readTarget,window=>window?.minimized,"owned target minimized");
+        await native("plain_press", {key:0x85,meta:true,window:fixture.windows[2]});
+        await until(readTarget,window=>window?.active && !window.minimized,"fast shortcut restores the minimized target",3000);
+        checks.push("fast Super+F22 restores and focuses a minimized owned window");
+        await native("place", {window:fixture.windows[0],rect:initial});
+        await native("focus", {window:fixture.windows[2]});
+        await native("hold_start", {key:0x85,meta:true,window:fixture.windows[2]});
+        try {
+            await sleep(80);
+            await invoke("set_enabled", {enabled:false});
+            await native("key_up");
+            await invoke("set_enabled", {enabled:true});
+            await sleep(500);
+            const cancelled = await readTarget();
+            assert.equal(cancelled.active,false,"pausing must cancel the pending app shortcut");
+            assert.deepEqual(cancelled.rect,initial,"a cancelled hold must not tile after resume");
+        } finally { await native("key_up").catch(()=>{}); }
+        checks.push("pause and resume cancel a pending Super shortcut without a late tap or hold");
+        await native("focus", {window:fixture.windows[1]});
+        const other = await until(async()=> (await invoke("get_windows")).find(window=>window.id===String(fixture.windows[1]) && window.pid===fixture.pid), Boolean, "second owned shortcut target", 5000);
+        const overlapConfig = await invoke("get_config");
+        overlapConfig.settings.holdDelayMs = 900;
+        overlapConfig.bindings.push({...structuredClone(overlapConfig.bindings.at(-1)),label:"Test overlapping app shortcut",shortcut:"Super+F23",
+            windowsMatch:{windowId:other.id,processId:fixture.pid}});
+        await invoke("set_enabled", {enabled:false});
+        await invoke("save_config", {config:overlapConfig});
+        await invoke("set_enabled", {enabled:true});
+        await nativePeer("focus", {window:peer.windows[0]});
+        const crossProcessTarget = await until(async()=> (await invoke("get_windows")).find(window=>window.id===String(peer.windows[0]) && window.pid===peer.pid),Boolean,"second process app target",5000);
+        const switchConfig = structuredClone(overlapConfig);
+        switchConfig.bindings.at(-1).windowsMatch = {windowId:crossProcessTarget.id,processId:peer.pid};
+        await invoke("set_enabled", {enabled:false});
+        await invoke("save_config", {config:switchConfig});
+        await invoke("set_enabled", {enabled:true});
+        // Observe both processes from one WinEvent queue rather than merging
+        // WM_ACTIVATE callbacks delivered on independent process threads.
+        await native("foreground_start", {peer_window:peer.windows[0],peer_pid:peer.pid});
+        report.fastSwitches = [];
+        const switchFailures = [];
+        for (const spacingMs of [80, 0]) for (const releaseWin of [false, true]) {
+            if (switchFailures.length) {
+                // Cancel any unfinished action from a failed case before
+                // collecting the next case; the failure is still reported.
+                await invoke("set_enabled", {enabled:false});
+                await invoke("set_enabled", {enabled:true});
+            }
+            await native("focus", {window:fixture.windows[2]});
+            await native("activation_events");
+            await nativePeer("activation_events");
+            // Let the setup focus notification reach the observer before
+            // clearing it; this wait is outside the measured key burst.
+            await sleep(100);
+            await native("foreground_events");
+            const events = [];
+            let releases = [];
+            const expected = Array.from({length:4},()=>[fixture.windows[0],peer.windows[0]]).flat();
+            try {
+                releases = await native("switch_burst", {window:fixture.windows[2],peer_window:peer.windows[0],peer_pid:peer.pid,release_win:releaseWin,spacing_ms:spacingMs});
+                await until(async()=> {
+                    events.push(...await native("foreground_events"));
+                    return events;
+                }, received=>received.length >= expected.length, "eight alternating app switches", 5000);
+                await sleep(200);
+                events.push(...await native("foreground_events"));
+                const {observed,latencyMs} = summarizeForeground(expected,releases,events);
+                assert.deepEqual(observed, expected, "every distinct app shortcut must focus its target once, in press order");
+                assert.notEqual(latencyMs, null, "each foreground event must correspond to one key release");
+                // Delivery to the observer is an upper bound on when the
+                // foreground event occurred, not the exact activation time.
+                assert.ok(latencyMs.every(ms=>ms >= 0 && ms <= 500), `every alternating switch must activate within 500 ms of key release: ${latencyMs}`);
+            } catch (error) {
+                report.fastErrors = await evaluate("window.__fastErrors").catch(()=>["Could not retrieve fast shortcut errors"]);
+                switchFailures.push(new Error(`Alternating switches with ${spacingMs} ms spacing and Win ${releaseWin ? "released" : "held"}: ${error}`));
+            } finally {
+                const {observed,latencyMs} = summarizeForeground(expected,releases,events);
+                report.fastSwitches.push({spacingMs,releaseWin,source:fixture.windows[2],targetA:fixture.windows[0],targetB:peer.windows[0],
+                    observed,expected,releases,events,latencyMs});
+                await native("key_up").catch(()=>{});
+            }
+        }
+        if (switchFailures.length) throw new AggregateError(switchFailures,"Alternating shortcut acceptance failed: " + switchFailures.map(error=>String(error)).join("; "));
+        checks.push("eight alternating Super+F22/F23 presses switch between separate fixture processes in order, at 80 ms and zero spacing, with Win held or released between presses");
+        await invoke("set_enabled", {enabled:false});
+        await invoke("save_config", {config:overlapConfig});
+        await invoke("set_enabled", {enabled:true});
+        await native("place", {window:fixture.windows[0], rect:initial});
+        await native("place", {window:fixture.windows[1], rect:{...initial,x:initial.x+40,y:initial.y+40}});
+        await native("focus", {window:fixture.windows[2]});
+        await native("pointer", {x:owned.workArea.x+20,y:owned.workArea.y+20});
+        await native("hold_start", {key:0x85,meta:true,window:fixture.windows[2]});
+        try {
+            await sleep(80);
+            await native("held_tap", {key:0x86});
+            await until(async()=> (await invoke("get_windows")).find(window=>window.id===other.id && window.pid===fixture.pid),
+                window=>window?.active,"overlapping Super+F23 tap focuses its own target before F22 hold",700);
+            await until(readTarget,window=>window?.active && JSON.stringify(window.rect)!==JSON.stringify(initial),
+                "held Super+F22 still tiles after the other shortcut",3000);
+        } finally { await native("key_up").catch(()=>{}); }
+        checks.push("an overlapping Super app tap does not cancel or wait for an earlier held shortcut");
+        const radialConfig = await invoke("get_config");
+        radialConfig.settings.holdMode = "radial";
+        radialConfig.settings.holdDelayMs = 400;
+        const radialBinding = radialConfig.bindings.find(binding=>binding.shortcut === "Super+F22");
+        radialBinding.windowsMatch = {processId:fixture.pid,titleContains:marker};
+        await invoke("set_enabled", {enabled:false});
+        await invoke("save_config", {config:radialConfig});
+        await invoke("set_enabled", {enabled:true});
+        await native("focus", {window:fixture.windows[2]});
+        await native("pointer", {x:owned.workArea.x+Math.floor(owned.workArea.width/2),y:owned.workArea.y+Math.floor(owned.workArea.height/2)});
+        await native("hold_start", {key:0x85,meta:true,window:fixture.windows[2]});
+        try {
+            await until(()=>invoke("radial_view"),view=>view?.labels?.length === 3,"held Super shortcut opens radial",4000);
+            await native("key_up");
+            await until(()=>invoke("radial_view"),view=>view === null,"Super radial closes on release",4000);
+        } finally { await native("key_up").catch(()=>{}); }
+        checks.push("held Super app shortcut opens its radial and closes on release");
+        report.fastErrors = await evaluate("window.__fastErrors");
+        await evaluate("if(window.__fastErrorStop)window.__fastErrorStop()");
+        assert.deepEqual(report.fastErrors, [], "fast app shortcuts must not emit native errors");
+        assert.deepEqual(report.fastTaps, Array(10).fill(true), "every fast app shortcut must focus its owned target");
+        checks.push("ten rapid Super+F22 app taps focus their owned target");
+    }
+    if (hookOnly) {
+        // Install another process's listener before Warp's hook, then after it,
+        // to cover both launch orders without observing any physical input.
+        const mainWindow = await native("app_window");
+        await native("observe_start");
+        report.coexistence = [];
+        const observeEditor = async (order, registered, directFocus=false) => {
+            if (directFocus) await native("focus", {window:mainWindow});
+            else await invoke("show_editor", {appMatch:null});
+            await until(()=>native("app_state",{window:mainWindow}),s=>s.foreground,"focus fixture editor",4000);
+            const initialEvents = (await native("hotkey_events")).length;
+            await native("hold_start", {key:0x86, meta:true, window:mainWindow});
+            let held, released, hotkey;
+            try {
+                if (registered) {
+                    try { await until(()=>native("hotkey_events"),events=>events.length > initialEvents,"registered unowned hotkey",3000); hotkey=true; } catch { hotkey=false; }
+                }
+                await sleep(100);
+                held = await native("observe_events");
+            } finally { await native("key_up"); }
+            await sleep(100);
+            released = await native("observe_events");
+            report.coexistence.push({order,surface:"Warp editor",...(registered ? {hotkey} : {}),held,released});
+        };
+        await observeEditor("before, Warp disabled and no registered hotkey", false);
+        await native("reserve", {key:0x86, meta:true});
+        await observeEditor("before, Warp disabled", true);
+        await native("release", {key:0x86});
+        await invoke("set_enabled", {enabled:true});
+        await observeEditor("before, no registered hotkey", false);
+        await native("focus", {window:fixture.windows[0]});
+        await observeEditor("before, direct editor focus, no registered hotkey", false, true);
+        await native("reserve", {key:0x86, meta:true});
+        for (const order of ["before", "after"]) {
+            if (order === "after") {
+                await native("observe_stop");
+                await native("observe_start");
+            }
+            // Repeat the first case, and return to it after another app has
+            // focus, so a startup anomaly is distinguishable from focus.
+            for (const [surface, window] of [["Warp editor", mainWindow], ["Warp editor", mainWindow], ["another app", fixture.windows[0]], ["Warp editor", mainWindow]]) {
+                if (surface === "Warp editor") {
+                    await invoke("show_editor", {appMatch:null});
+                    await until(()=>native("app_state",{window:mainWindow}),s=>s.foreground,"focus fixture editor",4000);
+                }
+                const initialEvents = (await native("hotkey_events")).length;
+                await native("hold_start", {key:0x86, meta:true, window});
+                let held = [], released = [], hotkey = false;
+                try {
+                    try { await until(()=>native("hotkey_events"),events=>events.length > initialEvents,"unowned Win+F23 delivered while held",3000); hotkey=true; } catch {}
+                    await sleep(100);
+                    held = await native("observe_events");
+                } finally {
+                    await native("key_up");
+                }
+                await sleep(100);
+                released = await native("observe_events");
+                report.coexistence.push({order, surface, hotkey, held, released});
+            }
+        }
+        await native("release", {key:0x86});
+        for (const [surface, window] of [["another app", fixture.windows[0]], ["Warp editor", mainWindow]]) {
+            if (surface === "Warp editor") {
+                await invoke("show_editor", {appMatch:null});
+                await until(()=>native("app_state",{window:mainWindow}),s=>s.foreground,"focus fixture editor without registered hotkey",4000);
+            }
+            await native("hold_start", {key:0x86, meta:true, window});
+            let held, released;
+            try { await sleep(100); held = await native("observe_events"); }
+            finally { await native("key_up"); }
+            await sleep(100);
+            released = await native("observe_events");
+            report.coexistence.push({order:"after, without registered hotkey", surface, held, released});
+        }
+        await native("observe_stop");
+        const hookErrors = [];
+        for (const row of report.coexistence) {
+            try {
+                if ("hotkey" in row) assert.equal(row.hotkey, true, `hotkey while held: ${row.order}, ${row.surface}`);
+                assert.deepEqual(row.held, [[0x5b,false],[0x86,false]], `down events: ${row.order}, ${row.surface}`);
+                assert.deepEqual(row.released, [[0x86,true],[0x5b,true]], `up events: ${row.order}, ${row.surface}`);
+            } catch (error) { hookErrors.push(error); }
+        }
+        if (process.env.WARP_TEST_POPUP_OBSERVER === "downstream") {
+            await invoke("set_enabled", {enabled:false});
+            await native("observe_start");
+            await invoke("set_enabled", {enabled:true});
+        }
+        if (!hookErrors.length) checks.push("unowned Win+F23 reaches another application's listener on down and up in both hook orders with Warp or another app focused");
+        await native("app_close",{window:mainWindow});
+        await until(()=>native("app_state",{window:mainWindow}),s=>!s.visible,"hide fixture editor");
+        await native("plain_press",{key:66,meta:true});
+        const quickWindow = await until(()=>native("app_window").catch(()=>null),Boolean,"Win+B opens popup",4000);
+        // Let the first key cycle and popup-open dispatch finish before the
+        // second distinct press, without holding the modifier between presses.
+        await sleep(Number(process.env.WARP_TEST_POPUP_DELAY || 200));
+        if (["1", "transient"].includes(process.env.WARP_TEST_POPUP_OBSERVER)) await native("observe_start");
+        if (process.env.WARP_TEST_POPUP_OBSERVER === "transient") await native("observe_stop");
+        await native("plain_press",{key:66,meta:true,window:quickWindow,gap_ms:Number(process.env.WARP_TEST_INPUT_GAP || 0)});
+        try {
+            await until(()=>native("app_state",{window:mainWindow}),s=>s.visible && s.foreground,"second Win+B opens the main window",4000);
+        } catch (error) {
+            report.popupDiagnostics = {quick:await native("fixture_window_state",{window:quickWindow}), observer:process.env.WARP_TEST_POPUP_OBSERVER === "1" ? await native("observe_events") : null};
+            hookErrors.push(error);
+        } finally {if (["1", "downstream"].includes(process.env.WARP_TEST_POPUP_OBSERVER)) await native("observe_stop");}
+        if (hookErrors.length) throw new AggregateError(hookErrors,"Native hook and popup acceptance failed: " + hookErrors.map(error=>String(error)).join("; "));
+        checks.push("one further Win+B hides the popup and opens the main editor");
+    }
+    if (quickOnly && !hookOnly && !fastOnly) {
+        // The conflict target is another owned window with an explicit
+        // selector, so reopening it exercises the displaced app binding.
+        const quickConfig = await invoke("get_config");
+        // Keep the production Win hook active so Win-held blur is meaningful.
+        quickConfig.bindings[0].shortcut = "Super+F24";
+        quickConfig.bindings.push({label:"Old fixture app",shortcut:"Alt+C",action:"pull-app",enabled:true,
+            appMatch:"fixture-old.exe",windowsMatch:{windowId:String(fixture.windows[1]),processId:fixture.pid},
+            mainMonitorAction:"burner",burnerLayout:"float"});
+        await invoke("save_config", {config:quickConfig});
+        await invoke("set_enabled",{enabled:true});
+        const mainWindow = await native("app_window");
+        await native("app_close",{window:mainWindow});
+        await until(()=>native("app_state",{window:mainWindow}),s=>!s.visible,"hide fixture editor");
+        await press(19);
+        const quickTarget = await until(async()=>{
+            try {return (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.type === "page" && /\/quick\.html$/.test(t.url));}
+            catch {return null;}
+        }, Boolean, "quick popup WebView", 30000);
+        const quickSocket = new WebSocket(quickTarget.webSocketDebuggerUrl);
+        await new Promise((resolve,reject)=>{quickSocket.addEventListener("open",resolve,{once:true});quickSocket.addEventListener("error",reject,{once:true});});
+        let quickId=0;
+        const quickPending=new Map();
+        quickSocket.addEventListener("message",event=>{const response=JSON.parse(event.data);const pending=quickPending.get(response.id);if(!pending)return;quickPending.delete(response.id);response.error?pending.reject(new Error(JSON.stringify(response.error))):pending.resolve(response.result);});
+        const quickEval = expression => new Promise((resolve,reject)=>{const id=++quickId;quickPending.set(id,{resolve:result=>result.exceptionDetails?reject(new Error(result.exceptionDetails.text)):resolve(result.result?.value),reject});quickSocket.send(JSON.stringify({id,method:"Runtime.evaluate",params:{expression,awaitPromise:true,returnByValue:true}}));});
+        const quickScreenshot = async name => {
+            const id=++quickId;
+            const data=await new Promise((resolve,reject)=>{
+                const timer=setTimeout(()=>{quickSocket.removeEventListener("message",listener);reject(new Error("Quick screenshot timed out"));},10000);
+                const listener=event=>{
+                    const response=JSON.parse(event.data);
+                    if(response.id!==id)return;
+                    clearTimeout(timer);quickSocket.removeEventListener("message",listener);
+                    response.error?reject(new Error(JSON.stringify(response.error))):resolve(response.result.data);
+                };
+                quickSocket.addEventListener("message",listener);
+                quickSocket.send(JSON.stringify({id,method:"Page.captureScreenshot"}));
+            });
+            fs.writeFileSync(path.join(output,name),Buffer.from(data,"base64"));
+        };
+        try {
+            await until(()=>quickEval("document.querySelector('#quick-app').textContent"),v=>Boolean(v),"popup identifies focused fixture");
+            const quickWindow=await native("app_window");
+            await native("plain_press",{key:67,window:quickWindow});
+            await until(()=>quickEval("document.querySelector('#quick-entry').value"),v=>v==="Alt+C","plain key uses default Alt");
+            await native("plain_press",{key:13,window:quickWindow});
+            await until(()=>quickEval("!document.querySelector('#quick-conflict').hidden"),Boolean,"conflict review");
+            assert.match(await quickEval("document.querySelector('#quick-conflict-summary').textContent"),/Old fixture app/);
+            assert.equal((await invoke("get_config")).bindings.length,10,"conflict preview must not save");
+            await quickScreenshot("quick-conflict.png");
+            await quickEval("document.querySelector('#quick-replace').click()");
+            const saved=await until(()=>invoke("get_config"),c=>c.bindings.length===11,"popup saves binding");
+            assert.equal(saved.bindings[9].enabled,false);
+            assert.equal(saved.bindings[10].shortcut,"Alt+C");
+            assert.equal(saved.bindings[10].enabled,true);
+            checks.push("real popup replaces the conflicting app shortcut and preserves its disabled binding");
+            await until(()=>native("app_window").then(()=>false,()=>true),Boolean,"first popup closes");
+            await native("press",{key:0x82,window:fixture.windows[1]}); // F19 opens for displaced app B.
+            await until(()=>quickEval("document.querySelector('#quick-app').textContent"),v=>v==="Old fixture app","reopen displaced app");
+            assert.equal(await quickEval("document.querySelector('#quick-entry').value"),"", "a displaced app must not show the stolen shortcut");
+            let reopened=await until(()=>native("app_window").catch(()=>null),Boolean,"reopened displaced popup");
+            await native("plain_press",{key:88,window:reopened});
+            await until(()=>quickEval("document.querySelector('#quick-entry').value"),v=>v==="Alt+X","new key for displaced app");
+            await native("plain_press",{key:13,window:reopened});
+            const reassigned=await until(()=>invoke("get_config"),c=>c.bindings[9].enabled && c.bindings[9].shortcut==="Alt+X","displaced app gets new shortcut");
+            assert.equal(reassigned.bindings[10].shortcut,"Alt+C");
+            assert.equal(reassigned.bindings[10].enabled,true);
+            checks.push("reopening a displaced app shows no stale key and can enable a new shortcut");
+            await until(()=>native("app_window").then(()=>false,()=>true),Boolean,"displaced popup closes");
+            await native("press",{key:0x82,window:fixture.windows[0]});
+            await until(()=>quickEval("document.querySelector('#quick-entry').value"),v=>v==="Alt+C","reopen app A");
+            reopened=await until(()=>native("app_window").catch(()=>null),Boolean,"reopened app A popup");
+            await native("plain_press",{key:88,window:reopened});
+            await native("plain_press",{key:13,window:reopened});
+            await until(()=>quickEval("!document.querySelector('#quick-conflict').hidden"),Boolean,"second conflict review");
+            const beforeKeep=await invoke("get_config");
+            await quickEval("document.querySelector('#quick-keep').click()");
+            await until(()=>quickEval("document.querySelector('#quick-conflict').hidden"),Boolean,"keep closes only conflict dialog");
+            assert.deepEqual(await invoke("get_config"),beforeKeep,"keeping the existing key must not persist a replacement");
+            await quickEval("document.querySelector('#quick-apply').click()");
+            await until(()=>quickEval("!document.querySelector('#quick-conflict').hidden"),Boolean,"conflict review reopens");
+            await quickEval("document.querySelector('#quick-replace-edit').click()");
+            await until(()=>quickEval("document.querySelector('#quick-app').textContent"),v=>v==="Old fixture app","replace and edit opens displaced app");
+            await until(()=>quickEval("document.querySelector('#quick-entry').value"),v=>v==="","displaced shortcut is blank for editing");
+            const replaced=await invoke("get_config");
+            assert.equal(replaced.bindings[9].enabled,false);
+            assert.equal(replaced.bindings[10].shortcut,"Alt+X");
+            assert.equal(replaced.bindings[10].enabled,true);
+            reopened=await until(()=>native("app_window").catch(()=>null),Boolean,"edit-old popup stays open");
+            await native("plain_press",{key:67,window:reopened});
+            await until(()=>quickEval("document.querySelector('#quick-entry').value"),v=>v==="Alt+C","replacement key for old app");
+            await native("plain_press",{key:13,window:reopened});
+            const finalConfig=await until(()=>invoke("get_config"),c=>c.bindings[9].enabled && c.bindings[9].shortcut==="Alt+C","edit-old shortcut saved");
+            assert.equal(finalConfig.bindings[10].shortcut,"Alt+X");
+            assert.equal(finalConfig.bindings[10].enabled,true);
+            checks.push("cancel preserves both shortcuts; replace and edit old opens a blank picker and saves both app bindings");
+            await until(()=>native("app_window").then(()=>false,()=>true),Boolean,"edit-old popup closes");
+            await native("press",{key:0x82,window:fixture.windows[1]});
+            await until(()=>quickEval("document.querySelector('#quick-entry').value"),v=>v==="Alt+C","reopen edited old shortcut");
+            reopened=await until(()=>native("app_window").catch(()=>null),Boolean,"popup before click-away");
+            const beforeAway=await invoke("get_config");
+            await native("click_owned",{window:fixture.windows[0]});
+            await until(()=>native("fixture_window_state",{window:reopened}),s=>!s.visible,"popup closes when another owned app takes focus");
+            assert.deepEqual(await invoke("get_config"),beforeAway,"clicking away must not change saved shortcuts");
+            checks.push("popup closes on click-away without changing saved shortcuts");
+            await native("press",{key:0x82,window:fixture.windows[1]});
+            await until(()=>quickEval("document.querySelector('#quick-entry').value"),v=>v==="Alt+C","reopen popup before recording click-away");
+            reopened=await until(()=>native("app_window").catch(()=>null),Boolean,"popup before recording click-away");
+            await native("focus",{window:reopened});
+            await until(()=>native("fixture_window_state",{window:reopened}),state=>state.visible && state.foreground,"focus popup before recording click-away");
+            // Exercise a real outside click while recording is active. The
+            // separate no-mouse unfocused watcher path remains unverified:
+            // Windows denied the fixture's programmatic focus transition even
+            // when the candidate owned both windows. No Win key is injected.
+            await invoke("start_shortcut_recording",{popup:true});
+            try {
+                const recordingPopup = await native("fixture_window_state",{window:reopened});
+                report.recordingClick = {beforeClick:{visible:recordingPopup.visible,foreground:recordingPopup.foreground}};
+                assert.equal(recordingPopup.visible && recordingPopup.foreground,true,"recording popup must be focused before the outside click");
+                await native("click_owned",{window:fixture.windows[0]});
+                await until(()=>native("fixture_window_state",{window:reopened}),s=>!s.visible,"outside click closes the recording popup");
+                assert.deepEqual(await invoke("get_config"),beforeAway,"recording click-away must not change saved shortcuts");
+                // The hook swallows this chord while recording, so the normal
+                // open-editor shortcut can fire only after recording stops.
+                await native("press",{key:0x82,window:fixture.windows[1]});
+                await until(()=>native("app_window").catch(()=>null),Boolean,"editor shortcut works after click-away stops recording");
+                await invoke("hide_quick");
+                checks.push("click-away closes a focused recording popup and releases recording");
+                skipped.push("Click-away after an already-unfocused Win or recording blur: Windows denied the fixture's no-mouse focus transition; requires a physical test");
+            } finally { await invoke("stop_shortcut_recording").catch(()=>{}); }
+        } finally {quickSocket.close();}
+        const discovery=await invoke("get_config");
+        discovery.bindings.push({label:path.basename(fixture.executable,".exe"),shortcut:"Ctrl+Alt+Shift+F24",action:"focus-app",appMatch:"not-this-app.exe",enabled:false});
+        await invoke("save_config",{config:discovery});
+        await evaluate("location.reload()");
+        await wait("document.querySelectorAll('.binding').length === 12", "discovery draft reload");
+        await click("#find-apps");
+        await wait("document.querySelector('#find-apps-result').textContent.includes('Review and save')", "open app discovery");
+        assert.match(await evaluate("document.querySelector('.binding:last-child .app-matches').value"),/python/i);
+        await click("#save");
+        await wait("document.querySelector('#message').textContent.startsWith('Saved.')", "discovered names saved");
+        const found=await invoke("get_config");
+        assert.ok(found.bindings[11].appMatches.some(name=>name.toLowerCase().includes("python")));
+        checks.push("real editor discovers the owned app identifier and persists it only after Save");
+    }
+    if (!firefoxOnly && !quickOnly) {
     await press(18); await paused(false);
     await press(18); await paused(true);
     checks.push("Win32 keyboard input resumes and pauses while retaining the pause registration");
@@ -891,13 +1364,14 @@ try {
     }
     await invoke("save_workspaces",{store:previousStore});
     } else {
-        skipped.push("General native checks omitted by --firefox-only");
+        skipped.push(fastOnly ? "General native checks omitted by --fast-only" : hookOnly ? "General native checks omitted by --hook-only" : quickOnly ? "General native checks omitted by --quick-only" : "General native checks omitted by --firefox-only");
     }
     if (runFirefox) {
         await testFirefox({output,marker,native,invoke,evaluate,wait,click,screenshot,until,checks,report,profileLock:firefoxProfileLock});
     }
     // Exercise the real native tray callback/menu route before failure-only
     // process cleanup below. This does not click Explorer's notification area.
+    if (!quickOnly) {
     const lifecycleWindow = await native("app_window");
     const lifecycleConfig = await invoke("get_config"), lifecycleStore = await invoke("get_workspaces");
     await invoke("set_enabled",{enabled:true});
@@ -926,6 +1400,7 @@ try {
     for (const key of [0x7c,0x81]) {await native("reserve",{key});await native("release",{key});}
     for (const {file,bytes} of persisted) assert.deepEqual(fs.existsSync(file)?fs.readFileSync(file):null,bytes);
     checks.push("native tray Quit exits gracefully, releases action and pause keys, and preserves saved files before fallback cleanup");
+    }
     report.passed = true;
 } catch (error) {
     report.error = String(error.stack || error);
@@ -948,6 +1423,7 @@ try {
     if (socket) socket.close();
     if (second?.exitCode === null) {spawnSync("taskkill.exe",["/PID",String(second.pid),"/T","/F"],{windowsHide:true,stdio:"ignore"});await exit(second,10000).catch(()=>{});}
     if (app?.exitCode === null) {spawnSync("taskkill.exe",["/PID",String(app.pid),"/T","/F"],{windowsHide:true,stdio:"ignore"});await exit(app,10000).catch(()=>{});}
+    if (peerHelper?.exitCode === null) {peerHelper.stdin.end(); await exit(peerHelper,3000).catch(()=>peerHelper.kill());}
     if (helper?.exitCode === null) {
         if (native) {
             try {await native("reserve",{key:0x81});await native("release",{key:0x81});checks.push("process exit releases the native pause key");}
@@ -958,7 +1434,7 @@ try {
     fs.closeSync(appLog);
     // The fixture copied its executable already; restore the ordinary debug build.
     const normalLog = fs.openSync(path.join(output,"restore-build.log"),"w");
-    const normalEnv = {...process.env,CARGO_INCREMENTAL:"0",CARGO_BUILD_JOBS:"1"};
+    const normalEnv = {...process.env,CARGO_TARGET_DIR:buildTarget,CARGO_INCREMENTAL:"0",CARGO_BUILD_JOBS:"1"};
     delete normalEnv.TAURI_CONFIG;
     const normal = spawn(cargo,["rustc","--manifest-path","src-tauri/Cargo.toml","--offline","--features","tauri/custom-protocol","--","-C","debuginfo=0"],{
         cwd:desktop,env:normalEnv,windowsHide:true,stdio:["ignore",normalLog,normalLog]
