@@ -4,9 +4,8 @@
 
 Put every window in its place. Window Warp is a Windows and KDE Plasma app for moving windows between monitors, tiling them, pulling an app forward, and restoring a whole workspace.
 
-Window Warp is in **early beta**. Features may change, and you may encounter bugs.
-
-The app lives in [`desktop/`](desktop/README.md). It does not need AutoHotkey.
+> [!WARNING]
+> Window Warp is in early beta, so bugs are likely.
 
 ## Install
 
