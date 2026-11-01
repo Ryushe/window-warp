@@ -4,20 +4,20 @@
 
 Put every window in its place. Window Warp is a Windows and KDE Plasma app for moving windows between monitors, tiling them, pulling an app forward, and restoring a whole workspace.
 
+Window Warp is in **early beta**. Features may change, and you may encounter bugs.
+
 The app lives in [`desktop/`](desktop/README.md). It does not need AutoHotkey.
 
 ## Install
 
-Download the installer for your system from the [latest release](https://github.com/Ryushe/window-warp/releases/latest).
-
-- **Windows:** run the x64 setup executable. It installs for your account and adds a Start menu entry.
-- **KDE Plasma:** the published Debian package targets Ubuntu/Kubuntu 24.04 amd64 with Plasma 5.27.11 on Wayland:
+- **Windows:** install [Window Warp from the Microsoft Store](https://apps.microsoft.com/detail/9NVBS6W8RV54?hl=en-us&gl=US&ocid=pdpshare).
+- **KDE Plasma:** download the Debian package from the [latest GitHub release](https://github.com/Ryushe/window-warp/releases/latest). It targets Ubuntu/Kubuntu 24.04 amd64 with Plasma 5.27.11 on Wayland:
 
 ```sh
-sudo apt install "./Window Warp_<version>_amd64.deb"
+sudo apt install ./window-warp_0.1.1_kubuntu24.04_amd64.deb
 ```
 
-Run the command from the download directory and replace `<version>` with the version in the downloaded filename. `apt` installs the package and resolves its dependencies; `sudo dpkg -i` also works if the dependencies are already installed. This package requires `kwin-common` version `4:5.27.11-0ubuntu3`. Other KWin versions, including Plasma 6, need a matching companion and package build. See the [KDE setup notes](desktop/README.md#kde-setup) for details.
+Run the command from the download directory, using the downloaded filename if a newer release is available. `apt` installs the package and resolves its dependencies; `sudo dpkg -i` also works if the dependencies are already installed. This package requires `kwin-common` version `4:5.27.11-0ubuntu3`. Other KWin versions, including Plasma 6, need a matching companion and package build. See the [KDE setup notes](desktop/README.md#kde-setup) for details.
 
 ## What it does
 
