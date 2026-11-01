@@ -38,16 +38,14 @@ Firefox captures its profile, tab URLs, and selected tab from its last readable 
 
 ## Install, turn on/off, and uninstall
 
-Download the appropriate installer from the [latest release](https://github.com/Ryushe/window-warp/releases/latest). On Windows, run the x64 setup executable. It installs for your Windows
-account and adds Window Warp to the Start menu and **Settings → Apps → Installed
-apps**. On KDE, install the matching Debian package with:
+On Windows, install [Window Warp from the Microsoft Store](https://apps.microsoft.com/detail/9NVBS6W8RV54?hl=en-us&gl=US&ocid=pdpshare). On KDE, download the Debian package from the [latest GitHub release](https://github.com/Ryushe/window-warp/releases/latest) and install it with:
 
 ```sh
-sudo apt install "./Window Warp_<version>_amd64.deb"
+sudo apt install ./window-warp_0.1.1_kubuntu24.04_amd64.deb
 ```
 
-Run the command from the download directory and replace `<version>` with the
-version in the downloaded filename. `apt` installs the package and resolves its
+Run the command from the download directory, using the downloaded filename if a
+newer release is available. `apt` installs the package and resolves its
 dependencies; `sudo dpkg -i` also works when those dependencies are installed.
 The Debian package is for Ubuntu/Kubuntu 24.04 amd64, Plasma 5.27.11 on Wayland,
 with KWin `4:5.27.11-0ubuntu3`. Other KWin versions, including Plasma 6, need a
@@ -64,10 +62,9 @@ matching companion and package build.
 - **Uninstall:** quit first. Windows: use **Installed apps → Window Warp →
   Uninstall**. KDE: run `sudo apt remove window-warp`.
 
-Uninstalling preserves saved settings by default. Windows offers a separate
-option to remove application data. The Windows uninstaller removes its own
-login-start entry; KDE's startup entry checks that the executable exists, so
-a retained startup preference stays inactive while the package is absent.
+On KDE, uninstalling preserves saved settings by default. The startup entry checks
+that the executable exists, so a retained startup preference stays inactive while
+the package is absent.
 
 ## Development
 
