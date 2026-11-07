@@ -7,8 +7,8 @@
 - **Intended integration target:** `refs/heads/main`, after the workspace UX dependency is reconciled
 - **Owning recovery ref:** `refs/heads/codex/shortcut-behavior-layout` in `desktop/src-tauri/target/window-warp-release-cache.git`
 - **Last updated:** 2026-11-07
-- **Latest immutable recovery checkpoint:** pending
-- **Feature implementation commit:** pending
+- **Latest immutable recovery checkpoint:** `5238df795670ea19bcd8dc9c4de74c1dfd9d1833`
+- **Feature implementation commit:** `5238df795670ea19bcd8dc9c4de74c1dfd9d1833`
 - **References:** user-supplied screenshot, `AGENTS.md`, `desktop/HOOK-HANDOFF.md`
 
 ## Intent and implemented contract
@@ -44,7 +44,8 @@ or Windows hook behavior changes.
 
 - **Owning recovery ref:** `refs/heads/codex/shortcut-behavior-layout` in the
   task-owned bare release cache.
-- **Latest immutable recovery checkpoint:** pending.
+- **Latest immutable recovery checkpoint:** `5238df795670ea19bcd8dc9c4de74c1dfd9d1833`.
+- **Feature implementation commit:** `5238df795670ea19bcd8dc9c4de74c1dfd9d1833`.
 - **Exact resume point:** collect user feedback on the preview and make any
   requested adjustment; then reconcile the dependent workspace work with `main`.
 - **Working-tree state:** intentionally uncommitted in the user's checkout; the
