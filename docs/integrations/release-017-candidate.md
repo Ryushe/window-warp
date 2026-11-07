@@ -7,7 +7,7 @@
 - **Intended integration target:** `refs/heads/main`, last fetched at `16d8b97da718de47cc78749602b89c95095709b7`
 - **Owning recovery ref:** `refs/heads/codex/release-0.1.7-candidate` in `desktop/src-tauri/target/window-warp-release-cache.git`
 - **Last updated:** 2026-11-07
-- **Latest immutable recovery checkpoint:** pending
+- **Latest immutable recovery checkpoint:** `66262b104cc37e500f4f288d04e01743ba49b176`
 - **Feature implementation commits:** `4ab4db8eb81b52af996106b44d87aa805fb5997c`, `5238df795670ea19bcd8dc9c4de74c1dfd9d1833`
 - **References:** `release.md`, `AGENTS.md`, `desktop/RELEASE-NOTES-0.1.7.md`
 
@@ -42,14 +42,18 @@ outside the source tree and must never be staged, packaged, or published.
   ZIP integrity and manifest version were checked; its executable SHA-256
   matches the clean unbundled release executable.
 - PortaFort candidate: the isolated `portafort-warp-release-017-01a1af66`
-  service is running the Linux build and private package GUI tests.
+  service passed 336 JavaScript tests, 145 Rust tests (one ignored), and 22
+  packaged-app checks in a private KDE session. The launcher and icon lookup
+  also passed. The Debian package checksum is
+  `fde1767e864336d6cfdd56f5ed045f7cce76ecfe079852e3fa2fbfd45b1a6c34`;
+  its local copy has the same checksum.
 - The user approved both the workspace icon buttons and the shortcut behavior
   layout in earlier isolated previews.
 
 ## Blockers and deferred work
 
-- **KDE package:** collect the service result and private GUI receipt, then copy
-  the version-matched `.deb` and its checksum into the local artifacts directory.
+- **KDE install/upgrade:** the version-matched package was tested in a private
+  session, but has not been installed or upgraded on the user's live desktop.
 - **Windows install/upgrade:** the user's existing installation is preserved;
   run `desktop/tests/windows/installer.ps1 -Execute` on a clean Windows profile or
   machine when available. The MSIX additionally needs Store identity verification
@@ -65,10 +69,9 @@ outside the source tree and must never be staged, packaged, or published.
 
 - **Owning recovery ref:** `refs/heads/codex/release-0.1.7-candidate` in the
   task-owned bare cache.
-- **Latest immutable recovery checkpoint:** pending.
-- **Exact resume point:** finish the PortaFort package and GUI validation,
-  complete the candidate checksums and release report, and retain the preview
-  for the user. Reconcile with `main` before any published release.
+- **Latest immutable recovery checkpoint:** `66262b104cc37e500f4f288d04e01743ba49b176`.
+- **Exact resume point:** retain the preview for the user and reconcile with
+  `main` before any published release.
 - **Working-tree state:** intentionally uncommitted in the user's checkout;
   the real Git object store has unavailable OneDrive placeholders. Do not reset,
   clean, or use its index to package the candidate.
