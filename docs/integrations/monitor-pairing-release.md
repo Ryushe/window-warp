@@ -48,6 +48,10 @@ cannot read; empty fields are omitted to preserve ordinary rollback.
 - Both packages are built and validated. The GitHub preview is public, and the
   uploaded assets' SHA-256 digests match the local builds. The Firefox listing
   URL and a live Mozilla credential test are pending.
+- Prepared `desktop/src-tauri/target/release/bundle/msix/WindowWarp_0.1.6.0_x64.msix`
+  for Microsoft Store review. Its archive integrity, version, and bundled
+  executable were checked. It is unsigned and has not been installed or
+  submitted; its identity and publisher still need Partner Center verification.
 
 ## Release and recovery gates
 
