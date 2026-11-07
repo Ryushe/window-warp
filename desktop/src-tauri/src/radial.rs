@@ -22,6 +22,18 @@ pub struct View {
     cancelled: bool,
 }
 static VIEW: Mutex<Option<View>> = Mutex::new(None);
+#[cfg(target_os = "linux")]
+static FOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_os = "linux")]
+pub fn focus_changed(focused: bool) {
+    use std::sync::atomic::Ordering;
+    if focused {
+        FOCUSED.store(true, Ordering::SeqCst);
+    } else if FOCUSED.swap(false, Ordering::SeqCst) {
+        cancel_visible();
+    }
+}
 
 #[tauri::command]
 pub fn radial_view() -> Result<Option<View>, String> {
@@ -42,6 +54,17 @@ pub fn cancel_visible() {
             view.cancelled = true;
         }
     }
+}
+
+#[cfg(windows)]
+pub fn cancel_from_hook() -> bool {
+    if let Ok(mut view) = VIEW.lock() {
+        if let Some(view) = view.as_mut() {
+            view.cancelled = true;
+            return true;
+        }
+    }
+    false
 }
 
 fn candidates(mut windows: Vec<WindowInfo>, binding: &Binding) -> Vec<WindowInfo> {
@@ -165,6 +188,8 @@ impl Picker {
         window
             .emit("radial-view", &view)
             .map_err(|e| e.to_string())?;
+        #[cfg(target_os = "linux")]
+        FOCUSED.store(false, std::sync::atomic::Ordering::SeqCst);
         crate::platform::show_radial(app, bounds)?;
         Ok(Some(picker))
     }
@@ -279,9 +304,10 @@ mod tests {
     }
     #[test]
     fn title_order_numeric_identity_duplicates_and_limit() {
-        let binding = crate::config::Config::default().bindings[0].clone();
+        let mut binding = crate::config::Config::default().bindings[0].clone();
+        binding.app_match = "fixture".into();
         let make = |id: &str, title: &str| -> WindowInfo {
-            serde_json::from_value(serde_json::json!({"id":id,"pid":1,"title":title,"appId":"","desktopId":"","path":"", "rect":{"x":0,"y":0,"width":10,"height":10},"workArea":{"x":0,"y":0,"width":100,"height":100},"monitor":1,"monitorName":"a","maximizedHorizontal":false,"maximizedVertical":false,"fullscreen":false,"minimized":false,"active":false})).unwrap()
+            serde_json::from_value(serde_json::json!({"id":id,"pid":1,"title":title,"appId":"fixture","desktopId":"","path":"", "rect":{"x":0,"y":0,"width":10,"height":10},"workArea":{"x":0,"y":0,"width":100,"height":100},"monitor":1,"monitorName":"a","maximizedHorizontal":false,"maximizedVertical":false,"fullscreen":false,"minimized":false,"active":false})).unwrap()
         };
         let mut input = vec![make("10", "same"), make("2", "same"), make("1", "Alpha")];
         input.extend((11..22).map(|i| make(&i.to_string(), "zeta")));

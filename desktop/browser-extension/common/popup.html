@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Window Warp</title><link rel="stylesheet" href="popup.css"><script defer src="popup.js"></script></head>
+<body>
+  <header><img src="icon.png" alt=""><div><h1>Window Warp</h1><p id="status" role="status">Checking connection…</p></div></header>
+  <section class="switches" aria-label="Browser connection settings">
+    <label class="switch-row"><span>Browser connection</span><input id="connection" type="checkbox" role="switch"></label>
+    <label class="switch-row"><span>Live tab sharing</span><input id="live" type="checkbox" role="switch"></label>
+  </section>
+  <section id="pairing-section">
+    <label for="pairing">Pairing code</label>
+    <div class="pairing"><input id="pairing" autocomplete="off" spellcheck="false" placeholder="From Window Warp settings"><button id="connect" type="button">Connect</button></div>
+  </section>
+  <section id="connected" hidden>
+    <div class="workspace"><span>Saving to</span><strong id="workspace">Checking…</strong><p class="hint" id="sharing">Tabs are shared only when requested.</p></div>
+    <div class="actions"><button id="save-browser" class="primary" type="button">Save browser</button><button id="create-workspace" type="button">Create workspace</button><button id="update" type="button" aria-label="Update workspace URLs">Update URLs</button><button id="open-workspaces" type="button">Open workspaces</button></div>
+    <form id="save-browser-form" class="save-form" hidden>
+      <label id="save-target-label" for="save-target" hidden>Save as</label><select id="save-target" hidden></select>
+      <label for="browser-name">Name</label><input id="browser-name" maxlength="240" autocomplete="off">
+      <label id="save-window-label" for="save-window">Browser window</label><select id="save-window"></select>
+      <p id="save-profile-hint" class="hint" hidden>Uses the default browser profile. Choose another in Connection options if needed.</p>
+      <p id="save-feedback" class="hint" role="status" aria-live="polite"></p>
+      <div class="actions"><button id="confirm-save-browser" class="primary" type="submit">Save</button><button id="cancel-save-browser" type="button">Cancel</button></div>
+      <div id="replace-browser-confirmation" class="replace-confirmation" hidden>
+        <p>Replace the saved tabs in <strong id="replace-browser-name"></strong>?</p>
+        <div class="actions"><button id="confirm-replace-browser" class="primary" type="button">Replace tabs</button><button id="cancel-replace-browser" type="button">Keep current</button></div>
+      </div>
+    </form>
+    <details id="manual" hidden><summary>Choose a window manually</summary>
+      <label for="manual-workspace">Workspace</label><select id="manual-workspace"></select>
+      <label for="manual-item">Window in workspace</label><select id="manual-item"></select>
+      <label for="manual-window">Open browser window</label><select id="manual-window"></select>
+      <button id="use-tabs" type="button">Use these tabs</button>
+    </details>
+    <details><summary>Connection options</summary>
+      <label for="profile">Browser profile</label><select id="profile"><option value="">Detect automatically</option></select>
+      <p class="hint">Choose a profile only if automatic detection needs help.</p>
+    </details>
+  </section>
+</body></html>

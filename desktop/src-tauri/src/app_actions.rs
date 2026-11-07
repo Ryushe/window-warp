@@ -1,7 +1,7 @@
 //! Application-level shortcuts, separate from per-platform window operations.
 use serde_json::json;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Mutex,
 };
 use tauri::{AppHandle, Emitter, Manager};
@@ -88,6 +88,66 @@ static CONTROL_QUEUE: Mutex<ControlQueue> = Mutex::new(ControlQueue {
     editor_active: false,
     pending_editor: 0,
 });
+static WORKSPACE_CAPTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static WORKSPACE_ENRICHMENT: Mutex<()> = Mutex::new(());
+
+fn publish_workspace(
+    app: &AppHandle,
+    sequence: u64,
+    request: serde_json::Value,
+    show: bool,
+) -> Result<(), String> {
+    let runtime = app.state::<crate::Runtime>();
+    let mut pending = runtime.control_request.lock().map_err(|e| e.to_string())?;
+    if WORKSPACE_CAPTURE_SEQUENCE.load(Ordering::SeqCst) != sequence {
+        return Ok(());
+    }
+    *pending = Some(request);
+    drop(pending);
+    if show {
+        crate::show(app);
+    }
+    app.emit("warp-control", ()).map_err(|e| e.to_string())
+}
+
+fn capture_workspace(app: &AppHandle, sequence: u64) -> Result<(), String> {
+    if !*app
+        .state::<crate::Runtime>()
+        .enabled
+        .lock()
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(());
+    }
+    // Preserve the current desktop's windows before bringing Warp forward.
+    let windows = crate::platform::snapshot(app)?;
+    if WORKSPACE_CAPTURE_SEQUENCE.load(Ordering::SeqCst) != sequence {
+        return Ok(());
+    }
+    let store = crate::workspaces::load(app)?;
+    let suggested = crate::workspaces::best_match(&store.profiles, &windows);
+    let mut profile = crate::workspaces::capture(windows, "New workspace".into());
+    crate::terminal::enrich(&mut profile.items);
+    publish_workspace(
+        app,
+        sequence,
+        json!({"action":"update-workspace", "captureId":sequence, "capturing":true, "capture":{"profile":&profile,"suggestedId":&suggested}}),
+        true,
+    )?;
+    // A later shortcut can show its own draft immediately, while only the
+    // newest request is allowed to finish the slower browser enrichment.
+    let _guard = WORKSPACE_ENRICHMENT.lock().map_err(|e| e.to_string())?;
+    if WORKSPACE_CAPTURE_SEQUENCE.load(Ordering::SeqCst) != sequence {
+        return Ok(());
+    }
+    crate::workspaces::enrich_capture(app, &mut profile)?;
+    publish_workspace(
+        app,
+        sequence,
+        json!({"action":"update-workspace", "captureId":sequence, "capturing":false, "capture":{"profile":profile,"suggestedId":suggested}}),
+        false,
+    )
+}
 
 struct ControlGuard<'a> {
     busy: &'a AtomicBool,
@@ -105,8 +165,38 @@ impl Drop for ControlGuard<'_> {
     }
 }
 
+// A browser button is an explicit UI action and must also work while global
+// shortcuts are paused. Keep any already-pending control request intact.
+pub fn show_workspaces(app: &AppHandle) -> Result<(), String> {
+    let runtime = app.state::<crate::Runtime>();
+    let mut pending = runtime.control_request.lock().map_err(|e| e.to_string())?;
+    if pending.is_some() {
+        return Err("Window Warp is handling another request. Try again.".into());
+    }
+    *pending = Some(json!({"action":"open-workspaces"}));
+    drop(pending);
+    crate::show(app);
+    app.emit("warp-control", ()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn dispatch(app: &AppHandle, action: &str) {
     if !is_control(action) {
+        return;
+    }
+    if action == "update-workspace" {
+        let sequence = WORKSPACE_CAPTURE_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            if let Err(error) = capture_workspace(&app, sequence) {
+                let _ = publish_workspace(
+                    &app,
+                    sequence,
+                    json!({"action":"workspace-capture-failed", "captureId":sequence, "error":error}),
+                    true,
+                );
+            }
+        });
         return;
     }
     let runtime = app.state::<crate::Runtime>();
@@ -188,7 +278,10 @@ fn run(app: &AppHandle, action: &str) -> Result<(), String> {
                 return Ok(());
             }
             let active = focused_window(app)?;
-            let name = active.as_ref().map(app_label).filter(|name| !name.is_empty());
+            let name = active
+                .as_ref()
+                .map(app_label)
+                .filter(|name| !name.is_empty());
             if let Ok(mut saved) = app.state::<crate::Runtime>().quick_app.lock() {
                 *saved = name.clone();
             }
@@ -198,7 +291,11 @@ fn run(app: &AppHandle, action: &str) -> Result<(), String> {
                     .as_ref()
                     .and_then(|window| app_binding_index(config, window))
             });
-            let matched = index.and_then(|index| config.as_ref().and_then(|config| config.bindings.get(index)));
+            let matched = index.and_then(|index| {
+                config
+                    .as_ref()
+                    .and_then(|config| config.bindings.get(index))
+            });
             let payload = json!({
                 "window": active,
                 "label": matched.map(|binding| binding.label.clone()).or(name.clone()),
@@ -220,15 +317,6 @@ fn run(app: &AppHandle, action: &str) -> Result<(), String> {
             return Ok(());
         }
         "open-workspaces" => json!({"action":action}),
-        "update-workspace" => {
-            let windows = crate::platform::snapshot(app)?;
-            let store = crate::workspaces::load(app)?;
-            let suggested = crate::workspaces::best_match(&store.profiles, &windows);
-            let mut profile = crate::workspaces::capture(windows, "New workspace".into());
-            crate::firefox::enrich(&mut profile.items);
-            crate::terminal::enrich(&mut profile.items);
-            json!({"action":action, "capture":{"profile":profile,"suggestedId":suggested}})
-        }
         _ => return Err("Unknown application shortcut.".into()),
     };
     *app.state::<crate::Runtime>()
@@ -251,10 +339,22 @@ mod tests {
         let busy = AtomicBool::new(false);
         let mut queue = ControlQueue::default();
 
-        assert!(queue.start(&busy, true), "first press starts opening the popup");
-        assert!(!queue.start(&busy, true), "second press must wait until opening finishes");
-        assert!(!queue.start(&busy, true), "a third distinct press is also preserved");
-        assert!(queue.next_editor(), "second press opens the main editor after the popup");
+        assert!(
+            queue.start(&busy, true),
+            "first press starts opening the popup"
+        );
+        assert!(
+            !queue.start(&busy, true),
+            "second press must wait until opening finishes"
+        );
+        assert!(
+            !queue.start(&busy, true),
+            "a third distinct press is also preserved"
+        );
+        assert!(
+            queue.next_editor(),
+            "second press opens the main editor after the popup"
+        );
         assert!(queue.next_editor(), "third press runs after the second");
         assert!(!queue.next_editor());
         queue.clear(&busy);
@@ -273,7 +373,10 @@ mod tests {
         queue.clear(&busy);
         assert!(queue.start(&busy, true));
         assert!(!queue.start(&busy, false));
-        assert!(!queue.next_editor(), "other controls keep their existing busy behavior");
+        assert!(
+            !queue.next_editor(),
+            "other controls keep their existing busy behavior"
+        );
         queue.clear(&busy);
     }
 
@@ -301,14 +404,18 @@ mod tests {
     #[test]
     fn popup_uses_the_same_discord_binding_the_list_shows() {
         let config = crate::config::Config::default();
-        let index = app_binding_index(&config, &window("discord.exe", "Friends - Discord")).unwrap();
+        let index =
+            app_binding_index(&config, &window("discord.exe", "Friends - Discord")).unwrap();
         let binding = &config.bindings[index];
         assert_eq!(binding.label, "Discord");
         assert_eq!(binding.shortcut, "Super+D");
-        assert!(app_binding_index(&config, &window("Code.exe", "Discord notes")).is_none()
-            || config.bindings[app_binding_index(&config, &window("Code.exe", "Discord notes")).unwrap()]
+        assert!(
+            app_binding_index(&config, &window("Code.exe", "Discord notes")).is_none()
+                || config.bindings
+                    [app_binding_index(&config, &window("Code.exe", "Discord notes")).unwrap()]
                 .label
-                == "Code");
+                    == "Code"
+        );
         let code = app_binding_index(&config, &window("Code.exe", "Discord notes")).unwrap();
         assert_eq!(config.bindings[code].shortcut, "Super+F");
         assert_ne!(config.bindings[code].shortcut, "Super+D");

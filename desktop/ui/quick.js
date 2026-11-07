@@ -21,11 +21,15 @@ let saving = false;
 let editVersion = 0;
 let previewVersion = 0;
 
+function quickMessage(text, error = false) {
+    window.WarpErrorTimer.set(document.querySelector("#quick-message"), text, {error});
+}
+
 function clearConflict() {
     conflictProposal = null;
     document.querySelector("#quick-conflict").hidden = true;
     if (!saving) document.querySelector(".quick-sheet").removeAttribute("inert");
-    document.querySelector("#quick-conflict-error").textContent = "";
+    window.WarpErrorTimer.set(document.querySelector("#quick-conflict-error"), "");
 }
 
 function baseName(value) {
@@ -59,7 +63,7 @@ watchShortcutPicker(document.querySelector(".quick-sheet"), (shortcut) => {
     clearConflict();
     recorded = shortcut;
     document.querySelector("#quick-entry").value = shortcut;
-    document.querySelector("#quick-message").textContent = "";
+    quickMessage("");
 });
 function showHint() {
     const behavior = document.querySelector("#quick-behavior-hint");
@@ -128,7 +132,7 @@ async function openEditor(payload) {
         return loaded;
     }).catch((error) => {
         if (generation === popupGeneration) {
-            document.querySelector("#quick-message").textContent = String(error);
+            quickMessage(String(error), true);
             document.querySelector("#quick-apply").disabled = true;
         }
         return null;
@@ -142,7 +146,7 @@ async function openEditor(payload) {
     recorded = preset;
     document.querySelector("#quick-title").textContent = "Shortcut";
     document.querySelector("#quick-app").textContent = named || "Focus an application window, then try again.";
-    document.querySelector("#quick-message").textContent = "";
+    quickMessage("");
     showRecorded();
     if (!named) {
         document.querySelector("#quick-apply").disabled = true;
@@ -225,11 +229,11 @@ async function replaceConflict(editOld) {
             if (generation !== popupGeneration || !await native.core.invoke("quick_is_open").catch(() => false) || generation !== popupGeneration) return;
             config = proposal.config;
             clearConflict();
-            document.querySelector("#quick-message").textContent = "Choose a new shortcut for the previous action.";
+            quickMessage("Choose a new shortcut for the previous action.");
             editBinding(proposal.disabledIndices[0], { blank: true });
         }
     } catch (error) {
-        if (generation === popupGeneration && conflictProposal === proposal) document.querySelector("#quick-conflict-error").textContent = String(error);
+        if (generation === popupGeneration && conflictProposal === proposal) window.WarpErrorTimer.set(document.querySelector("#quick-conflict-error"), String(error), {error:true});
     } finally {
         conflictSaving = false;
         buttons.forEach(button => { button.disabled = false; });
@@ -240,7 +244,7 @@ document.querySelector("#quick-replace-edit").addEventListener("click", () => re
 document.querySelector("#quick-apply").addEventListener("click", async () => {
     if (!quick || saving) return;
     if (!recorded) {
-        document.querySelector("#quick-message").textContent = "Choose a modifier and a key first.";
+        quickMessage("Choose a modifier and a key first.", true);
         return;
     }
     const binding = config.bindings[quick.index];
@@ -267,7 +271,7 @@ document.querySelector("#quick-apply").addEventListener("click", async () => {
         }
         await saveQuick(proposal.config);
     } catch (error) {
-        if (generation === popupGeneration && version === editVersion && preview === previewVersion) document.querySelector("#quick-message").textContent = String(error);
+        if (generation === popupGeneration && version === editVersion && preview === previewVersion) quickMessage(String(error), true);
     }
 });
 function handleKey(event) {

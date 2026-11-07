@@ -10,6 +10,10 @@ let controlPending = false;
 let startupEnabled = false;
 let startupKnown = false;
 let openBinding = -1;
+let selectingBindings = false;
+let monitors = null;
+let monitorRequest = 0;
+const selectedBindings = new Set();
 const native = window.__TAURI__;
 const THEME_KEYS = ["bg", "sidebar", "text", "chord", "button"];
 function actionSummary(action) {
@@ -25,7 +29,7 @@ function actionSummary(action) {
         "toggle-pause": "Pause or resume",
         "open-editor": "Edit this app",
         "open-workspaces": "Browse workspaces",
-        "update-workspace": "Save workspace"
+        "update-workspace": "Capture workspace"
     }[name] || "Action";
 }
 function themeStorage() {
@@ -69,9 +73,56 @@ function applyTheme(name, colors, css) {
     try { window.__TAURI__?.event?.emit?.("warp-theme", { name: theme, colors: colors || null, css: String(css || "") }); } catch { /* the popup keeps the last theme it could read */ }
 }
 
+function setFeedback(element, text, error = false) {
+    window.WarpErrorTimer.set(element, error ? String(text).replace(/^Error:\s*/i, "") : text, {error});
+}
+function showAppAlert(text) {
+    $("#app-alert-text").textContent = String(text).replace(/^Error:\s*/i, "");
+    const alert = $("#app-alert");
+    alert.hidden = false;
+    window.WarpErrorTimer.start(alert, () => { alert.hidden = true; });
+}
 function message(text, error = false) {
-    $("#message").textContent = text;
-    $("#message").classList.toggle("error", error);
+    if (!$("#settings-page").hidden) setFeedback($("#settings-message"), text, error);
+    else if (!$("#shortcuts-page").hidden) setFeedback($("#message"), text, error);
+    else if (error) showAppAlert(text);
+}
+$("#app-alert-dismiss").addEventListener("click", () => {
+    const alert = $("#app-alert");
+    window.WarpErrorTimer.cancel(alert);
+    alert.hidden = true;
+});
+function updateShortcutSelection() {
+    const bindings = config?.bindings || [];
+    if (!bindings.length && selectingBindings) { selectingBindings = false; selectedBindings.clear(); $("#confirm-remove-shortcuts").hidden = true; }
+    for (const binding of selectedBindings) if (!bindings.includes(binding)) selectedBindings.delete(binding);
+    const cards = [...$("#bindings").querySelectorAll(".binding")];
+    cards.forEach((card, index) => {
+        card.classList.toggle("is-selecting", selectingBindings);
+        card.querySelector(".binding-select").hidden = !selectingBindings;
+        card.querySelector(".select-binding").checked = selectedBindings.has(bindings[index]);
+    });
+    const selected = bindings.filter(binding => selectedBindings.has(binding));
+    const hidden = cards.filter((card, index) => card.hidden && selectedBindings.has(bindings[index])).length;
+    $("#shortcut-selection").hidden = !selectingBindings;
+    $("#select-shortcuts").setAttribute("aria-pressed", String(selectingBindings));
+    $("#select-shortcuts").textContent = selectingBindings ? "Done" : "Select";
+    $("#select-shortcuts").disabled = busy || !config || !bindings.length;
+    const allEnabled = bindings.length > 0 && bindings.every(binding => binding.enabled !== false);
+    $("#enable-all-shortcuts").textContent = allEnabled ? "Disable all" : "Enable all";
+    $("#enable-all-shortcuts").disabled = busy || !config || !bindings.length;
+    $("#select-visible-shortcuts").textContent = $("#search").value.trim() ? "Select visible" : "Select all";
+    $("#select-visible-shortcuts").disabled = busy || !cards.some((card, index) => !card.hidden && !selectedBindings.has(bindings[index]));
+    $("#selected-shortcut-count").textContent = `${selected.length} selected${hidden ? ` · ${hidden} hidden by search` : ""}`;
+    $("#enable-selected-shortcuts").disabled = busy || !selected.some(binding => binding.enabled === false);
+    $("#disable-selected-shortcuts").disabled = busy || !selected.some(binding => binding.enabled !== false);
+    $("#remove-selected-shortcuts").disabled = busy || !selected.length;
+    $("#cancel-remove-shortcuts").disabled = busy;
+    $("#confirm-remove-shortcuts-button").disabled = busy;
+}
+function selectionChanged() {
+    $("#confirm-remove-shortcuts").hidden = true;
+    updateShortcutSelection();
 }
 function controls() {
     $("#toggle").disabled = busy || !config || (!enabled && dirty);
@@ -89,23 +140,24 @@ function controls() {
     $("#find-apps").disabled = busy || !config;
     $("#bindings").querySelectorAll("input, textarea, select, button").forEach((el) => { el.disabled = busy; });
     $("#quick-shortcut").disabled = $("#quick-apply").disabled = $("#quick-behavior").disabled = $("#quick-layout").disabled = busy;
-    $("#main-monitor").disabled = $("#burner-monitor").disabled = busy || !config;
+    $("#main-monitor").disabled = $("#burner-monitor").disabled = busy || !config || !monitors;
+    $("#retry-monitors").disabled = busy || !config;
     $("#hold-mode").disabled = $("#hold-enabled").disabled = $("#hold-delay").disabled = busy || !config;
     $("#enable-on-launch").disabled = busy || !config;
     $("#quick-modifier").disabled = busy || !config;
     $("#startup").disabled = busy || !startupKnown;
     $("#import-files").disabled = busy || enabled || !config;
     $("#apply-import").disabled = busy || enabled || !config;
-    $("#edit-hint").textContent = enabled ? "Shortcuts are on. Save updates them without pausing." : "Save, then turn shortcuts on.";
-    const saveStatus = dirty ? "Unsaved changes" : "Stored on this device";
+    const saveStatus = dirty ? "Unsaved changes" : "";
     $("#save-status").textContent = saveStatus;
     $("#settings-save-status").textContent = saveStatus;
+    updateShortcutSelection();
 }
 function cancelReassignment() {
     reassignment = null;
     document.querySelectorAll(".reassignment").forEach(panel => { panel.hidden = true; });
 }
-function changed() { cancelReassignment(); dirty = true; controls(); }
+function changed() { cancelReassignment(); dirty = true; setFeedback($("#message"), ""); setFeedback($("#settings-message"), ""); setFeedback($("#find-apps-result"), ""); controls(); }
 function copyConfig(value) { return JSON.parse(JSON.stringify(value)); }
 function rememberSaved() { savedConfig = copyConfig(config); }
 function discardChanges() {
@@ -115,7 +167,7 @@ function discardChanges() {
     quick = null;
     $("#quick-edit").hidden = true;
     render();
-    message("Canceled unsaved changes.");
+    message("Changes discarded.");
 }
 function render() {
     cancelReassignment();
@@ -218,22 +270,23 @@ function render() {
         });
         const review = card.querySelector(".reassignment");
         const confirm = card.querySelector(".confirm-reassignment");
+        const bindingFeedback = card.querySelector(".binding-feedback");
         card.querySelector(".reassign").addEventListener("click", () => perform(async () => {
+            setFeedback(bindingFeedback, "");
             cancelReassignment();
             const proposal = await native.core.invoke("preview_shortcut_reassignment", {config, index});
-            if (!proposal.disabledIndices.length) { message("No other enabled shortcut uses this key."); return; }
+            if (!proposal.disabledIndices.length) { setFeedback(bindingFeedback, "No other shortcut uses this key."); return; }
             reassignment = {proposal, index};
             const labels = proposal.disabledIndices.map(i => proposal.config.bindings[i].label || "Unnamed shortcut");
             review.querySelector(".reassignment-summary").textContent =
                 `Use ${proposal.config.bindings[index].shortcut} for “${binding.label || "Unnamed shortcut"}”? Disable: ${labels.join(", ")}. Their settings will be kept.`;
             review.hidden = false;
-            message("Review the conflicting shortcuts below. Save changes afterward to apply.");
-        }));
+        }, error => setFeedback(bindingFeedback, String(error), true)));
         confirm.addEventListener("click", () => {
             if (busy || reassignment?.index !== index) return;
             config = reassignment.proposal.config;
             changed(); render();
-            message("Key reassigned in this draft. Save changes to apply.");
+            message("Shortcut reassigned. Save changes to apply.");
         });
         card.querySelector(".cancel-reassignment").addEventListener("click", cancelReassignment);
         const shortcut = card.querySelector('[data-field="shortcut"]');
@@ -269,10 +322,17 @@ function render() {
         });
         card.querySelector(".remove").addEventListener("click", () => { config.bindings.splice(index, 1); if (openBinding === index) openBinding = -1; changed(); render(); });
         const article = card.querySelector(".binding");
+        const selection = card.querySelector(".select-binding");
+        selection.setAttribute("aria-label", `Select ${binding.label || "shortcut"}`);
+        selection.addEventListener("change", () => {
+            if (selection.checked) selectedBindings.add(binding); else selectedBindings.delete(binding);
+            selectionChanged();
+        });
         const paintSummary = () => {
             article.querySelector('[data-summary="shortcut"]').textContent = binding.shortcut || "Set a key";
             article.querySelector('[data-summary="label"]').textContent = binding.label || "Untitled";
             article.querySelector('[data-summary="action"]').textContent = actionSummary(binding.action);
+            selection.setAttribute("aria-label", `Select ${binding.label || "shortcut"}`);
         };
         paintSummary();
         article.addEventListener("input", paintSummary);
@@ -287,8 +347,7 @@ function render() {
     });
     $("#count").textContent = config.bindings.length;
     $("#empty").hidden = config.bindings.length > 0;
-    $("#main-monitor").value = config.settings?.mainMonitor ?? 0;
-    $("#burner-monitor").value = config.settings?.burnerMonitor ?? 2;
+    renderMonitorOptions();
     $("#enable-on-launch").checked = config.settings?.enableOnLaunch ?? true;
     $("#quick-modifier").value = config.settings?.quickModifier || "Super";
     $("#hold-enabled").checked = config.settings?.holdTileEnabled ?? true;
@@ -298,11 +357,11 @@ function render() {
     filterBindings();
     controls();
 }
-async function perform(operation) {
+async function perform(operation, reportError = error => message(String(error), true)) {
     if (busy) return;
     busy = true;
     controls();
-    try { await operation(); } catch (error) { message(String(error), true); }
+    try { await operation(); } catch (error) { reportError(error); }
     finally { busy = false; controls(); if (controlPending) receiveControl(); }
 }
 function receiveControl() {
@@ -316,7 +375,7 @@ function receiveControl() {
             window.dispatchEvent(new window.CustomEvent("warp-workspace-request", {detail:request}));
             return;
         }
-        if (!request.window) { message("No active app was available. Focus an application window, then press the shortcut again."); return; }
+        if (!request.window) { message("No active app was available. Focus an application window, then press the shortcut again.", true); return; }
         const app = request.window.appId || request.window.path?.split(/[\\/]/).pop() || request.window.desktopId;
         if (!app) { message("This window has no usable app identifier.", true); return; }
         openQuick(app);
@@ -376,7 +435,7 @@ $("#add").addEventListener("click", () => {
     config.bindings.push({ label: "", shortcut: "", action: "pull-app", appMatch: "", enabled: true, mainMonitorAction: "burner", burnerLayout: "float" });
     openBinding = config.bindings.length - 1;
     changed(); render();
-    $("#bindings").lastElementChild.querySelector("input").focus();
+    $("#bindings").lastElementChild.querySelector('[data-field="label"]').focus();
 });
 function appNameKey(value) {
     const base = String(value || "").split(/[\\/]/).pop().replace(/\.exe$/i, "").split(".").pop();
@@ -384,7 +443,7 @@ function appNameKey(value) {
 }
 $("#find-apps").addEventListener("click", () => perform(async () => {
     const result = $("#find-apps-result");
-    result.textContent = "Finding open apps…";
+    setFeedback(result, "Finding open apps…");
     try {
         const windows = await native.core.invoke("get_windows");
         const missing = [], ambiguous = [], found = [];
@@ -406,9 +465,9 @@ $("#find-apps").addEventListener("click", () => perform(async () => {
             if (additions.length) { binding.appMatches = [...(binding.appMatches || []), ...additions]; found.push(binding.label); }
         }
         if (found.length) { changed(); render(); }
-        result.textContent = [found.length ? `Added names for: ${found.join(", ")}. Review and save changes.` : "No new names added.", missing.length ? `Not found: ${missing.join(", ")}. Open those apps and try again.` : "", ambiguous.length ? `Multiple matches; review manually: ${ambiguous.join(", ")}.` : ""].filter(Boolean).join(" ");
+        setFeedback(result, [found.length ? `Added names for: ${found.join(", ")}. Review and save changes.` : "No new names added.", missing.length ? `Not found: ${missing.join(", ")}. Open those apps and try again.` : "", ambiguous.length ? `Multiple matches; review manually: ${ambiguous.join(", ")}.` : ""].filter(Boolean).join(" "));
     } catch (error) {
-        result.textContent = `Could not find open apps: ${error}`;
+        setFeedback(result, `Could not find open apps: ${error}`, true);
     }
 }));
 function filterBindings() {
@@ -417,16 +476,139 @@ function filterBindings() {
         const b = config.bindings[index];
         card.hidden = ![b.label, b.shortcut, b.action, b.appMatch, ...(b.appMatches || []), ...Object.values(b.windowsMatch || {}), b.windowsMatch?.activeOnly ? "active window" : ""].join(" ").toLowerCase().includes(query);
     });
+    updateShortcutSelection();
 }
 $("#search").addEventListener("input", () => { if (config) filterBindings(); });
+$("#select-shortcuts").addEventListener("click", () => {
+    selectingBindings = !selectingBindings;
+    setFeedback($("#find-apps-result"), "");
+    if (!selectingBindings) selectedBindings.clear();
+    selectionChanged();
+});
+$("#select-visible-shortcuts").addEventListener("click", () => {
+    [...$("#bindings").querySelectorAll(".binding")].forEach((card, index) => { if (!card.hidden) selectedBindings.add(config.bindings[index]); });
+    selectionChanged();
+});
+function setBindingsEnabled(bindings, value) {
+    const targets = bindings.filter(binding => (binding.enabled !== false) !== value);
+    if (!targets.length) return;
+    targets.forEach(binding => { binding.enabled = value; });
+    $("#confirm-remove-shortcuts").hidden = true;
+    changed(); render();
+}
+$("#enable-all-shortcuts").addEventListener("click", () => setBindingsEnabled(config.bindings, config.bindings.some(binding => binding.enabled === false)));
+$("#enable-selected-shortcuts").addEventListener("click", () => setBindingsEnabled(config.bindings.filter(binding => selectedBindings.has(binding)), true));
+$("#disable-selected-shortcuts").addEventListener("click", () => setBindingsEnabled(config.bindings.filter(binding => selectedBindings.has(binding)), false));
+$("#remove-selected-shortcuts").addEventListener("click", () => {
+    const count = selectedBindings.size;
+    if (!count) return;
+    $("#confirm-remove-shortcuts-text").textContent = `Remove ${count} selected ${count === 1 ? "shortcut" : "shortcuts"}?`;
+    $("#confirm-remove-shortcuts").hidden = false;
+    $("#cancel-remove-shortcuts").focus();
+});
+$("#cancel-remove-shortcuts").addEventListener("click", () => { $("#confirm-remove-shortcuts").hidden = true; });
+$("#confirm-remove-shortcuts-button").addEventListener("click", () => {
+    const count = selectedBindings.size;
+    if (!count) return;
+    config.bindings = config.bindings.filter(binding => !selectedBindings.has(binding));
+    selectedBindings.clear(); selectingBindings = false; openBinding = -1;
+    $("#confirm-remove-shortcuts").hidden = true;
+    changed(); render();
+    message(`${count} ${count === 1 ? "shortcut" : "shortcuts"} removed. Save changes to apply.`);
+});
 $("#startup").addEventListener("change", () => perform(async () => {
     const requested = $("#startup").checked;
+    setFeedback($("#startup-feedback"), "");
     try {
         startupEnabled = await native.core.invoke("set_startup", {enabled: requested});
-        message(startupEnabled ? "Window Warp will start at login with saved shortcuts enabled." : "Startup disabled.");
     } finally { $("#startup").checked = startupEnabled; }
-}));
-for (const [id, field] of [["main-monitor", "mainMonitor"], ["burner-monitor", "burnerMonitor"], ["hold-delay", "holdDelayMs"]]) {
+}, error => setFeedback($("#startup-feedback"), String(error), true)));
+function renderMonitorOptions() {
+    if (!config || !monitors) return;
+    const settings = config.settings || {};
+    const currentMain = settings.mainMonitorId ? monitors.find(monitor => monitor.id === settings.mainMonitorId)
+        : (settings.mainMonitor ?? 0) === 0 ? monitors.find(monitor => monitor.primary)
+        : monitors.find(monitor => monitor.index === settings.mainMonitor);
+    for (const [elementId, numberKey, identityKey, fallback] of [
+        ["main-monitor", "mainMonitor", "mainMonitorId", 0],
+        ["burner-monitor", "burnerMonitor", "burnerMonitorId", 2]
+    ]) {
+        const select = $("#" + elementId);
+        const number = settings[numberKey] ?? fallback;
+        const identity = settings[identityKey] || "";
+        const chosen = identity ? monitors.find(monitor => monitor.id === identity) : monitors.find(monitor => monitor.index === number);
+        select.replaceChildren();
+        const add = (value, label, disabled = false) => {
+            const option = document.createElement("option"); option.value = value; option.textContent = label; option.disabled = disabled; select.append(option);
+        };
+        if (elementId === "main-monitor") {
+            const primary = monitors.find(monitor => monitor.primary);
+            const automatic = platform === "windows" ? "System primary" : "Automatic";
+            add("0", primary ? `${automatic} (${primary.name})` : automatic);
+        }
+        for (const monitor of monitors) add(String(monitor.index), monitor.name + (monitor.primary ? (platform === "windows" ? " (primary)" : " (automatic)") : ""),
+            elementId === "burner-monitor" && monitors.length > 1 && monitor.id === currentMain?.id);
+        if (elementId === "burner-monitor" && monitors.length < 2) {
+            add("missing", "No second monitor connected", true);
+            select.value = "missing";
+        } else if (chosen) select.value = String(chosen.index);
+        else if (!identity && number === 0 && elementId === "main-monitor") select.value = "0";
+        else {
+            add("missing", !identity && elementId === "burner-monitor" && monitors.length < 2 ? "No second monitor connected" : "Previously selected monitor is disconnected", true);
+            select.value = "missing";
+        }
+    }
+}
+async function refreshMonitors() {
+    const request = ++monitorRequest;
+    try {
+        const found = await native.core.invoke("get_monitors");
+        if (request !== monitorRequest) return;
+        if (!Array.isArray(found) || !found.length) throw new Error("No connected monitors were found.");
+        monitors = found;
+        $("#monitor-hint").textContent = monitors.some(monitor => !monitor.stable)
+            ? "For displays without a stable ID, reconnecting or rearranging can change their order. Refresh this list and check your choices."
+            : "If a selected display is unavailable or both choices match, Warp uses an available display.";
+        setFeedback($("#monitor-status"), "");
+        renderMonitorOptions(); controls();
+    } catch {
+        if (request !== monitorRequest) return;
+        monitors = null;
+        setFeedback($("#monitor-status"), "Could not detect monitors. Try again.", true);
+        controls();
+    }
+}
+$("#monitor-settings").addEventListener("toggle", () => { if ($("#monitor-settings").open) refreshMonitors(); });
+$("#retry-monitors").addEventListener("click", refreshMonitors);
+window.addEventListener("focus", () => { if ($("#monitor-settings").open) refreshMonitors(); });
+for (const [elementId, numberKey, identityKey] of [
+    ["main-monitor", "mainMonitor", "mainMonitorId"],
+    ["burner-monitor", "burnerMonitor", "burnerMonitorId"]
+]) {
+    $("#" + elementId).addEventListener("input", () => {
+        const number = Number($("#" + elementId).value);
+        if (!Number.isInteger(number) || !monitors) return;
+        const selected = monitors.find(monitor => monitor.index === number);
+        if (!selected && !(elementId === "main-monitor" && number === 0)) return;
+        config.settings ??= {mainMonitor: 0, burnerMonitor: 2};
+        config.settings[numberKey] = number;
+        config.settings[identityKey] = selected?.stable ? selected.id : "";
+        if (elementId === "main-monitor" && monitors.length > 1) {
+            const main = selected || monitors.find(monitor => monitor.primary);
+            const second = config.settings.burnerMonitorId
+                ? monitors.find(monitor => monitor.id === config.settings.burnerMonitorId)
+                : monitors.find(monitor => monitor.index === (config.settings.burnerMonitor ?? 2));
+            if (main && second?.id === main.id) {
+                const other = monitors.find(monitor => monitor.id !== main.id);
+                config.settings.burnerMonitor = other.index;
+                config.settings.burnerMonitorId = other.stable ? other.id : "";
+            }
+        }
+        renderMonitorOptions();
+        changed();
+    });
+}
+for (const [id, field] of [["hold-delay", "holdDelayMs"]]) {
     $("#" + id).addEventListener("input", () => {
         config.settings ??= {mainMonitor: 0, burnerMonitor: 2};
         config.settings[field] = Number($("#" + id).value);
@@ -474,24 +656,23 @@ $("#quick-apply").addEventListener("click", () => perform(async () => {
     quick = null;
     $("#quick-edit").hidden = true;
     render();
-    message(enabled ? "Saved. The shortcuts in use were updated." : "Saved.");
-}));
+    message("Saved.");
+}, error => showAppAlert(String(error))));
 $("#save").addEventListener("click", () => perform(async () => {
     config = await native.core.invoke("save_config", { config });
     rememberSaved();
     dirty = false; render();
-    message(enabled ? "Saved. The shortcuts in use were updated." : "Saved. Enable shortcuts when you’re ready.");
+    message("Saved.");
 }));
 $("#save-settings").addEventListener("click", () => $("#save").click());
 $("#discard").addEventListener("click", discardChanges);
 $("#discard-settings").addEventListener("click", discardChanges);
 $("#toggle").addEventListener("click", () => perform(async () => {
     enabled = await native.core.invoke("set_enabled", { enabled: !enabled });
-    message(enabled ? "Shortcuts are on." : "Shortcuts are paused.");
-}));
+}, error => showAppAlert(String(error))));
 async function init() {
     if (!native) {
-        message("Open Window Warp as a desktop application to configure and control your windows.", true);
+        showAppAlert("Open Window Warp as a desktop application to configure and control your windows.");
         $("#status").textContent = "Desktop app required";
         return;
     }
@@ -505,10 +686,12 @@ async function init() {
             card?.scrollIntoView?.({ block: "center" });
         });
         await native.event.listen("warp-control", receiveControl);
-        await native.event.listen("warp-error", (event) => message(event.payload, true));
+        await native.event.listen("warp-browser-updated", (event) => window.dispatchEvent(new CustomEvent("warp-browser-updated", {detail:event.payload})));
+        await native.event.listen("warp-saved-browsers-updated", () => window.dispatchEvent(new CustomEvent("warp-saved-browsers-updated")));
+        await native.event.listen("warp-desktop-changed", () => window.dispatchEvent(new CustomEvent("warp-desktop-changed")));
+        await native.event.listen("warp-error", (event) => showAppAlert(event.payload));
         await native.event.listen("warp-enabled", (event) => {
             enabled = event.payload; controls();
-            message(enabled ? (dirty ? "Shortcuts are on. Unsaved edits are still here." : "Shortcuts are on.") : "Shortcuts are paused.");
         });
         const status = await native.core.invoke("get_status");
         platform = status.platform;
@@ -517,16 +700,15 @@ async function init() {
         config = await native.core.invoke("get_config");
         rememberSaved();
         render();
-        message(enabled ? "Shortcuts are on." : "Shortcuts are paused.");
-        if (status.shortcutError) message("Pause shortcut needs attention: " + status.shortcutError, true);
+        if (status.shortcutError) showAppAlert("Pause shortcut needs attention: " + status.shortcutError);
         receiveControl();
         try {
             startupEnabled = await native.core.invoke("get_startup");
             startupKnown = true;
             $("#startup").checked = startupEnabled;
             controls();
-        } catch (error) { message("Could not read startup settings: " + error, true); }
-    } catch (error) { message(String(error), true); $("#status").textContent = "Needs attention"; }
+        } catch (error) { showAppAlert("Could not read startup settings: " + error); }
+    } catch (error) { showAppAlert(String(error)); $("#status").textContent = "Needs attention"; }
 }
 {
     const store = themeStorage();

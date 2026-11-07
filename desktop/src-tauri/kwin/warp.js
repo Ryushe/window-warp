@@ -35,6 +35,10 @@ var Warp = (function () {
     function primary(all) {
         return all.filter(function(s) { return s.geometry.x === 0 && s.geometry.y === 0; })[0] || all[0];
     }
+    function monitorIndex(all, id) {
+        for (var i = 0; i < all.length; i++) if (String(all[i].name) === id) return i;
+        return -1;
+    }
     function centerPointer(output) {
         var r = area(output);
         function round(value) { return value < 0 ? -Math.round(-value) : Math.round(value); }
@@ -61,8 +65,8 @@ var Warp = (function () {
             width: width, height: height
         };
     }
-    function focus(window) {
-        if (!window.onAllDesktops && window.desktops && window.desktops.length) {
+    function focus(window, keepDesktop) {
+        if (!keepDesktop && !window.onAllDesktops && window.desktops && window.desktops.length) {
             if (modern) workspace.currentDesktop = window.desktops[0];
             else workspace.currentVirtualDesktop = window.desktops[0];
         }
@@ -115,8 +119,12 @@ var Warp = (function () {
         var wasActive = window === current;
         if (!wasActive && current) previousWindows[binding.shortcut] = identity(current);
         var mainIndex = configuration.mainMonitor ? Math.min(configuration.mainMonitor - 1, all.length - 1) : 0;
+        if (configuration.mainMonitorId) {
+            mainIndex = monitorIndex(all, configuration.mainMonitorId);
+            if (mainIndex < 0) mainIndex = all.indexOf(primary(all));
+        }
         // The origin output is the default; an explicit setting is stable across focus changes.
-        if (!configuration.mainMonitor) {
+        if (!configuration.mainMonitor && !configuration.mainMonitorId) {
             all.forEach(function (s, i) { if (s.geometry.x === 0 && s.geometry.y === 0) mainIndex = i; });
         }
         var main = all[mainIndex];
@@ -143,7 +151,10 @@ var Warp = (function () {
             return;
         }
         if (wasActive && all.length > 1) {
-            var burnerIndex = Math.min((configuration.burnerMonitor || 2) - 1, all.length - 1);
+            var burnerIndex = configuration.burnerMonitorId
+                ? monitorIndex(all, configuration.burnerMonitorId)
+                : Math.min((configuration.burnerMonitor || 2) - 1, all.length - 1);
+            if (burnerIndex < 0) burnerIndex = (mainIndex + 1) % all.length;
             if (burnerIndex === mainIndex) burnerIndex = (mainIndex + 1) % all.length;
             var burner = all[burnerIndex];
             if (binding.burnerLayout === "tile-left" || binding.burnerLayout === "tile-right") {

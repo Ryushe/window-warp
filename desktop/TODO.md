@@ -1,5 +1,63 @@
 # Window Warp to-do
 
+## Release verification gaps
+
+- Workspace associations still need a general identity check when a saved app,
+  terminal, or browser profile changes. Firefox windows are now excluded when
+  a Windows explicit profile path or an owned lock proves a different directory, but an
+  unavailable identity remains eligible; Chromium and terminal changes are
+  not covered by that check. Do not assume unrelated windows can never move.
+- Browser-extension snapshots with missing profile identity can still be
+  matched from window titles and geometry. Test identical windows in multiple
+  profiles, including an unconfigured extension, and preserve saved URLs when
+  the source cannot be established.
+- Validate the Store MSIX on clean Windows 10 and 11, including WebView2
+  availability, actual sign-in startup, and upgrade. The existing Run entry
+  uses the executable path, which may change between MSIX versions.
+- The current CI workflow does not publish the requested packages. The
+  checkout passes `cargo fmt --check` after release formatting.
+- A combined Firefox, hold, radial, and Konsole KDE run once failed to capture
+  its owned Konsole shell. A separate Konsole run and a later combined run of
+  the final package passed; monitor for a repeat of the intermittent failure.
+- The Firefox release tool `web-ext` 10.8.0 currently pulls `deepmerge` with a
+  low-severity development-dependency advisory (GHSA-gcqx-w48m-w2h4). Recheck
+  for an upstream fix when updating the publishing tool; it is not shipped in
+  the extension or desktop app.
+
+## More than two monitors
+
+- Extend the main/burner two-monitor workflow to support three or more displays
+  on Windows and KDE. Let users choose destinations and workspace display
+  mappings, and preserve sensible placement when displays are disconnected or
+  rearranged. Verify mixed-DPI and different monitor layouts without breaking
+  existing one- and two-monitor setups.
+
+## Terminal and WSL workspaces
+
+- Identify the running terminal application and shell automatically when the
+  evidence is reliable, including standalone PowerShell, Windows Terminal,
+  Konsole, and WSL. Preserve the terminal profile, WSL distribution and user,
+  and directory when known; let the user correct uncertain details. Test
+  multiple tabs, nested shells, and directories changed after launch.
+- Reuse a matching terminal window when it is still running. Explore an
+  optional way to reconnect SSH and reattach an existing remote tmux or screen
+  session, with normal authentication and host verification. A closed session
+  cannot generally be reconstructed from its title; do not silently replay
+  commands or capture secrets.
+
+## Workspaces across Windows and Linux
+
+- Explore portable workspaces with per-machine mappings for applications,
+  terminal and browser profiles, paths, desktops, and displays. Show missing or
+  ambiguous mappings so the user can resolve them. Windows, WSL, and remote
+  Linux paths are not interchangeable.
+- On Windows, investigate current-desktop detection when a window reported on
+  the current desktop has an ID missing from Explorer's stored desktop list.
+  This can prevent bringing Warp to the current desktop. Account for pinned
+  windows before trusting an unlisted ID, and add a native regression test.
+  The live desktop-manager path and a cross-desktop native test passed on
+  Windows 11 25H2; the fallback case remains unverified.
+
 ## Preview video
 
 Record a short preview for the README and the GitHub release. Show a push
@@ -43,11 +101,17 @@ There is nothing to check yet. The only Windows installer is
 
 ## Keyboard hook
 
-The popup now uses one hook and shows the same Super binding as the list.
-Recording, the second Win+B, and hold-to-radial still need a physical
-keyboard. SendInput drops the key-up after a swallowed key-down.
-Read `desktop/HOOK-HANDOFF.md` before changing hook code. Do not add another
-low-level hook.
+The popup uses one hook and shows the same Super binding as the list. On
+2026-11-06, a physical-keyboard test in an isolated Windows 11 preview passed
+four successive Win+B presses, Win+Y, recording Win+X, and a radial hold.
+An earlier attempt intermittently fell through to Windows while multiple Warp
+instances were running; this short successful retry does not establish the
+cause or rule out an intermittent failure. SendInput drops the key-up after a
+swallowed key-down. Read `desktop/HOOK-HANDOFF.md` before changing hook code;
+do not add another low-level hook.
+
+- Continue testing shortcuts with Warp and other applications focused,
+  especially rapid presses, pause/resume, saved bindings, and normal typing.
 
 ## Win-key hook is not in the installed app
 

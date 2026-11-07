@@ -25,6 +25,27 @@ pub struct WindowInfo {
     pub active: bool,
 }
 
+// Transient compositor state; unlike WindowInfo, these identities are not
+// written into a saved workspace and are rechecked whenever tabs are updated.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VirtualDesktop {
+    pub id: String,
+    pub name: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocatedWindow {
+    pub window: WindowInfo,
+    pub desktops: Vec<VirtualDesktop>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopSnapshot {
+    pub current: Option<VirtualDesktop>,
+    pub windows: Vec<LocatedWindow>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkspaceItem {
@@ -69,6 +90,119 @@ pub struct WorkspaceStore {
     pub version: u32,
     pub profiles: Vec<Workspace>,
 }
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SavedBrowserMode {
+    Replace,
+    Append,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SavedBrowserTarget {
+    pub index: usize,
+    pub expected: WorkspaceItem,
+    pub mode: SavedBrowserMode,
+}
+
+/// Keep the saved profile identity while accepting tabs only from the same
+/// identified open browser. An empty snapshot must never erase saved tabs.
+pub fn refreshed_saved_browser(
+    saved: &crate::firefox::Browser,
+    current: &crate::firefox::Browser,
+) -> Option<crate::firefox::Browser> {
+    if saved.kind != current.kind
+        || current.tabs.is_empty()
+        || (!saved.profile_path.is_empty()
+            && (current.profile_path.is_empty()
+                || !crate::browser_bridge::same_path(&saved.profile_path, &current.profile_path)))
+        || (saved.profile_path.is_empty()
+            && !saved.profile_name.is_empty()
+            && saved.profile_name != current.profile_name)
+    {
+        return None;
+    }
+    let mut refreshed = saved.clone();
+    refreshed.tabs = current.tabs.clone();
+    refreshed.active_tab = current.active_tab;
+    refreshed.validate().ok()?;
+    Some(refreshed)
+}
+
+/// Copy a saved browser into a workspace, or update one explicitly reviewed
+/// browser. Only tabs change when updating an existing window.
+pub fn apply_saved_browser(
+    workspace: &mut Workspace,
+    saved_item: &WorkspaceItem,
+    target: Option<SavedBrowserTarget>,
+) -> Result<(), String> {
+    let source = saved_item
+        .browser
+        .as_ref()
+        .ok_or("This saved browser has no tabs.")?;
+    source.validate()?;
+    let Some(target) = target else {
+        workspace.items.push(saved_item.clone());
+        return Ok(());
+    };
+    let item = workspace
+        .items
+        .get_mut(target.index)
+        .ok_or("This workspace changed. Reopen the browser chooser.")?;
+    if serde_json::to_value(&*item).map_err(|e| e.to_string())?
+        != serde_json::to_value(&target.expected).map_err(|e| e.to_string())?
+    {
+        return Err(
+            "This workspace changed. Reopen the browser chooser to review its tabs.".into(),
+        );
+    }
+    use crate::firefox::{Browser, BrowserKind};
+    let kind = item
+        .browser
+        .as_ref()
+        .map(|browser| browser.kind)
+        .or_else(|| {
+            [BrowserKind::Firefox, BrowserKind::Chromium]
+                .into_iter()
+                .find(|kind| crate::browser_bridge::is_browser_kind(item, *kind))
+        })
+        .ok_or("This window is no longer a browser.")?;
+    let mut updated = item.browser.clone().unwrap_or(Browser {
+        kind,
+        active_tab: 1,
+        ..Default::default()
+    });
+    match target.mode {
+        SavedBrowserMode::Replace => {
+            updated.tabs = source.tabs.clone();
+            updated.active_tab = source.active_tab;
+        }
+        SavedBrowserMode::Append => {
+            let selected = updated
+                .tabs
+                .get(updated.active_tab.saturating_sub(1))
+                .or_else(|| source.tabs.get(source.active_tab.saturating_sub(1)))
+                .map(|tab| tab.url.clone());
+            let mut seen = HashSet::new();
+            updated.tabs = updated
+                .tabs
+                .iter()
+                .chain(&source.tabs)
+                .filter(|tab| seen.insert(tab.url.clone()))
+                .cloned()
+                .collect();
+            updated.active_tab = selected
+                .and_then(|url| updated.tabs.iter().position(|tab| tab.url == url))
+                .map_or(1, |index| index + 1);
+        }
+    }
+    updated.validate()?;
+    item.browser = Some(updated);
+    item.capture_note.clear();
+    Ok(())
+}
+
 impl Default for WorkspaceStore {
     fn default() -> Self {
         Self {
@@ -159,11 +293,19 @@ impl WorkspaceStore {
 }
 
 pub fn load(app: &AppHandle) -> Result<WorkspaceStore, String> {
+    load_store(app, "workspaces.json")
+}
+
+pub(crate) fn load_saved_browsers(app: &AppHandle) -> Result<WorkspaceStore, String> {
+    load_store(app, "saved-browsers.json")
+}
+
+fn load_store(app: &AppHandle, filename: &str) -> Result<WorkspaceStore, String> {
     let path = app
         .path()
         .app_config_dir()
         .map_err(|e| e.to_string())?
-        .join("workspaces.json");
+        .join(filename);
     let store = match fs::read_to_string(&path) {
         Ok(text) => serde_json::from_str::<WorkspaceStore>(&text).map_err(|e| {
             format!("Cannot read workspaces: {e}. The original file has been preserved.")
@@ -175,18 +317,47 @@ pub fn load(app: &AppHandle) -> Result<WorkspaceStore, String> {
     Ok(store)
 }
 pub fn save(app: &AppHandle, store: &WorkspaceStore) -> Result<(), String> {
+    save_store(app, "workspaces.json", store)
+}
+
+pub(crate) fn save_saved_browsers(app: &AppHandle, store: &WorkspaceStore) -> Result<(), String> {
+    save_store(app, "saved-browsers.json", store)
+}
+
+fn save_store(app: &AppHandle, filename: &str, store: &WorkspaceStore) -> Result<(), String> {
     store.validate()?;
     // Never replace an unreadable existing store through an incidental UI save.
-    load(app)?;
+    load_store(app, filename)?;
     let directory = app.path().app_config_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
-    let temporary = directory.join("workspaces.json.tmp");
+    let temporary = directory.join(format!("{filename}.tmp"));
     fs::write(
         &temporary,
         serde_json::to_vec_pretty(store).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    fs::rename(temporary, directory.join("workspaces.json")).map_err(|e| e.to_string())
+    fs::rename(temporary, directory.join(filename)).map_err(|e| e.to_string())
+}
+
+pub(crate) fn enrich_capture(app: &AppHandle, profile: &mut Workspace) -> Result<(), String> {
+    let bridge = app.state::<crate::browser_bridge::Bridge>();
+    let needs_browser = crate::browser_bridge::has_browser(&profile.items);
+    let snapshots = std::thread::scope(|scope| {
+        let snapshots = scope.spawn(|| {
+            if needs_browser {
+                bridge.capture_snapshots()
+            } else {
+                crate::browser_bridge::CapturedSnapshots::default()
+            }
+        });
+        crate::firefox::enrich(&mut profile.items);
+        crate::terminal::enrich(&mut profile.items);
+        snapshots
+            .join()
+            .map_err(|_| "Could not capture browser tabs.".to_string())
+    })?;
+    snapshots.enrich(&mut profile.items);
+    Ok(())
 }
 
 pub fn capture(windows: Vec<WindowInfo>, name: String) -> Workspace {
@@ -269,6 +440,10 @@ pub struct RestoreResult {
     pub restored: bool,
     pub launched: bool,
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+    #[serde(skip)]
+    pub target: Option<(String, u32)>,
 }
 
 pub fn launch(spec: &LaunchSpec) -> Result<(), String> {
@@ -319,6 +494,8 @@ pub fn restore(
     app: &AppHandle,
     profile: &Workspace,
     cancelled: &std::sync::atomic::AtomicBool,
+    desktop: Option<&str>,
+    active_targets: &[Option<(String, u32)>],
 ) -> Result<Vec<RestoreResult>, String> {
     use std::{
         sync::atomic::Ordering,
@@ -335,14 +512,32 @@ pub fn restore(
         .any(|i| i.terminal.is_some())
         .then(crate::terminal::Capture::new);
     let mut results = Vec::new();
-    for item in &profile.items {
+    for (index, item) in profile.items.iter().enumerate() {
         if cancelled.load(Ordering::Relaxed) {
             break;
         }
         let mut launched = false;
+        let mut warning = None;
+        let mut target_identity = None;
         let result = (|| {
-            let mut windows = crate::platform::snapshot(app)?;
-            if let Some(terminal) = &item.terminal {
+            check_restore_desktop(app, desktop)?;
+            // A window on another virtual desktop does not satisfy this
+            // desktop's workspace. Leave it there and open another if needed.
+            let mut windows = crate::platform::snapshot_current(app)?;
+            let known = if item.launch.new_window {
+                None
+            } else {
+                active_targets
+                    .get(index)
+                    .and_then(Option::as_ref)
+                    .and_then(|(id, pid)| {
+                        windows.iter().find(|window| {
+                            window.id == *id && window.pid == *pid && !used.contains(id)
+                        })
+                    })
+                    .cloned()
+            };
+            if let Some(terminal) = item.terminal.as_ref().filter(|_| known.is_none()) {
                 let all = windows.clone();
                 windows.retain(|w| {
                     crate::terminal::kind(w) == Some(terminal.kind)
@@ -351,21 +546,175 @@ pub fn restore(
                             .is_some_and(|capture| capture.matches(w, &all, terminal))
                 });
             }
-            if let Some(browser) = &item.browser {
+            if let Some(browser) = item.browser.as_ref().filter(|browser| {
+                known.is_none() && browser.kind == crate::firefox::BrowserKind::Firefox
+            }) {
+                // A known different profile cannot satisfy this workspace. Unknown
+                // profile identity stays eligible for review-compatible matching.
                 windows.retain(|w| {
-                    !crate::firefox::is_firefox(w) || browser_matcher.matches(w, browser)
+                    !crate::firefox::is_firefox(w) || browser_matcher.matches_new_window(w, browser)
                 });
+                if !item.launch.new_window && !browser.tabs.is_empty() {
+                    // Enrich the complete set at once so session windows cannot be
+                    // independently assigned to multiple native windows.
+                    let candidates: Vec<_> = windows
+                        .iter()
+                        .filter(|window| {
+                            find_match(&item.window, std::slice::from_ref(window), &used).is_some()
+                        })
+                        .cloned()
+                        .collect();
+                    let mut observed = capture(candidates, String::new());
+                    crate::firefox::enrich(&mut observed.items);
+                    app.state::<crate::browser_bridge::Bridge>()
+                        .enrich(&mut observed.items);
+                    let mut matches = HashSet::new();
+                    let mut unknown = HashSet::new();
+                    let mut original_differs = false;
+                    for window in &windows {
+                        if find_match(&item.window, std::slice::from_ref(window), &used).is_none() {
+                            continue;
+                        }
+                        let mut actual = observed
+                            .items
+                            .iter()
+                            .find(|candidate| {
+                                candidate.window.id == window.id
+                                    && candidate.window.pid == window.pid
+                            })
+                            .filter(|candidate| candidate.capture_note.is_empty())
+                            .and_then(|candidate| candidate.browser.clone())
+                            .filter(|candidate| {
+                                candidate.kind == browser.kind && !candidate.tabs.is_empty()
+                            });
+                        if actual.is_none() {
+                            // Other desktop windows can make a session ambiguous.
+                            // Retry this window alone; Firefox's matcher still
+                            // rejects ambiguous saved sessions for that window.
+                            let mut single = capture(vec![window.clone()], String::new());
+                            crate::firefox::enrich(&mut single.items);
+                            app.state::<crate::browser_bridge::Bridge>()
+                                .enrich(&mut single.items);
+                            actual = single
+                                .items
+                                .into_iter()
+                                .next()
+                                .filter(|candidate| candidate.capture_note.is_empty())
+                                .and_then(|candidate| candidate.browser)
+                                .filter(|candidate| {
+                                    candidate.kind == browser.kind && !candidate.tabs.is_empty()
+                                });
+                        }
+                        match actual.as_ref() {
+                            Some(actual)
+                                if (!browser.profile_path.is_empty()
+                                    && !actual.profile_path.is_empty()
+                                    && !crate::browser_bridge::same_path(
+                                        &browser.profile_path,
+                                        &actual.profile_path,
+                                    ))
+                                    || (browser.profile_path.is_empty()
+                                        && !browser.profile_name.is_empty()
+                                        && !actual.profile_name.is_empty()
+                                        && browser.profile_name != actual.profile_name) =>
+                            {
+                                if window.id == item.window.id && window.pid == item.window.pid {
+                                    original_differs = true;
+                                }
+                            }
+                            Some(actual) if same_browser_urls(actual, browser) => {
+                                matches.insert(window.id.clone());
+                            }
+                            Some(_) => {
+                                if window.id == item.window.id && window.pid == item.window.pid {
+                                    original_differs = true;
+                                }
+                            }
+                            None => {
+                                // Do not reuse an unrelated, unidentifiable
+                                // profile merely because it runs Firefox.
+                                let same_window =
+                                    window.id == item.window.id && window.pid == item.window.pid;
+                                if same_window
+                                    || (browser.profile_path.is_empty()
+                                        && browser.profile_name.is_empty())
+                                    || browser_matcher.profile_match(window, browser) == Some(true)
+                                {
+                                    unknown.insert(window.id.clone());
+                                }
+                            }
+                        }
+                    }
+                    // A verified change in the original window must not be
+                    // hidden by unrelated, unidentifiable Firefox windows.
+                    if original_differs {
+                        unknown.clear();
+                    }
+                    let eligible = if !matches.is_empty() {
+                        &matches
+                    } else {
+                        &unknown
+                    };
+                    if matches.is_empty() && !unknown.is_empty() {
+                        warning = Some("An existing Firefox window was reused, but its current tabs could not be verified. Install the optional browser extension for live tab matching.".to_string());
+                    }
+                    windows.retain(|w| eligible.contains(&w.id));
+                }
             }
-            let existing = if item.launch.new_window {
+            let existing = if known.is_some() {
+                known
+            } else if item.launch.new_window {
                 None
             } else {
                 find_match(&item.window, &windows, &used).cloned()
             };
             let target = if let Some(window) = existing {
+                if let Some(browser) = &item.browser {
+                    if browser.kind == crate::firefox::BrowserKind::Chromium
+                        && (!browser.tabs.is_empty() || !browser.profile_path.is_empty())
+                    {
+                        let mut observed = capture(vec![window.clone()], String::new());
+                        crate::firefox::enrich(&mut observed.items);
+                        app.state::<crate::browser_bridge::Bridge>()
+                            .enrich(&mut observed.items);
+                        let actual = observed
+                            .items
+                            .first()
+                            .filter(|candidate| candidate.capture_note.is_empty())
+                            .and_then(|candidate| candidate.browser.as_ref());
+                        if browser.kind == crate::firefox::BrowserKind::Chromium
+                            && !browser.profile_path.is_empty()
+                            && !actual.is_some_and(|current| {
+                                current.kind == browser.kind
+                                    && !current.profile_path.is_empty()
+                                    && crate::browser_bridge::same_path(
+                                        &current.profile_path,
+                                        &browser.profile_path,
+                                    )
+                            })
+                        {
+                            warning = Some("An existing browser window was reused, but its profile could not be verified.".into());
+                        }
+                        let matches = actual.is_some_and(|current| {
+                            current.kind == browser.kind && same_browser_tabs(current, browser)
+                        });
+                        if !browser.tabs.is_empty() && !matches {
+                            let message = if browser.kind == crate::firefox::BrowserKind::Firefox {
+                                "The existing Firefox window was reused; its tabs were not changed. Review its saved URLs."
+                            } else {
+                                "The existing browser window was reused; its tabs were not changed. Review its saved URLs."
+                            };
+                            warning = Some(match warning {
+                                Some(ref prior) => format!("{prior} {message}"),
+                                None => message.into(),
+                            });
+                        }
+                    }
+                }
                 window
             } else {
                 // Include all preexisting windows, even incompatible profiles.
-                let before: HashSet<_> = crate::platform::snapshot(app)?
+                let before: HashSet<_> = crate::platform::snapshot_for_restore(app)?
                     .iter()
                     .map(|w| w.id.clone())
                     .collect();
@@ -376,6 +725,7 @@ pub fn restore(
                 } else {
                     vec![item.launch.clone()]
                 };
+                check_restore_desktop(app, desktop)?;
                 launch(&commands[0])?;
                 launched = true;
                 let deadline = Instant::now() + Duration::from_secs(12);
@@ -383,7 +733,7 @@ pub fn restore(
                     if cancelled.load(Ordering::Relaxed) {
                         return Err("Workspace restore canceled.".into());
                     }
-                    let mut windows = crate::platform::snapshot(app)?;
+                    let mut windows = crate::platform::snapshot_current(app)?;
                     let excluded: HashSet<_> = if item.launch.new_window
                         || item.browser.is_some()
                         || item.terminal.is_some()
@@ -396,7 +746,11 @@ pub fn restore(
                         windows =
                             crate::terminal::matching_new_windows(&windows, &excluded, terminal);
                     }
-                    if let Some(browser) = &item.browser {
+                    if let Some(browser) = item
+                        .browser
+                        .as_ref()
+                        .filter(|browser| browser.kind == crate::firefox::BrowserKind::Firefox)
+                    {
                         windows.retain(|w| {
                             !crate::firefox::is_firefox(w)
                                 || browser_matcher.matches_new_window(w, browser)
@@ -407,14 +761,14 @@ pub fn restore(
                     }
                     if Instant::now() >= deadline {
                         return Err(
-                            "The app started, but no matching window appeared within 12 seconds."
+                            "The app started, but no matching window appeared on this desktop within 12 seconds. It may already be open on another desktop."
                                 .into(),
                         );
                     }
                     std::thread::sleep(Duration::from_millis(150));
                 };
-                // Additional tabs are sent after the new browser window exists.
-                // Keep the selected tab last, matching the original app.
+                // If a launcher supplies follow-up commands, direct them to
+                // the window it just created. Firefox tabs use one command.
                 for command in commands.iter().skip(1) {
                     if cancelled.load(Ordering::Relaxed) {
                         return Err("Workspace restore canceled.".into());
@@ -424,17 +778,49 @@ pub fn restore(
                 }
                 new_window
             };
+            check_restore_desktop(app, desktop)?;
             used.insert(target.id.clone());
-            crate::platform::restore_window(app, &target, &item.window)
+            crate::platform::restore_window(app, &target, &item.window)?;
+            target_identity = Some((target.id, target.pid));
+            Ok(())
         })();
         results.push(RestoreResult {
             label: item.label.clone(),
             restored: result.is_ok(),
             launched,
             error: result.err(),
+            warning,
+            target: target_identity,
         });
     }
     Ok(results)
+}
+
+fn check_restore_desktop(app: &AppHandle, expected: Option<&str>) -> Result<(), String> {
+    if let Some(expected) = expected {
+        if crate::platform::current_desktop_key(app)? != expected {
+            return Err("The desktop changed while opening this workspace. Return to the intended desktop and try again.".into());
+        }
+    }
+    Ok(())
+}
+
+fn same_browser_tabs(current: &crate::firefox::Browser, saved: &crate::firefox::Browser) -> bool {
+    current.active_tab == saved.active_tab
+        && current.tabs.len() == saved.tabs.len()
+        && current
+            .tabs
+            .iter()
+            .zip(&saved.tabs)
+            .all(|(a, b)| a.url == b.url)
+}
+
+fn same_browser_urls(current: &crate::firefox::Browser, saved: &crate::firefox::Browser) -> bool {
+    let mut current_urls: Vec<_> = current.tabs.iter().map(|tab| tab.url.as_str()).collect();
+    let mut saved_urls: Vec<_> = saved.tabs.iter().map(|tab| tab.url.as_str()).collect();
+    current_urls.sort_unstable();
+    saved_urls.sort_unstable();
+    current_urls == saved_urls
 }
 
 /// Exact title is preferred, then app identity; a claimed window cannot serve two items.
@@ -492,6 +878,33 @@ pub fn best_match(profiles: &[Workspace], windows: &[WindowInfo]) -> Option<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn browser_tab_matching_compares_url_multisets() {
+        let tab = |url: &str| crate::firefox::Tab {
+            url: url.into(),
+            title: String::new(),
+        };
+        let saved = crate::firefox::Browser {
+            tabs: vec![tab("https://example.test/a"), tab("https://example.test/b")],
+            active_tab: 2,
+            ..Default::default()
+        };
+        let mut current = saved.clone();
+        assert!(same_browser_urls(&current, &saved));
+        current.active_tab = 1;
+        assert!(same_browser_urls(&current, &saved));
+        current.active_tab = 2;
+        current.tabs.swap(0, 1);
+        assert!(same_browser_urls(&current, &saved));
+        current.tabs[0] = tab("https://example.test/a");
+        current.tabs[1] = tab("https://example.test/a");
+        assert!(
+            !same_browser_urls(&current, &saved),
+            "duplicate counts must match"
+        );
+        current.tabs.pop();
+        assert!(!same_browser_urls(&current, &saved));
+    }
     fn window(id: &str, title: &str) -> WindowInfo {
         WindowInfo {
             id: id.into(),
@@ -521,6 +934,191 @@ mod tests {
             minimized: false,
             active: false,
         }
+    }
+
+    fn saved_browser_item(
+        id: &str,
+        kind: crate::firefox::BrowserKind,
+        urls: &[&str],
+    ) -> WorkspaceItem {
+        let mut info = window(id, id);
+        info.app_id = if kind == crate::firefox::BrowserKind::Firefox {
+            "firefox.exe"
+        } else {
+            "chrome.exe"
+        }
+        .into();
+        let mut item = capture(vec![info], "Fixture".into()).items.remove(0);
+        item.browser = Some(crate::firefox::Browser {
+            kind,
+            profile_path: format!("{id}-profile"),
+            active_tab: 1,
+            tabs: urls
+                .iter()
+                .map(|url| crate::firefox::Tab {
+                    url: (*url).into(),
+                    title: String::new(),
+                })
+                .collect(),
+            ..Default::default()
+        });
+        item
+    }
+
+    #[test]
+    fn replacing_saved_browser_tabs_preserves_the_target_window_and_profile() {
+        use crate::firefox::BrowserKind;
+        let source = saved_browser_item("source", BrowserKind::Chromium, &["https://new.test/"]);
+        let target = saved_browser_item("target", BrowserKind::Firefox, &["https://old.test/"]);
+        let mut workspace = capture(vec![], "Fixture".into());
+        workspace.items.push(target.clone());
+        apply_saved_browser(
+            &mut workspace,
+            &source,
+            Some(SavedBrowserTarget {
+                index: 0,
+                expected: target.clone(),
+                mode: SavedBrowserMode::Replace,
+            }),
+        )
+        .unwrap();
+        let result = &workspace.items[0];
+        let browser = result.browser.as_ref().unwrap();
+        assert_eq!(browser.kind, BrowserKind::Firefox);
+        assert_eq!(browser.profile_path, "target-profile");
+        assert_eq!(browser.tabs[0].url, "https://new.test/");
+        assert_eq!(result.window.id, target.window.id);
+        assert_eq!(
+            serde_json::to_value(&result.launch).unwrap(),
+            serde_json::to_value(&target.launch).unwrap()
+        );
+        assert_eq!(
+            source.browser.as_ref().unwrap().tabs[0].url,
+            "https://new.test/"
+        );
+    }
+
+    #[test]
+    fn adding_tabs_to_a_firefox_window_without_saved_tabs_uses_its_browser_kind() {
+        use crate::firefox::BrowserKind;
+        let source = saved_browser_item("source", BrowserKind::Chromium, &["https://new.test/"]);
+        let mut target = saved_browser_item("target", BrowserKind::Firefox, &[]);
+        target.window.path.clear();
+        target.browser = None;
+        let mut workspace = capture(vec![], "Fixture".into());
+        workspace.items.push(target.clone());
+        apply_saved_browser(
+            &mut workspace,
+            &source,
+            Some(SavedBrowserTarget {
+                index: 0,
+                expected: target,
+                mode: SavedBrowserMode::Replace,
+            }),
+        )
+        .unwrap();
+        let browser = workspace.items[0].browser.as_ref().unwrap();
+        assert_eq!(browser.kind, BrowserKind::Firefox);
+        assert_eq!(browser.tabs[0].url, "https://new.test/");
+    }
+
+    #[test]
+    fn appending_saved_browser_tabs_deduplicates_only_identical_urls() {
+        use crate::firefox::BrowserKind;
+        let source = saved_browser_item(
+            "source",
+            BrowserKind::Chromium,
+            &[
+                "https://example.test/",
+                "https://example.test/?q=1",
+                "https://example.test/#section",
+            ],
+        );
+        let mut target = saved_browser_item(
+            "target",
+            BrowserKind::Firefox,
+            &[
+                "https://example.test/",
+                "https://example.test/",
+                "http://example.test/",
+            ],
+        );
+        target.browser.as_mut().unwrap().active_tab = 3;
+        let mut workspace = capture(vec![], "Fixture".into());
+        workspace.items.push(target.clone());
+        apply_saved_browser(
+            &mut workspace,
+            &source,
+            Some(SavedBrowserTarget {
+                index: 0,
+                expected: target,
+                mode: SavedBrowserMode::Append,
+            }),
+        )
+        .unwrap();
+        let browser = workspace.items[0].browser.as_ref().unwrap();
+        assert_eq!(
+            browser
+                .tabs
+                .iter()
+                .map(|tab| tab.url.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "https://example.test/",
+                "http://example.test/",
+                "https://example.test/?q=1",
+                "https://example.test/#section"
+            ]
+        );
+        assert_eq!(
+            browser.active_tab, 2,
+            "the existing selected tab stays selected"
+        );
+        assert_eq!(browser.profile_path, "target-profile");
+    }
+
+    #[test]
+    fn saved_browser_update_rejects_a_target_changed_since_review() {
+        use crate::firefox::BrowserKind;
+        let source = saved_browser_item("source", BrowserKind::Chromium, &["https://new.test/"]);
+        let target = saved_browser_item("target", BrowserKind::Firefox, &["https://old.test/"]);
+        let mut workspace = capture(vec![], "Fixture".into());
+        workspace.items.push(target.clone());
+        workspace.items[0].browser.as_mut().unwrap().tabs[0].url = "https://live.test/".into();
+        let error = apply_saved_browser(
+            &mut workspace,
+            &source,
+            Some(SavedBrowserTarget {
+                index: 0,
+                expected: target,
+                mode: SavedBrowserMode::Replace,
+            }),
+        )
+        .unwrap_err();
+        assert!(error.contains("changed"));
+        assert_eq!(
+            workspace.items[0].browser.as_ref().unwrap().tabs[0].url,
+            "https://live.test/"
+        );
+    }
+
+    #[test]
+    fn saved_browser_refresh_requires_the_same_profile_and_nonempty_tabs() {
+        use crate::firefox::BrowserKind;
+        let saved = saved_browser_item("source", BrowserKind::Firefox, &["https://old.test/"])
+            .browser
+            .unwrap();
+        let mut current = saved.clone();
+        current.tabs[0].url = "https://new.test/".into();
+        assert_eq!(
+            refreshed_saved_browser(&saved, &current).unwrap().tabs[0].url,
+            "https://new.test/"
+        );
+        current.profile_path = "different-profile".into();
+        assert!(refreshed_saved_browser(&saved, &current).is_none());
+        current.profile_path = saved.profile_path.clone();
+        current.tabs.clear();
+        assert!(refreshed_saved_browser(&saved, &current).is_none());
     }
     #[test]
     fn matching_prefers_title_and_never_reuses_claimed_windows() {

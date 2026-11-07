@@ -65,6 +65,10 @@ if [[ " $* " == *" --strong-pointer-barrier "* ]]; then
     [[ " $* " == *" --pointer "* ]] || { printf '%s\n' '--strong-pointer-barrier requires --pointer' >&2; exit 1; }
     printf '[EdgeBarrier]\nEdgeBarrier=1000\nCornerBarrier=true\n' >"$XDG_CONFIG_HOME/kwinrc"
 fi
+if [[ " $* " == *" --desktops "* ]]; then
+    # Only the private compositor uses this configuration.
+    printf '[Desktops]\nNumber=3\nRows=1\n' >>"$XDG_CONFIG_HOME/kwinrc"
+fi
 # KWin's documented source-level test switch exposes fake-input to our helper.
 # It applies only to this private compositor/bus/runtime, never the user's seat.
 KWIN_WAYLAND_NO_PERMISSION_CHECKS=$((1-permission_checks)) kwin_wayland --virtual --output-count 2 --width 1280 --height 720 --socket warp-test --no-lockscreen --no-kactivities >"$session_dir/kwin.log" 2>&1 &
@@ -79,14 +83,20 @@ cleanup() {
     printf 'Nested session logs: %s\n' "$session_dir"
 }
 trap cleanup EXIT
-for attempt in $(seq 1 60); do
-    if test -S "$XDG_RUNTIME_DIR/warp-test" && qdbus org.kde.KWin /Scripting >/dev/null 2>&1; then break; fi
+ready=0
+for attempt in $(seq 1 120); do
+    if test -S "$XDG_RUNTIME_DIR/warp-test" && qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.isScriptLoaded window-warp-ready-probe >/dev/null 2>&1; then ready=1; break; fi
     if ! kill -0 "$compositor_pid" 2>/dev/null; then cat "$session_dir/kwin.log"; exit 1; fi
     sleep 0.2
 done
+if (( ! ready )); then printf '%s\n' 'Private KWin scripting did not become ready.' >&2; cat "$session_dir/kwin.log" >&2; exit 1; fi
 export WAYLAND_DISPLAY=warp-test QT_QPA_PLATFORM=wayland
 if [[ "${2:-}" == "--input-probe" ]]; then
     "$fixture_python" "$root/tests/kde/input_probe.py"
+elif [[ "${2:-}" == "--window-picker" ]]; then
+    "$fixture_python" "$root/tests/kde/window_picker.py"
+elif [[ "${2:-}" == "--desktops" ]]; then
+    "$fixture_python" "$root/tests/kde/desktops.py" "$root/src-tauri/kwin"
 elif [[ "${2:-}" == "--gui" ]]; then
     shift 2
     "$fixture_python" "$root/tests/kde/gui.py" "$@"

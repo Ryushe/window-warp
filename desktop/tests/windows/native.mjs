@@ -2,18 +2,32 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import {fileURLToPath} from "node:url";
+import {fileURLToPath, pathToFileURL} from "node:url";
 import {spawn, spawnSync} from "node:child_process";
 import {createInterface} from "node:readline";
 import {createServer} from "node:net";
 import {randomUUID} from "node:crypto";
 import {testFirefox} from "./firefox.mjs";
+import {testChromium} from "./chromium.mjs";
+import {testFirefoxExtension} from "./firefox-extension.mjs";
 
 if (process.platform !== "win32") throw new Error("This fixture requires Windows");
 const firefoxProfileLock = process.argv.includes("--firefox-profile-lock");
+const positionOnly = process.argv.includes("--position-only");
+const workspaceSlow = process.argv.includes("--workspace-slow");
+const workspaceOnly = process.argv.includes("--workspace-only") || workspaceSlow;
+const desktopOnly = process.argv.includes("--desktop-only");
+const reuseOnly = process.argv.includes("--reuse-only");
+const chromiumOnly = process.argv.includes("--chromium-only");
+const chooserOnly = process.argv.includes("--chooser-only");
+const uxOnly = process.argv.includes("--ux-only");
+const firefoxExtensionOnly = process.argv.includes("--firefox-extension-only");
 const fastOnly = process.argv.includes("--fast-only");
+const holdLetterOnly = process.argv.includes("--hold-letter-only");
+const holdEditorOnly = process.argv.includes("--hold-editor-only");
+const computerTapOnly = process.argv.includes("--computer-tap-only");
 const hookOnly = process.argv.includes("--hook-only");
-const quickOnly = process.argv.includes("--quick-only") || hookOnly || fastOnly;
+const quickOnly = process.argv.includes("--quick-only") || hookOnly || fastOnly || positionOnly || workspaceOnly || desktopOnly || reuseOnly || chromiumOnly || chooserOnly || uxOnly || firefoxExtensionOnly || holdLetterOnly || holdEditorOnly || computerTapOnly;
 const firefoxOnly = process.argv.includes("--firefox-only") || firefoxProfileLock;
 const runFirefox = firefoxOnly || process.argv.includes("--firefox");
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -58,7 +72,22 @@ const config = {version:1, settings:{mainMonitor:0,burnerMonitor:2,enableOnLaunc
 }))};
 if (quickOnly) config.bindings[0].shortcut = "Alt+C";
 if (hookOnly) config.bindings.find(binding => binding.action === "open-editor").shortcut = "Super+B";
+if (workspaceOnly) {
+    const capture = config.bindings.find(binding => binding.action === "update-workspace");
+    capture.shortcut = "Super+Y";
+    if (workspaceSlow) config.bindings.push({...capture,label:"Capture fixture alias",shortcut:"Ctrl+Alt+Shift+F21"});
+}
 fs.writeFileSync(path.join(state, "settings.json"), JSON.stringify(config, null, 2));
+if (chooserOnly) {
+    const rect={x:0,y:0,width:800,height:600};
+    const item={label:"Owned browser",window:{id:"owned-browser",pid:0,title:"Owned browser",appId:"chrome.exe",desktopId:"",path:"chrome.exe",rect,workArea:rect,monitor:1,monitorName:"",maximizedHorizontal:false,maximizedVertical:false,fullscreen:false,minimized:false,active:false},launch:{program:"chrome.exe"},browser:{kind:"chromium",profilePath:"",profileName:"",tabs:[{url:"https://example.com/",title:"Example"}],activeTab:1}};
+    const source={id:"saved-browser",name:"Owned saved browser",platform:"windows",items:[item]};
+    const targetItem={...item,browser:{...item.browser,tabs:[{url:"https://example.org/",title:"Target"}]}};
+    const secondItem={...item,label:"Second browser",window:{...item.window,id:"other-browser",appId:"firefox.exe"},browser:{...item.browser,kind:"firefox",tabs:[{url:"https://example.net/",title:"Second target"}]}};
+    const target={id:"workspace",name:"Owned workspace",platform:"windows",items:[targetItem,secondItem]};
+    fs.writeFileSync(path.join(state,"saved-browsers.json"),JSON.stringify({version:1,profiles:[source]}));
+    fs.writeFileSync(path.join(state,"workspaces.json"),JSON.stringify({version:1,profiles:[target]}));
+}
 const buildLog = fs.openSync(path.join(output, "build.log"), "w");
 const cargo = path.join(process.env.USERPROFILE, ".cargo/bin/cargo.exe");
 console.log("Building isolated native fixture:", output);
@@ -78,14 +107,16 @@ if (process.env.WARP_TEST_WAIT_FOR_START === "1") {
 }
 
 
-let app, helper, peerHelper, socket, second, startupTouched = false, calculatorPrepared = false;
+let app, helper, peerHelper, socket, second, slowBrowser, startupTouched = false, calculatorPrepared = false;
 const checks = [];
 const skipped = [];
 let fixture, native;
 let report = {passed:false, checks, skipped};
 const appLog = fs.openSync(path.join(output,"app.log"), "w");
 try {
-    const appEnvironment = {...process.env, ...(firefoxProfileLock ? {APPDATA:path.join(output,"firefox-discovery")} : {})};
+    const appEnvironment = {...process.env,
+        ...((firefoxProfileLock || firefoxExtensionOnly) ? {APPDATA:path.join(output,"firefox-discovery")} : {}),
+        ...(chromiumOnly ? {LOCALAPPDATA:path.join(output,"chromium-discovery")} : {})};
     app = spawn(binary, [], {cwd:output, env:appEnvironment, windowsHide:true, stdio:["ignore",appLog,appLog]});
     const target = await until(async () => {
         try { return (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t => t.type === "page" && /^https?:\/\/tauri\.localhost\/(?:index.html)?$/.test(t.url)); }
@@ -118,7 +149,7 @@ try {
     const click = selector => evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
     const input = (selector,value) => evaluate(`(() => {const field=document.querySelector(${JSON.stringify(selector)});field.value=${JSON.stringify(value)};field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
     const screenshot = async name => fs.writeFileSync(path.join(output,name), Buffer.from((await cdp("Page.captureScreenshot")).data,"base64"));
-    await wait("document.querySelectorAll('.binding').length === 9 && !document.querySelector('#toggle').disabled", "editor initialization");
+    await wait(`document.querySelectorAll('.binding').length === ${config.bindings.length} && !document.querySelector('#toggle').disabled`, "editor initialization");
     const status = await invoke("get_status");
     assert.equal(path.resolve(status.settingsPath).toLowerCase(), path.join(state,"settings.json").toLowerCase());
     assert.equal(status.enabled, false);
@@ -147,8 +178,297 @@ try {
         const timer = setTimeout(() => {replies.delete(id); reject(new Error(`Fixture timeout: ${command}`));},command.startsWith("firefox_") ? 30000 : 10000);
         replies.set(id,{resolve,reject,timer}); helper.stdin.write(JSON.stringify({id,command,...args})+"\n");
     });
+    if (positionOnly) {
+        const area = (await invoke("get_import_monitors"))[0];
+        assert.ok(area, "Position preview requires a monitor");
+        const initial = {x:area.x+80,y:area.y+80,width:700,height:500};
+        await evaluate(`window.__positionDone=false; window.__TAURI__.core.invoke('choose_position',{rect:${JSON.stringify(initial)}}).then(v=>{window.__positionResult=v;window.__positionDone=true},e=>{window.__positionError=String(e);window.__positionDone=true}); true`);
+        {
+            const preview = await until(async()=>{
+                if (await evaluate('window.__positionDone')) throw new Error(await evaluate('window.__positionError || "Position preview closed early"'));
+                return native('position_preview').catch(()=>null);
+            }, Boolean, 'owned position preview');
+            const requested = {...initial,x:initial.x+40,y:initial.y+30,width:650,height:450};
+            const actual = await native('place_position_preview',{rect:requested});
+            assert.deepEqual(actual.rect, requested);
+            const target = await until(async () => {
+                const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+                return pages.find(t => t.type === 'page' && /\/position\.html$/.test(t.url));
+            }, Boolean, 'position preview WebView');
+            const previewSocket = new WebSocket(target.webSocketDebuggerUrl);
+            await new Promise((resolve,reject)=>{previewSocket.addEventListener('open',resolve,{once:true});previewSocket.addEventListener('error',reject,{once:true});});
+            try {
+                const captured = new Promise((resolve,reject) => {
+                    const timer = setTimeout(()=>reject(new Error('Preview screenshot timed out')),10000);
+                    previewSocket.addEventListener('message',event=>{clearTimeout(timer);resolve(JSON.parse(event.data));},{once:true});
+                });
+                previewSocket.send(JSON.stringify({id:1,method:'Page.captureScreenshot'}));
+                const screenshot = await captured;
+                assert.ok(screenshot.result?.data, 'Preview screenshot must be available');
+                fs.writeFileSync(path.join(output,'position-preview.png'), Buffer.from(screenshot.result.data,'base64'));
+            } finally { previewSocket.close(); }
+            await native('position_key',{window:preview.handle,key:13});
+            await wait('window.__positionDone', 'position apply');
+            assert.equal(await evaluate('window.__positionError || null'), null);
+            assert.deepEqual((await evaluate('window.__positionResult')).rect, actual.rect);
+            checks.push('native position preview moves and resizes on screen and Enter applies its rectangle');
+            await evaluate(`window.__positionDone=false;window.__TAURI__.core.invoke('choose_position',{rect:${JSON.stringify(initial)}}).then(v=>{window.__positionResult=v;window.__positionDone=true});true`);
+            const reopened = await until(()=>native('position_preview').catch(()=>null), Boolean, 'reopened position preview');
+            await native('position_key',{window:reopened.handle,key:27});
+            await wait('window.__positionDone', 'position cancel');
+            assert.equal(await evaluate('window.__positionResult'), null);
+            checks.push('native position preview Escape returns no placement');
+        }
+    }
     const press = f => native("press",{key:0x70 + f - 1});
     const paused = wanted => until(() => invoke("get_status"), s => s.enabled !== wanted, wanted ? "paused" : "active");
+    if (computerTapOnly) {
+        await native("focus",{window:fixture.windows[0]});
+        const owned = await until(async()=>(await invoke("get_windows")).find(window=>window.id===String(fixture.windows[0]) && window.pid===fixture.pid),Boolean,"owned tap target",30000);
+        const testConfig=await invoke("get_config");
+        testConfig.settings.holdDelayMs=2000;
+        testConfig.bindings.push({label:"Owned computer-use tap",shortcut:"Ctrl+Alt+Shift+X",action:"pull-app",enabled:true,
+            appMatch:path.basename(fixture.executable),windowsMatch:{windowId:String(fixture.windows[0]),processId:fixture.pid},
+            mainMonitorAction:"focus-last",burnerLayout:"float"});
+        await invoke("save_config",{config:testConfig});
+        await invoke("set_enabled",{enabled:true});
+        const area=owned.workArea, rect={x:area.x+100,y:area.y+100,width:500,height:320};
+        await native("place",{window:fixture.windows[0],rect});
+        const editor=await native("app_window");
+        await native("focus",{window:editor});
+        console.log("COMPUTER_READY", JSON.stringify({marker,editor}));
+        const tapped=await until(async()=>(await invoke("get_windows")).find(window=>window.id===String(fixture.windows[0]) && window.pid===fixture.pid),window=>window?.active,"computer-use shortcut focuses owned target",90000);
+        assert.deepEqual(tapped.rect,rect,"The computer-use shortcut should tap without tiling");
+        checks.push("Windows computer-use chord focuses the owned application from the editor without tiling");
+    }
+    if (holdLetterOnly || holdEditorOnly) {
+        await native("focus",{window:fixture.windows[0]});
+        const owned = await until(async()=>(await invoke("get_windows")).find(window=>window.id===String(fixture.windows[0]) && window.pid===fixture.pid),Boolean,"owned hold target",30000);
+        const testConfig = await invoke("get_config");
+        testConfig.settings.holdDelayMs = 2000;
+        testConfig.settings.holdTileEnabled = true;
+        testConfig.bindings.push({label:"Owned hold target",shortcut:"Ctrl+Alt+Shift+X",action:"pull-app",enabled:true,
+            appMatch:path.basename(fixture.executable),windowsMatch:{windowId:String(fixture.windows[0]),processId:fixture.pid},
+            mainMonitorAction:"focus-last",burnerLayout:"float"});
+        await invoke("save_config",{config:testConfig});
+        await invoke("set_enabled",{enabled:true});
+        const area=owned.workArea, rect={x:area.x+100,y:area.y+100,width:500,height:320};
+        await native("place",{window:fixture.windows[0],rect});
+        const startWindow=holdEditorOnly ? await native("app_window") : fixture.windows[1];
+        await native("hold_start",{key:88,window:startWindow,gap_ms:30});
+        try {
+            await sleep(80);
+            const read=async()=>(await invoke("get_windows")).find(window=>window.id===String(fixture.windows[0]) && window.pid===fixture.pid);
+            assert.equal((await read()).active,false,"Held app shortcut must not tap early");
+            await native("key_up",{keys:[0x11]});
+            const tapped=await until(read,window=>window?.active,"non-Super app shortcut taps on modifier release",700);
+            assert.deepEqual(tapped.rect,rect,"Modifier release must tap without tiling");
+            checks.push("native Ctrl+Alt+Shift+X app shortcut waits for modifier release and taps without tiling");
+        } finally { await native("key_up").catch(()=>{}); }
+        await native("place",{window:fixture.windows[0],rect});
+        await native("hold_start",{key:88,window:startWindow,gap_ms:30});
+        try {
+            const read=async()=>(await invoke("get_windows")).find(window=>window.id===String(fixture.windows[0]) && window.pid===fixture.pid);
+            await sleep(80);
+            assert.equal((await read()).active,false,"Shortcut must not tap before the main key is released");
+            await native("key_up",{keys:[88]});
+            const tapped=await until(read,window=>window?.active,"non-Super app shortcut taps on main key release",700);
+            assert.deepEqual(tapped.rect,rect,"Main key release must tap without tiling");
+            checks.push("native app shortcut taps on main key release while modifiers remain held");
+        } finally { await native("key_up").catch(()=>{}); }
+        await native("place",{window:fixture.windows[0],rect});
+        await native("hold_start",{key:88,window:startWindow,gap_ms:30});
+        try {
+            const read=async()=>(await invoke("get_windows")).find(window=>window.id===String(fixture.windows[0]) && window.pid===fixture.pid);
+            await sleep(150);
+            assert.equal((await read()).active,false,"Hold must wait for its configured delay");
+            await until(read,window=>window && JSON.stringify(window.rect)!==JSON.stringify(rect),"non-Super hold tiles after its delay",5000);
+            checks.push("native app shortcut hold tiles after its configured delay");
+        } finally { await native("key_up").catch(()=>{}); }
+        await native("place",{window:fixture.windows[0],rect});
+        await native("hold_start",{key:88,window:startWindow,gap_ms:30});
+        try {
+            await sleep(100);
+            await invoke("set_enabled",{enabled:false});
+            await invoke("set_enabled",{enabled:true});
+            await sleep(2200);
+            const after=(await invoke("get_windows")).find(window=>window.id===String(fixture.windows[0]) && window.pid===fixture.pid);
+            assert.deepEqual(after.rect,rect,"Pause must cancel the hold even if shortcuts resume while keys remain down");
+            assert.equal(after.active,false,"A cancelled hold must not issue a tap");
+            checks.push("pause and resume cancel a pending non-Super hold");
+        } finally { await native("key_up").catch(()=>{}); }
+    }
+    if (reuseOnly) {
+        const owned = await until(async () => (await invoke('get_windows')).filter(w=>w.pid===fixture.pid && !w.minimized), windows=>windows.length>0, 'owned workspace windows',60000);
+        const capture = await invoke('capture_workspace',{name:'Owned reuse fixture'});
+        capture.profile.items = capture.profile.items.filter(item=>item.window.pid===fixture.pid);
+        assert.equal(capture.profile.items.length,owned.length);
+        await invoke('save_workspaces',{store:{version:1,profiles:[capture.profile]}});
+        const restored = await invoke('restore_workspace',{id:capture.profile.id});
+        assert.equal(restored.length,owned.length);
+        assert.ok(restored.every(result=>result.restored && !result.launched),JSON.stringify(restored));
+        const after = (await invoke('get_windows')).filter(window=>window.pid===fixture.pid && !window.minimized);
+        assert.deepEqual(after.map(window=>window.id).sort(),owned.map(window=>window.id).sort());
+        checks.push('native workspace captures and opens existing owned windows without launching duplicates');
+    }
+    if (desktopOnly) {
+        const [ownedWindow, anchor] = fixture.windows;
+        await native('focus',{window:ownedWindow});
+        await until(async () => (await invoke('get_windows')).some(window=>window.id===String(ownedWindow) && window.pid===fixture.pid), Boolean, 'owned window is ready for capture',30000);
+        const capture = await invoke('capture_workspace',{name:'Owned desktop fixture'});
+        capture.profile.items = capture.profile.items.filter(item=>item.window.id===String(ownedWindow) && item.window.pid===fixture.pid);
+        assert.equal(capture.profile.items.length,1);
+        await invoke('save_workspaces',{store:{version:1,profiles:[capture.profile]}});
+        assert.ok((await invoke('restore_workspace',{id:capture.profile.id}))[0].restored);
+        await click('#show-workspaces');
+        await wait("document.querySelectorAll('.workspace-card').length===1",'fixture workspace card');
+        const appWindow = await native('app_window');
+        await native('focus',{window:anchor});
+        const switched = await native('switch_fixture_desktop',{window:anchor});
+        if (!switched) {
+            skipped.push('Moving a workspace requires an adjacent virtual desktop');
+        } else try {
+            second = spawn(binary,[],{cwd:output,windowsHide:true,stdio:'ignore'});
+            assert.equal(await exit(second,15000),0);
+            await until(()=>native('app_on_current_desktop',{window:appWindow}),Boolean,'a second launch brings Warp to the current desktop',15000);
+            await click('[data-action="restore"]');
+            await wait("!document.querySelector('.workspace-open-choice').hidden",'existing workspace desktop choice',15000);
+            await click('.workspace-open-choice-row button:nth-of-type(2)');
+            await until(()=>native('fixture_on_current_desktop',{window:anchor}),Boolean,'Go there returns to the source desktop',15000);
+            await native('switch_fixture_desktop',{window:anchor,restore:true});
+            await native('focus',{window:anchor});
+            assert.equal(await native('switch_fixture_desktop',{window:anchor}),true);
+            await invoke('show_editor',{appMatch:null});
+            await click('[data-action="restore"]');
+            await wait("!document.querySelector('.workspace-open-choice').hidden",'desktop move choice',15000);
+            await click('.workspace-open-choice-row button:first-of-type');
+            await wait("document.querySelector('.workspace-card-status').textContent.includes('Opened')",'workspace moved and opened',30000);
+            assert.equal(await native('fixture_on_current_desktop',{window:ownedWindow}),true);
+            assert.equal(await native('fixture_on_current_desktop',{window:anchor}),false);
+            const open = (await invoke('get_windows')).filter(window=>window.pid===fixture.pid);
+            assert.deepEqual(open.map(window=>window.id),[String(ownedWindow)]);
+            checks.push('a second launch brings Warp to the current desktop; Go there and Move here use only the tracked workspace window');
+        } finally {
+            await native('switch_fixture_desktop',{window:anchor,restore:true});
+            await invoke('show_editor',{appMatch:null});
+        }
+    }
+    if (workspaceOnly) {
+        if (workspaceSlow) {
+            const browser = process.env.WARP_CHROME_BINARY;
+            assert.ok(browser && fs.existsSync(browser), 'Set WARP_CHROME_BINARY to Chrome for Testing');
+            const profile = path.join(output,'slow-browser-profile'); fs.mkdirSync(profile);
+            const local = path.join(output,'slow-browser-local'); fs.mkdirSync(local);
+            const page = path.join(output,'slow-browser.html');
+            fs.writeFileSync(page,`<!doctype html><title>${marker} slow browser</title><p>Owned test page</p>`);
+            slowBrowser = spawn(browser,[`--user-data-dir=${profile}`,'--no-first-run','--no-default-browser-check','--disable-extensions','--new-window',pathToFileURL(page).href],{windowsHide:true,env:{...process.env,LOCALAPPDATA:local},stdio:'ignore'});
+            await until(async()=>(await invoke('get_windows')).find(window=>window.pid===slowBrowser.pid && window.title.includes(marker)),Boolean,'owned browser window',60000);
+            const bridge = await invoke('set_bridge_enabled',{enabled:true});
+            const [bridgePort,token] = bridge.pairingCode.split(':');
+            const response = await fetch(`http://127.0.0.1:${bridgePort}/bridge`,{method:'POST',headers:{Origin:'chrome-extension://warp-fixture','Content-Type':'text/plain'},body:JSON.stringify({token,action:'poll',browser:'chromium',clientId:'slow-fixture',windows:[]})});
+            assert.equal((await response.json()).error,undefined);
+        }
+        await invoke('set_enabled',{enabled:true});
+        const mainWindow = await native('app_window');
+        await native('app_close',{window:mainWindow});
+        await until(()=>native('app_state',{window:mainWindow}),state=>!state.visible,'hide fixture editor');
+        await native('focus',{window:fixture.windows[0]});
+        await evaluate("window.__workspaceStarts=[]; window.addEventListener('warp-workspace-request',event=>{if(event.detail.capturing && event.detail.captureId)window.__workspaceStarts.push(event.detail.captureId);})");
+        const captureStarted = Date.now();
+        await native('plain_press',{key:89,meta:true,window:fixture.windows[0],gap_ms:30});
+        await until(()=>native('app_state',{window:mainWindow}),state=>state.visible && state.foreground,'Win+Y shows the workspace editor',10000);
+        await wait("!document.querySelector('#workspaces-page').hidden", 'workspace section becomes visible',5000);
+        assert.equal(await evaluate("document.querySelector('#workspaces-page').hidden"),false);
+        if (workspaceSlow) {
+            await wait("!document.querySelector('#workspace-capture-pending').hidden", 'workspace capture starts',3000);
+            report.workspaceOpenMs = Date.now()-captureStarted;
+            assert.ok(report.workspaceOpenMs < 3000,`The workspace screen took ${report.workspaceOpenMs} ms to appear`);
+            await press(21);
+            await wait("window.__workspaceStarts.length >= 2", 'another capture shortcut starts while tabs are still loading',4000);
+        }
+        await wait("!document.querySelector('#workspace-editor').hidden", 'new workspace draft',30000);
+        await wait("document.querySelector('#workspace-capture-pending').hidden", 'workspace capture completes',30000);
+        assert.equal(await evaluate("document.querySelector('#workspace-hotkey-choice').hidden"),true);
+        assert.equal((await invoke('get_workspaces')).profiles.length,0);
+        const fixtureItem = `[...document.querySelectorAll('.workspace-item')].find(card=>card.querySelector('.window-title').textContent===${JSON.stringify(marker + '-0')})`;
+        assert.equal(await evaluate(`!!${fixtureItem}`),true);
+        await evaluate(`(() => {const input=${fixtureItem}.querySelector('.include-window');input.checked=false;input.dispatchEvent(new Event('change'));})()`);
+        await native('focus',{window:fixture.windows[0]});
+        await native('click_events');
+        await click('#add-workspace-window');
+        await until(()=>native('picker_click',{window:fixture.windows[0]}).catch(()=>false), Boolean, 'the picker covers the fixture window',10000);
+        await wait(`${fixtureItem}.querySelector('.include-window').checked`, 'choosing a window adds it back to the draft',10000);
+        assert.deepEqual(await native('click_events'),[], 'the picker must consume the selection click');
+        await native('focus',{window:fixture.windows[0]});
+        await click('#add-workspace-window');
+        await until(()=>native('picker_escape').catch(()=>false),Boolean,'picker receives Escape',10000);
+        await wait("!document.querySelector('#add-workspace-window').disabled", 'cancelled picker returns to the editor',10000);
+        checks.push('click-to-add consumes the selection click, restores an excluded window, and cancels with Escape');
+        const selected = await evaluate(`(() => {let n=0;document.querySelectorAll('.workspace-item').forEach(card=>{const keep=card.querySelector('.window-title').textContent.startsWith(${JSON.stringify(marker + "-")});const input=card.querySelector('.include-window');input.checked=keep;input.dispatchEvent(new Event('change'));if(keep)n++;});return n;})()`);
+        assert.ok(selected > 0, 'The draft must contain a fixture-owned window');
+        await input('#workspace-name','Owned workspace');
+        await click('#save-workspace');
+        await wait("[...document.querySelectorAll('.workspace-card-status')].some(status => !status.hidden && status.textContent === 'Saved.')", 'fixture workspace saved');
+        const saved = await invoke('get_workspaces');
+        assert.equal(saved.profiles.length,1);
+        assert.ok(saved.profiles[0].items.every(item=>item.window.pid===fixture.pid));
+        await click('#workspace-list [data-action="edit"]');
+        await wait("!document.querySelector('#workspace-editor').hidden", 'saved workspace review');
+        await sleep(500);
+        await screenshot('workspace-review.png');
+        await input('#workspace-name','Unfinished draft');
+        await click('#capture-workspace');
+        await wait("!document.querySelector('#workspace-recapture').hidden", 'manual capture asks before replacing the draft');
+        await screenshot('workspace-replace-prompt.png');
+        await click('#workspace-keep-draft');
+        assert.equal(await evaluate("document.querySelector('#workspace-name').value"),'Unfinished draft');
+        await click('#capture-workspace');
+        await click('#workspace-recapture-confirm');
+        await wait("document.querySelector('#workspace-editor-title').textContent === 'New workspace'", 'manual capture replaces the confirmed draft',30000);
+        await wait("!document.querySelector('#save-workspace').disabled", 'manual capture finishes',30000);
+        await click('#discard-workspace');
+        await wait("document.querySelector('#workspace-editor').hidden", 'manual capture draft closed');
+        const restored = await invoke('restore_workspace',{id:saved.profiles[0].id});
+        assert.equal(restored.length,saved.profiles[0].items.length);
+        assert.ok(restored.every(result=>result.restored && !result.launched), JSON.stringify(restored));
+        const stillOpen = (await invoke('get_windows')).filter(window=>window.pid===fixture.pid);
+        assert.equal(stillOpen.length,saved.profiles[0].items.length);
+        checks.push('native workspace Open reuses its existing fixture windows without launching duplicates');
+        await native('focus',{window:fixture.windows[0]});
+        if (workspaceSlow) await press(21); else await native('plain_press',{key:89,meta:true,window:fixture.windows[0],gap_ms:30});
+        try { await wait("!document.querySelector('#workspace-hotkey-choice').hidden", 'workspace update choices',60000); }
+        catch (error) {
+            report.workspaceDiagnostics=await evaluate("({starts:window.__workspaceStarts,message:document.querySelector('#workspace-status').textContent,editorHidden:document.querySelector('#workspace-editor').hidden,replaceHidden:document.querySelector('#workspace-recapture').hidden,pendingHidden:document.querySelector('#workspace-capture-pending').hidden})");
+            throw error;
+        }
+        assert.equal(await evaluate("document.querySelector('#workspace-hotkey-target').value"),saved.profiles[0].id);
+        await click('#workspace-hotkey-update');
+        await wait("!document.querySelector('#workspace-editor').hidden", 'update review draft');
+        await wait("!document.querySelector('#save-workspace').disabled", 'update review is ready');
+        assert.deepEqual(await invoke('get_workspaces'),saved);
+        await click('#save-workspace');
+        await wait("!document.querySelector('#workspace-replace-saved').hidden", 'saved workspace replacement confirmation');
+        assert.deepEqual(await invoke('get_workspaces'),saved);
+        await click('#workspace-replace-cancel');
+        if (workspaceSlow) await press(21); else await native('plain_press',{key:89,meta:true,window:fixture.windows[0],gap_ms:30});
+        await wait("!document.querySelector('#workspace-recapture').hidden", 'Win+Y asks before replacing the draft',60000);
+        await click('#workspace-recapture-confirm');
+        await wait("document.querySelector('#workspace-editor-title').textContent === 'New workspace'", 'Win+Y recaptures while the workspace editor is open',60000);
+        await click('#discard-workspace');
+        await click('#show-settings');
+        await click('#browser-extensions-settings > summary');
+        await click('#prepare-firefox');
+        await wait("document.querySelector('#browser-extension-path').value && document.querySelector('#browser-bridge-code').value", 'Firefox extension prepared',10000);
+        assert.equal(await evaluate("document.querySelector('#browser-bridge-enabled')"),null);
+        assert.match(await evaluate("document.querySelector('#firefox-instructions').textContent"),/about:debugging#\/runtime\/this-firefox/);
+        await click('#browser-extension-instructions summary');
+        await evaluate("document.querySelector('#browser-extensions-settings').scrollIntoView({block:'start'})");
+        await sleep(300);
+        await screenshot('browser-settings.png');
+        checks.push('browser setup prepares a pairing code and Firefox folder with direct setup instructions');
+        await invoke('set_enabled',{enabled:false});
+        checks.push('workspace capture shortcut and manual capture ask before replacing a draft');
+    }
     if (fastOnly) {
         peerHelper = spawn("python", [path.join(desktop,"tests/windows/fixture.py"), "--marker", marker+"-peer", "--windows", "1"],
             {windowsHide:true, stdio:["pipe","pipe","pipe"]});
@@ -458,7 +778,7 @@ try {
         if (hookErrors.length) throw new AggregateError(hookErrors,"Native hook and popup acceptance failed: " + hookErrors.map(error=>String(error)).join("; "));
         checks.push("one further Win+B hides the popup and opens the main editor");
     }
-    if (quickOnly && !hookOnly && !fastOnly) {
+    if (quickOnly && !hookOnly && !fastOnly && !positionOnly && !workspaceOnly && !desktopOnly && !reuseOnly && !holdLetterOnly && !holdEditorOnly && !computerTapOnly && !firefoxExtensionOnly && !chromiumOnly && !chooserOnly && !uxOnly) {
         // The conflict target is another owned window with an explicit
         // selector, so reopening it exercises the displaced app binding.
         const quickConfig = await invoke("get_config");
@@ -614,7 +934,7 @@ try {
     await wait("document.querySelector('#message').textContent.includes('Cannot register the pause shortcut')", "pause conflict error");
     assert.equal((await invoke("get_config")).bindings[5].shortcut,"Ctrl+Alt+Shift+F18");
     await press(18); await paused(false);
-    await wait("document.querySelector('#message').textContent.includes('unsaved edits')", "saved-settings banner");
+    await wait("document.querySelector('#save-status').textContent === 'Unsaved changes'", "unsaved changes remain identified");
     await press(18); await paused(true);
     await input(pauseField,"Ctrl+Alt+Shift+F18"); await click("#save");
     await wait("!document.querySelector('#add').disabled && document.querySelector('#message').textContent.startsWith('Saved.')", "restored pause key");
@@ -624,7 +944,7 @@ try {
     await input(actionField,"Ctrl+Alt+Shift+F24"); await click("#save");
     await wait("!document.querySelector('#add').disabled && document.querySelector('#message').textContent.startsWith('Saved.')", "conflicting action draft saved");
     await click("#toggle");
-    await wait("document.querySelector('#message').textContent.includes('Cannot register')", "action registration failure");
+    await wait("!document.querySelector('#app-alert').hidden && document.querySelector('#app-alert-text').textContent.includes('Cannot register')", "action registration failure");
     assert.equal((await invoke("get_status")).enabled,false);
     for (const key of [0x7c,0x7d]) {await native("reserve",{key});await native("release",{key});}
     await assert.rejects(() => native("reserve",{key:0x81})); // Pause F18 still belongs to app.
@@ -634,18 +954,37 @@ try {
     checks.push("partial registration failure releases earlier action keys without dropping pause");
 
     await press(18); await paused(false);
+    const mainBeforeQuick = await native("app_window");
+    await native("app_close",{window:mainBeforeQuick});
+    await until(()=>native("app_state",{window:mainBeforeQuick}),state=>!state.visible,"hide editor for quick popup");
     await press(19);
-    await wait("!document.querySelector('#quick-edit').hidden && document.querySelector('#status').textContent.includes('active')", "quick app editor");
-    assert.equal((await evaluate("document.querySelector('#quick-match').textContent")).toLowerCase(),path.basename(fixture.executable).toLowerCase());
-    await evaluate("document.querySelector('#quick-shortcut').focus()");
-    await native("press",{key:0x86,window:await native("app_window")}); // F23 delivered to the editor.
-    await wait("document.querySelector('#quick-shortcut').value === 'Ctrl+Alt+Shift+F23'", "native shortcut recorder");
-    await click("#quick-apply");
-    await wait("document.querySelector('#quick-edit').hidden && document.querySelector('#message').textContent.startsWith('Saved.')", "current app binding saved");
-    assert.equal((await invoke("get_status")).enabled, true);
+    const quickTarget = await until(async()=>{
+        try { return (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(target=>target.type==="page" && /\/quick\.html$/.test(target.url)); }
+        catch { return null; }
+    },Boolean,"quick popup WebView",30000);
+    const quickSocket = new WebSocket(quickTarget.webSocketDebuggerUrl);
+    await new Promise((resolve,reject)=>{quickSocket.addEventListener("open",resolve,{once:true});quickSocket.addEventListener("error",reject,{once:true});});
+    let quickId=0;
+    const quickPending=new Map();
+    quickSocket.addEventListener("message",event=>{const response=JSON.parse(event.data),pending=quickPending.get(response.id);if(!pending)return;quickPending.delete(response.id);response.error?pending.reject(new Error(JSON.stringify(response.error))):pending.resolve(response.result);});
+    const quickEval=expression=>new Promise((resolve,reject)=>{const id=++quickId;quickPending.set(id,{resolve:result=>result.exceptionDetails?reject(new Error(result.exceptionDetails.text)):resolve(result.result?.value),reject});quickSocket.send(JSON.stringify({id,method:"Runtime.evaluate",params:{expression,awaitPromise:true,returnByValue:true}}));});
+    try {
+        const label = await until(()=>quickEval("document.querySelector('#quick-app').textContent"),value=>Boolean(value),"quick popup identifies the focused app");
+        assert.ok(label.toLowerCase().includes(path.basename(fixture.executable,".exe").toLowerCase()));
+        await until(()=>quickEval("!document.querySelector('#quick-apply').disabled"),Boolean,"quick popup finishes loading");
+        await quickEval("document.querySelector('[data-mod=Ctrl]').click();document.querySelector('[data-mod=Shift]').click()");
+        const quickWindow = await until(()=>native("app_window").catch(()=>null),Boolean,"focused quick popup");
+        await native("plain_press",{key:88,window:quickWindow});
+        await until(()=>quickEval("document.querySelector('#quick-entry').value"),value=>value==="Ctrl+Alt+Shift+X","popup accepts native shortcut key");
+        await quickEval("document.querySelector('#quick-apply').click()");
+        await until(()=>invoke("get_config"),value=>value.bindings.length===10 && value.bindings[9].shortcut==="Ctrl+Alt+Shift+X","popup saves app binding");
+        assert.equal((await invoke("get_status")).enabled,true);
+    } finally { quickSocket.close(); }
+    await invoke("show_editor",{appMatch:null});
+    await evaluate("location.reload()");
+    await wait("document.querySelectorAll('.binding').length === 10 && !document.querySelector('#toggle').disabled","editor loads saved popup binding");
     await press(18); await paused(true);
-    checks.push("quick editor names the focused app, keeps shortcuts on, and saves its binding");
-    checks.push("shortcut recorder accepts Windows keyboard events and persists the physical key name");
+    checks.push("quick popup names the focused app, accepts a native key, and saves its binding while shortcuts stay on");
     await input('.binding:last-child [data-field="shortcut"]',"shift+control+alt+F14");
     await click(".binding:last-child .reassign");
     await wait("!document.querySelector('.binding:last-child .reassignment').hidden && !document.querySelector('.binding:last-child .confirm-reassignment').disabled", "native conflict review");
@@ -669,22 +1008,32 @@ try {
     const initial = {x:area.x+100,y:area.y+100,width:500,height:320};
     const readOwned = async () => (await invoke("get_windows")).find(w=>w.id===ownedWindow.id);
     const placeOwned = () => native("place",{window:fixture.windows[0],rect:initial});
+    await click('#show-settings');
+    await click('#monitor-settings > summary');
+    await wait("!document.querySelector('#main-monitor').disabled",'detected monitors');
     await input("#main-monitor",String(ownedWindow.monitor));
+    await click('#show-shortcuts');
     await input("#hold-delay","700");
     await input('.binding:last-child [data-field="mainMonitorAction"]',"focus-last");
     await click("#save");
     await wait("!document.querySelector('#add').disabled && document.querySelector('#message').textContent.startsWith('Saved.')", "hold settings saved");
     assert.equal((await invoke("get_config")).settings.holdDelayMs,700);
-    await evaluate("(() => {document.querySelector('#hold-delay').closest('details').open=true;document.querySelector('#hold-enabled').scrollIntoView({block:'center'});})()");
+    await click("#show-settings");
+    await evaluate("document.querySelector('#hold-enabled').scrollIntoView({block:'center'})");
     await screenshot("hold-settings.png");
+    await click("#show-shortcuts");
     await press(18); await paused(false);
     await placeOwned();
     const appWindow = await native("app_window");
+    const holdStartedAt = Date.now();
     await native("hold_start",{key:0x7d,window:appWindow}); // F14 app pull.
     await sleep(80);
-    assert.equal((await readOwned()).active,false,"tap must wait for release");
+    const heldWindow = await readOwned();
+    assert.equal(heldWindow.active,false,`tap must wait for release (elapsed ${Date.now()-holdStartedAt} ms, rect ${JSON.stringify(heldWindow.rect)})`);
+    await evaluate("window.__holdErrors=[];window.__TAURI__.event.listen('warp-error',event=>window.__holdErrors.push(event.payload))");
     await native("key_up",{keys:[0x11]}); // Ctrl released before F14.
-    await until(readOwned,w=>w.active,"modifier-first release pulls the owned app");
+    try { await until(readOwned,w=>w.active,"modifier-first release pulls the owned app"); }
+    catch(error) { throw new Error(`${error}; app errors: ${JSON.stringify(await evaluate("window.__holdErrors"))}`); }
     assert.deepEqual((await readOwned()).rect,initial);
     await native("key_up");
     checks.push("app-pull tap waits for release and accepts modifier-first release without tiling");
@@ -893,7 +1242,7 @@ try {
     const selected = await evaluate(`(() => {let count=0;document.querySelectorAll('.workspace-item').forEach(card=>{const keep=card.querySelector('.window-title').textContent.startsWith(${JSON.stringify(marker)});const input=card.querySelector('.include-window');input.checked=keep;input.dispatchEvent(new Event('change'));if(keep)count++;});return count;})()`);
     assert.equal(selected,2);
     await input("#workspace-name","Owned Windows workspace"); await click("#save-workspace");
-    await wait("document.querySelector('#message').textContent === 'Workspace saved.'", "owned workspace saved");
+    await wait("[...document.querySelectorAll('.workspace-card-status')].some(status => !status.hidden && status.textContent === 'Saved.')", "owned workspace saved");
     let store = await invoke("get_workspaces");
     assert.equal(store.profiles.length,1);
     assert.equal(store.profiles[0].items.length,2);
@@ -901,8 +1250,10 @@ try {
     checks.push("native workspace capture review saves only selected owned windows");
 
     await press(21);
+    await wait("!document.querySelector('#workspace-hotkey-choice').hidden", "workspace capture choices",60000);
+    await click("#workspace-hotkey-update");
     await wait("!document.querySelector('#workspace-editor').hidden", "workspace update hotkey",60000);
-    assert.equal(await evaluate("document.querySelector('#workspace-target').value"),store.profiles[0].id);
+    assert.equal(await evaluate("document.querySelector('#workspace-name').value"),store.profiles[0].name);
     assert.deepEqual(await invoke("get_workspaces"),store);
     await click("#discard-workspace");
     checks.push("workspace update hotkey opens closest-match review without auto-saving");
@@ -912,7 +1263,7 @@ try {
     }
     await invoke("save_workspaces",{store});
     await click('[data-action="restore"]');
-    await wait("document.querySelector('#message').textContent === 'Restored 2 of 2 windows.'", "workspace reuse");
+    await wait("[...document.querySelectorAll('.workspace-card-status')].some(status => !status.hidden && status.textContent === 'Opened 2 of 2 windows.')", "workspace reuse");
     const existing = (await invoke("get_windows")).filter(w => w.pid === fixture.pid);
     for (const item of store.profiles[0].items) assert.deepEqual(existing.find(w=>w.id===item.window.id).rect,item.window.rect);
     checks.push("workspace restore reuses both owned windows with independent native placements");
@@ -928,7 +1279,7 @@ try {
     await click("#show-workspaces");
     await wait("document.querySelectorAll('#workspace-list article').length === 2", "reloaded workspaces");
     await click('#workspace-list article:last-child [data-action="restore"]');
-    await wait("document.querySelector('#message').textContent === 'Restored 1 of 1 windows.'", "new-window workspace launch",30000);
+    await wait("[...document.querySelectorAll('.workspace-card-status')].some(status => !status.hidden && status.textContent === 'Opened 1 of 1 windows.')", "new-window workspace launch",30000);
     const launched = (await invoke("get_windows")).filter(w=>w.title===marker+"-launch-0");
     assert.equal(launched.length,1); assert.notEqual(launched[0].pid,fixture.pid);
     assert.deepEqual(launched[0].rect,launch.items[0].window.rect);
@@ -975,7 +1326,7 @@ try {
     await input('[data-rect="x"]',"120");
     await screenshot("import-workspace.png");
     await click("#save-workspace");
-    await wait("document.querySelector('#message').textContent === 'Workspace saved.'", "imported workspace explicitly saved");
+    await wait("[...document.querySelectorAll('.workspace-card-status')].some(status => !status.hidden && status.textContent === 'Saved.')", "imported workspace explicitly saved");
     const importedStore = await invoke("get_workspaces");
     assert.equal(importedStore.profiles.length,store.profiles.length+1);
     const importedProfile = importedStore.profiles.at(-1);
@@ -1025,26 +1376,47 @@ try {
         await native("pointer",{x:area.x+20,y:area.y+20});
         const centerOf = r => ({x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)});
         const primaryArea = monitorAreas.find(r=>r.x<=0 && r.x+r.width>0 && r.y<=0 && r.y+r.height>0) || monitorAreas.find(r=>r.x===0) || monitorAreas[0];
+        if (monitorAreas.length === 1) {
+            for (const [key, opposite] of [[13,67],[14,88]]) {
+                await placeOwned();
+                const half = Math.floor(area.width / 2);
+                const expected = key === 13
+                    ? {...area, width:half}
+                    : {...area, x:area.x+half, width:area.width-half};
+                await press(key);
+                await until(async()=>({window:await readOwned(),pointer:await native("pointer_position")}),
+                    ({window:w,pointer:p})=>Object.entries(expected).every(([k,v])=>w.rect[k]===v)
+                        && p.x===centerOf(area).x && p.y===centerOf(area).y,
+                    "single-monitor push tiles the owned window and centers the pointer");
+                await native("plain_press",{key:opposite,window:fixture.windows[1]});
+                await sleep(200);
+                assert.deepEqual((await readOwned()).rect,expected,"single-monitor tiling must not arm a follow-up retile");
+            }
+            checks.push("single-monitor centered pushes tile left and right without arming a follow-up retile");
+        } else {
         for (const key of [13,14]) {
             await press(key);
-            const moved = await until(readOwned,w=>monitorAreas.length===1 || w.monitor !== before.monitor,"centered push wraps to its destination monitor");
+            const moved = await until(readOwned,w=>w.monitor !== before.monitor,"centered push wraps to its destination monitor");
             assert.deepEqual(await native("pointer_position"),centerOf(moved.workArea));
             await press(15);
             await until(readOwned,w=>w.monitor===before.monitor && w.rect.x===before.rect.x && w.rect.width===before.rect.width,"history pull restores owned window");
             assert.deepEqual(await native("pointer_position"),centerOf(primaryArea));
         }
         checks.push("native centered push in both directions and history pull use the destination and primary pointer centers");
-        for (const [key,meta] of [[88,false],[67,false],[88,true],[67,true]]) {
+        for (const key of [88,67]) {
             await placeOwned(); await press(13); await sleep(80);
             const pushed = await readOwned();
-            await native("plain_press",{key,meta,window:fixture.windows[1]});
+            const retileStarted=Date.now();
+            await native("plain_press",{key,window:fixture.windows[1]});
+            const inputElapsed=Date.now()-retileStarted;
             const r = pushed.workArea, half = Math.floor(r.width/2);
             const expected = key===88 ? {...r,width:half} : {...r,x:r.x+half,width:r.width-half};
-            await until(readOwned,w=>w.active && Object.entries(expected).every(([k,v])=>w.rect[k]===v),"retile acts on the pushed window after focus changes");
+            try { await until(readOwned,w=>w.active && Object.entries(expected).every(([k,v])=>w.rect[k]===v),"retile acts on the pushed window after focus changes"); }
+            catch (error) { throw new Error(`${error}; focus and input took ${inputElapsed} ms`); }
             await native("plain_press",{key:key===88?67:88});
             assert.deepEqual((await readOwned()).rect,expected,"a consumed push must not tile twice");
         }
-        checks.push("native X/C and Super+X/C retile the pushed window after focus changes and consume each push once");
+        checks.push("native X/C retile the pushed window after focus changes and consume each push once");
         await placeOwned(); await press(13);
         const expired = (await readOwned()).rect;
         await sleep(1150); await native("plain_press",{key:88});
@@ -1061,10 +1433,11 @@ try {
         await native("plain_press",{key:88});
         assert.deepEqual((await readOwned()).rect,paused);
         checks.push("native Windows pause cancels retile and resume does not revive it");
+        }
         await invoke("set_enabled",{enabled:false});
         await invoke("save_config",{config:pointerConfig});
     }
-    if (monitorAreas.length < 2) skipped.push("Physical Windows multi-monitor push and burner geometry require a second display; one-monitor wrap and retile are verified");
+    if (monitorAreas.length < 2) skipped.push("Physical Windows multi-monitor push, history pull, retile and burner geometry require a second display");
 
     await invoke("set_enabled",{enabled:false});
     const matchConfig = await invoke("get_config");
@@ -1093,7 +1466,7 @@ try {
     await invoke("save_config",{config:typedConfig});
     await invoke("set_enabled",{enabled:true});
     await native("press",{key:0x87,window:fixture.windows[1]});
-    await wait("document.querySelector('#message').textContent.includes('No open window')","case-sensitive selector refuses a lowercase title");
+    await wait("!document.querySelector('#app-alert').hidden && document.querySelector('#app-alert-text').textContent.includes('No open window')","case-sensitive selector refuses a lowercase title");
     assert.equal((await readSecond()).active,true);
     checks.push("native Windows title matching preserves case and rejects a mismatched conjunction");
     await invoke("set_enabled",{enabled:false});
@@ -1137,6 +1510,7 @@ try {
     assert.deepEqual((await readOwned()).rect,initial);
     checks.push("native maximize/restore shortcut preserves the original floating rectangle");
 
+    if (monitorAreas.length > 1) {
     await actionPress(fixture.windows[0]);
     await until(readOwned,isMaximized,"maximize before push");
     await native("pointer",{x:area.x+25,y:area.y+25});
@@ -1145,8 +1519,7 @@ try {
         ({window:w,pointer:p})=>p.x===Math.round(w.workArea.x+w.workArea.width/2)&&p.y===Math.round(w.workArea.y+w.workArea.height/2),
         "push finishes placement before centering the pointer");
     assert.ok(isMaximized(await readOwned()),"Push must preserve maximization before history pull");
-    // Changing the state before pull makes restoration observable even when
-    // this machine has a single monitor and a push wraps to that monitor.
+    // Changing the state before pull makes restoration observable.
     await placeOwned();
     await pauseReloadResume();
     await press(15);
@@ -1157,6 +1530,9 @@ try {
     assert.deepEqual((await readOwned()).rect,initial,"Restore must use the original toggle's floating rectangle after intervening moves");
     checks.push("native maximize toggle retains floating geometry through maximized push and history pull");
     checks.push("native pause and configuration reload preserve push history and saved maximize geometry");
+    } else {
+        skipped.push("Maximized push and history preservation require a second display");
+    }
     await placeOwned();
     await selectAction("pull-app");
     await actionPress(fixture.windows[1]);
@@ -1357,10 +1733,132 @@ try {
     }
     await invoke("save_workspaces",{store:previousStore});
     } else {
-        skipped.push(fastOnly ? "General native checks omitted by --fast-only" : hookOnly ? "General native checks omitted by --hook-only" : quickOnly ? "General native checks omitted by --quick-only" : "General native checks omitted by --firefox-only");
+        skipped.push(computerTapOnly ? "General native checks omitted by --computer-tap-only" : holdEditorOnly ? "General native checks omitted by --hold-editor-only" : holdLetterOnly ? "General native checks omitted by --hold-letter-only" : fastOnly ? "General native checks omitted by --fast-only" : hookOnly ? "General native checks omitted by --hook-only" : chooserOnly ? "General native checks omitted by --chooser-only" : quickOnly ? "General native checks omitted by --quick-only" : "General native checks omitted by --firefox-only");
+    }
+    if (uxOnly) {
+        const initialConfig = await invoke('get_config');
+        assert.equal(await evaluate("[...document.querySelectorAll('.binding .chord')].every(chord=>chord.scrollWidth<=chord.clientWidth)"),true,
+            'Full shortcut chords must remain visible in the list');
+        checks.push('long shortcut chords remain visible in the native list');
+        await evaluate("(() => {const field=document.querySelector('[data-field=enabled]');field.checked=false;field.dispatchEvent(new Event('input',{bubbles:true}));})()");
+        await click('#enable-all-shortcuts');
+        assert.equal(await evaluate("[...document.querySelectorAll('[data-field=enabled]')].every(field=>field.checked)"),true);
+        await click('#discard');
+        await click('#select-shortcuts');
+        await click('.binding:nth-child(1) .select-binding');
+        await click('.binding:nth-child(2) .select-binding');
+        await click('#disable-selected-shortcuts');
+        assert.equal(await evaluate("[...document.querySelectorAll('[data-field=enabled]')].slice(0,2).every(field=>!field.checked)"),true);
+        await sleep(350); await screenshot('ux-shortcut-bulk.png');
+        await click('#remove-selected-shortcuts');
+        await wait("!document.querySelector('#confirm-remove-shortcuts').hidden",'bulk removal confirmation');
+        await click('#confirm-remove-shortcuts-button');
+        assert.equal(await evaluate("document.querySelectorAll('.binding').length"),initialConfig.bindings.length-2);
+        await click('#discard');
+        assert.equal(await evaluate("document.querySelectorAll('.binding').length"),initialConfig.bindings.length);
+        assert.deepEqual(await invoke('get_config'),initialConfig,'bulk edits remain a draft until saved');
+        await click('#add');
+        assert.equal(await evaluate("document.activeElement.dataset.field"),'label','adding a shortcut focuses its name field');
+        await click('#discard');
+        checks.push('bulk shortcut changes are scoped, confirmed for removal and reversible until saved');
+
+        await click('#show-settings');
+        await click('#monitor-settings > summary');
+        await wait("!document.querySelector('#main-monitor').disabled",'named monitors detected');
+        const monitorOptions = await invoke('get_monitors');
+        assert.ok(monitorOptions.length && monitorOptions.every(monitor=>monitor.name && monitor.id));
+        const selectedMonitor = monitorOptions.find(monitor=>!monitor.primary) || monitorOptions[0];
+        assert.ok(await evaluate(`document.querySelector('#main-monitor').textContent.includes(${JSON.stringify(selectedMonitor.name)})`));
+        await input('#main-monitor',String(selectedMonitor.index));
+        await click('#save-settings');
+        await wait("document.querySelector('#settings-message').textContent.startsWith('Saved.')",'named monitor saved');
+        assert.equal((await invoke('get_config')).settings.mainMonitorId,selectedMonitor.id);
+        await screenshot('ux-monitor-settings.png');
+        checks.push('native settings detect named monitors and save the chosen display identity');
+
+        const capture = await invoke('capture_workspace',{name:'UX fixture workspace'});
+        capture.profile.items = capture.profile.items.filter(item=>item.window.pid===fixture.pid).slice(0,1);
+        assert.equal(capture.profile.items.length,1,'Workspace uses only a fixture-owned window');
+        await invoke('save_workspaces',{store:{version:1,profiles:[capture.profile]}});
+        await click('#show-workspaces');
+        await wait("document.querySelector('#workspace-list .workspace-card') !== null",'owned workspace');
+        await click('.workspace-card [data-action=restore]');
+        await wait("document.querySelector('.workspace-card .workspace-card-status').textContent.startsWith('Opened ')",'workspace restore completes',30000);
+        await wait("!document.querySelector('.workspace-card .workspace-open-on').hidden && document.querySelector('.workspace-card .workspace-open-on').textContent.startsWith('Windows on:')",'workspace desktop location',30000);
+        assert.equal(await invoke('current_desktop_workspace'),capture.profile.id);
+        checks.push('opening a workspace marks the workspace associated with this desktop');
+        await click('.workspace-card .menu-button'); await click('.workspace-card [data-action=edit]');
+        await wait("!document.querySelector('#workspace-editor').hidden",'workspace draft');
+        assert.equal(await evaluate("document.querySelector('.workspace-card .workspace-action-menu').hidden"),true);
+        const areas = await invoke('get_import_monitors');
+        let targetMonitor = null;
+        if (areas.length > 1) {
+            await wait("!document.querySelector('.window-placement').hidden && document.querySelector('.window-placement').options.length > 1",'monitor selector');
+            targetMonitor = capture.profile.items[0].window.monitor === 1 ? 2 : 1;
+            await evaluate(`(() => {const field=document.querySelector('.window-placement');field.value=${JSON.stringify(String(targetMonitor))};field.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+            assert.equal((await invoke('get_workspaces')).profiles[0].items[0].window.monitor,capture.profile.items[0].window.monitor);
+        } else skipped.push('Moving an owned workspace window to another monitor requires two displays');
+        await sleep(350); await screenshot('ux-workspace-monitor.png');
+        await click('.workspace-item-toggle');
+        assert.equal(await evaluate("document.querySelector('.workspace-window-options > details:last-child').open"),true);
+        await evaluate("document.querySelector('#workspace-editor').scrollIntoView({block:'start'})");
+        await sleep(350); await screenshot('ux-workspace-expanded.png');
+        await input('#workspace-name',''); await click('#save-workspace');
+        await wait("!document.querySelector('#workspace-save-status').hidden && document.querySelector('#workspace-save-status').classList.contains('error')",'noticeable workspace save error');
+        assert.equal(await evaluate("document.querySelector('#workspace-save-status').textContent"),'Give this workspace a name.');
+        await screenshot('ux-workspace-error.png');
+        await input('#workspace-name','UX fixture workspace'); await click('#save-workspace');
+        await wait("document.querySelector('#workspace-editor').hidden",'workspace draft saved');
+        if (targetMonitor) {
+            const saved = (await invoke('get_workspaces')).profiles[0].items[0].window;
+            assert.equal(saved.monitor,targetMonitor); assert.equal(saved.monitorName,'');
+            assert.deepEqual(saved.rect,capture.profile.items[0].window.rect);
+            assert.deepEqual(saved.workArea,capture.profile.items[0].window.workArea);
+            await invoke('restore_workspace',{id:capture.profile.id});
+            await until(async()=>(await invoke('get_windows')).find(window=>window.id===saved.id),window=>window?.monitor===targetMonitor,'owned window opens on selected monitor',30000);
+            checks.push('workspace monitor selector saves and restores the owned window on the selected monitor');
+        }
+        checks.push('workspace editor exposes related options and identifies save errors in context');
     }
     if (runFirefox) {
         await testFirefox({output,marker,native,invoke,evaluate,wait,click,screenshot,until,checks,report,profileLock:firefoxProfileLock});
+    }
+    if (chromiumOnly) {
+        await testChromium({output,marker,invoke,until,checks,report,evaluate,click,input,wait,screenshot,cdp,native,focusFixture:()=>native('focus',{window:fixture.windows[0]})});
+    }
+    if (chooserOnly) {
+        await click('#show-workspaces');
+        await wait("document.querySelector('.saved-browser-card [data-action=add]') !== null",'saved browser');
+        await click('.saved-browser-card [data-action=add]');
+        await wait("document.querySelector('#saved-browser-destination').open && !document.querySelector('#saved-browser-new').disabled",'chooser ready');
+        assert.equal(await evaluate("document.querySelector('#saved-browser-replace').disabled"),true);
+        await evaluate("document.querySelectorAll('#saved-browser-targets .saved-browser-target')[1].querySelector('li').click()");
+        assert.equal(await evaluate("document.querySelectorAll('#saved-browser-targets input')[1].checked"),true);
+        await screenshot('chooser-select.png');
+        await click('#saved-browser-destination-cancel');
+        await wait("!document.querySelector('#saved-browser-destination').open",'chooser canceled');
+        assert.equal((await invoke('get_workspaces')).profiles[0].items[1].browser.tabs[0].url,'https://example.net/');
+        await click('.saved-browser-card [data-action=add]');
+        await wait("document.querySelector('#saved-browser-destination').open && !document.querySelector('#saved-browser-new').disabled",'chooser reopened');
+        await evaluate("document.querySelectorAll('#saved-browser-targets .saved-browser-target')[1].querySelector('li').click()");
+        const window=await native('app_window');
+        let replaceKey=()=>native('chooser_press',{window,key:82,gap_ms:30});
+        try { await replaceKey(); }
+        catch (error) {
+            if (!/Owned title bar is covered|could not take focus/.test(String(error))) throw error;
+            skipped.push('Windows denied focus for the owned keyboard fixture; Ctrl+Shift+R was sent to the WebView only');
+            replaceKey=async()=>{
+                await cdp('Input.dispatchKeyEvent',{type:'keyDown',key:'R',code:'KeyR',modifiers:10,windowsVirtualKeyCode:82});
+                await cdp('Input.dispatchKeyEvent',{type:'keyUp',key:'R',code:'KeyR',modifiers:10,windowsVirtualKeyCode:82});
+            };
+            await replaceKey();
+        }
+        const saved=await until(()=>invoke('get_workspaces'),store=>store.profiles[0].items[1].browser.tabs[0].url==='https://example.com/','replacement',10000);
+        assert.equal(saved.profiles[0].items[0].browser.tabs[0].url,'https://example.org/');
+        checks.push('clicking a browser card selects it; Cancel preserves tabs and Ctrl+Shift+R replaces only the selected browser');
+    }
+    if (firefoxExtensionOnly) {
+        await testFirefoxExtension({output,marker,native,fixtureWindow:fixture.windows[0],invoke,until,checks,report,evaluate,click,input,wait,focusFixture:()=>native('focus',{window:fixture.windows[0]})});
     }
     // Exercise the real native tray callback/menu route before failure-only
     // process cleanup below. This does not click Explorer's notification area.
@@ -1414,13 +1912,14 @@ try {
         }
     }
     if (socket) socket.close();
+    if (slowBrowser?.exitCode === null) {spawnSync("taskkill.exe",["/PID",String(slowBrowser.pid),"/T","/F"],{windowsHide:true,stdio:"ignore"});await exit(slowBrowser,10000).catch(()=>{});}
     if (second?.exitCode === null) {spawnSync("taskkill.exe",["/PID",String(second.pid),"/T","/F"],{windowsHide:true,stdio:"ignore"});await exit(second,10000).catch(()=>{});}
     if (app?.exitCode === null) {spawnSync("taskkill.exe",["/PID",String(app.pid),"/T","/F"],{windowsHide:true,stdio:"ignore"});await exit(app,10000).catch(()=>{});}
     if (peerHelper?.exitCode === null) {peerHelper.stdin.end(); await exit(peerHelper,3000).catch(()=>peerHelper.kill());}
     if (helper?.exitCode === null) {
         if (native) {
             try {await native("reserve",{key:0x81});await native("release",{key:0x81});checks.push("process exit releases the native pause key");}
-            catch {report.passed=false;report.cleanupError="Pause key remained registered after fixture process exit";}
+            catch (error) {report.passed=false;report.cleanupError=`Could not verify pause-key release after fixture exit: ${String(error)}`;}
         }
         helper.stdin.end(); await exit(helper,3000).catch(()=>helper.kill());
     }

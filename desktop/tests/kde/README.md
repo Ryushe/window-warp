@@ -59,6 +59,13 @@ window with both URLs and the selected tab. A second profile with identical page
 titles checks profile isolation. Only the fixture browser process groups are
 terminated afterward; existing browser profiles are not changed.
 
+Add `--browser-bridge-live` with `--firefox` to send synthetic extension
+snapshots for the real fixture window through the local bridge. It verifies that
+KWin window ownership updates only the corresponding workspace, an empty
+snapshot preserves saved tabs, disabling live sharing rejects updates, and the
+browser can open Workspaces while shortcuts are paused. This does not replace a
+test with an installed Firefox extension.
+
 Add `--firefox-tiles` to exercise four-way tiling from maximized/fullscreen
 windows, held mouse tiling, all burner layouts, and one-shot
 post-push retiling. This option requires `--firefox` and the isolated compositor.
@@ -93,6 +100,11 @@ Mozilla's [command-line reference](https://github.com/mozilla-firefox/firefox/bl
 ## Reproducible Linux build environment
 
 `Dockerfile` creates an Ubuntu 24.04 builder; `build.sh` runs Node tests, Rust release tests, a Linux executable build, and Debian packaging. Mount only this source directory at `/work`, run as UID/GID 1000, and constrain container resources as appropriate for the build host. No privileged container or Docker socket mount is required.
+
+After extracting a `.deb` into a test directory, run
+`python3 tests/kde/icon.py /absolute/path/to/extracted-package` to check that
+the Wayland launcher name and KDE theme lookup select the packaged artwork.
+This uses Qt's offscreen platform and does not alter the user's icon theme.
 
 Debian packaging requires `WARP_COMPANION_STAGE`, a CMake `DESTDIR` containing
 the installed `windowwarp_companion.so`, and `WARP_KWIN_PACKAGE_VERSION`, the

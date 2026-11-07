@@ -5,10 +5,10 @@ import vm from "node:vm";
 import { parseHTML } from "linkedom";
 
 const html = fs.readFileSync(new URL("../ui/index.html", import.meta.url), "utf8");
-const source = fs.readFileSync(new URL("../ui/shortcut-picker.js", import.meta.url), "utf8") + "\n" + fs.readFileSync(new URL("../ui/app.js", import.meta.url), "utf8");
+const source = ["error-timer.js", "shortcut-picker.js", "app.js"].map(file => fs.readFileSync(new URL(`../ui/${file}`, import.meta.url), "utf8")).join("\n");
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-async function editor({ failLoad = false, failSave = false, failEnable = false, failReassignment = false, platform = "windows", bindings, windows = [] } = {}) {
+async function editor({ failLoad = false, failSave = false, failEnable = false, failReassignment = false, platform = "windows", bindings, settings, windows = [], monitors:initialMonitors = [{id:"left-id",name:"Left display",index:1,primary:true,stable:true},{id:"right-id",name:"Right display",index:2,primary:false,stable:true}], timers = {setTimeout:()=>1, clearTimeout:()=>{}} } = {}) {
     const { window, document } = parseHTML(html);
     // linkedom exposes select.value as a getter; browsers also provide a setter.
     Object.defineProperty(window.HTMLSelectElement.prototype, "value", {
@@ -21,6 +21,8 @@ async function editor({ failLoad = false, failSave = false, failEnable = false, 
         }
     });
     const config = { version: 1, bindings: bindings || [{ label: "Move right", shortcut: "Ctrl+Alt+Right", action: "push-right", appMatch: "" }] };
+    if (settings) config.settings = structuredClone(settings);
+    let monitors = initialMonitors;
     const calls = [];
     const controlRequests = [];
     const listeners = new Map();
@@ -31,6 +33,7 @@ async function editor({ failLoad = false, failSave = false, failEnable = false, 
             if (command === "get_status") return { enabled: false, platform, settingsPath: "test/settings.json" };
             if (command === "get_config") { if (failLoad) throw "Settings are unreadable"; return structuredClone(config); }
             if (command === "get_windows") return structuredClone(windows);
+            if (command === "get_monitors") { if (monitors instanceof Error) throw monitors; return structuredClone(monitors); }
             if (command === "take_control_request") return controlRequests.shift() || null;
             if (command === "get_startup") return false;
             if (command === "set_startup") return args.enabled;
@@ -47,9 +50,10 @@ async function editor({ failLoad = false, failSave = false, failEnable = false, 
             throw new Error(command);
         } }
     };
-    vm.runInNewContext(source, { window, document });
+    vm.runInNewContext(source, { window, document, structuredClone, ...timers });
     await tick();
-    return { window, document, calls, listeners,
+    return { window, document, calls, listeners, setMonitors(value) { monitors = value; },
+        async openMonitors() { const section=document.querySelector('#monitor-settings'); section.open=true; section.dispatchEvent(new window.Event('toggle')); await tick(); },
         async control(request) { controlRequests.push(request); listeners.get("warp-control")(); await tick(); }, input(selector, value) {
         const field = document.querySelector(selector);
         field.value = value;
@@ -108,6 +112,7 @@ test("hold settings stay editable while shortcuts are active and save from the s
     assert.equal(saved.settings.holdTileEnabled, false);
     assert.equal(saved.settings.holdMode,"radial");
     await e.click("#toggle");
+    await e.openMonitors();
     assert.equal(field.disabled, false);
     assert.equal(mode.disabled, false);
     assert.equal(e.document.querySelector("#hold-delay").disabled, false);
@@ -158,6 +163,56 @@ test("cancel changes restores the last saved shortcuts and settings", async () =
     assert.equal(e.document.querySelector("#hold-delay").value, "400");
     assert.equal(e.document.querySelector("#save").disabled, true);
     assert.equal(e.calls.some(c => c.command === "save_config"), false);
+});
+test("bulk shortcut actions are scoped, reversible until saved, and require confirmation to remove", async () => {
+    const bindings = [
+        {label:"First",shortcut:"Ctrl+Alt+1",action:"pull",enabled:false},
+        {label:"Second",shortcut:"Ctrl+Alt+2",action:"pull",enabled:true},
+        {label:"Third",shortcut:"Ctrl+Alt+3",action:"pull",enabled:false}
+    ];
+    const e = await editor({bindings});
+    assert.equal(e.document.querySelector('#enable-all-shortcuts').textContent,'Enable all');
+    await e.click('#enable-all-shortcuts');
+    assert.deepEqual([...e.document.querySelectorAll('[data-field="enabled"]')].map(input => input.checked),[true,true,true]);
+    assert.equal(e.document.querySelector('#enable-all-shortcuts').textContent,'Disable all');
+    await e.click('#enable-all-shortcuts');
+    assert.deepEqual([...e.document.querySelectorAll('[data-field="enabled"]')].map(input => input.checked),[false,false,false]);
+    assert.equal(e.document.querySelector('#enable-all-shortcuts').textContent,'Enable all');
+    await e.click('#enable-all-shortcuts');
+    assert.equal(e.calls.some(c => c.command === 'save_config'),false);
+    await e.click('#discard');
+    assert.deepEqual([...e.document.querySelectorAll('[data-field="enabled"]')].map(input => input.checked),[false,true,false]);
+
+    await e.click('#select-shortcuts');
+    check(e,'.binding:nth-child(1) .select-binding',true);
+    check(e,'.binding:nth-child(2) .select-binding',true);
+    await e.click('#disable-selected-shortcuts');
+    assert.deepEqual([...e.document.querySelectorAll('[data-field="enabled"]')].map(input => input.checked),[false,false,false]);
+    await e.click('#enable-selected-shortcuts');
+    assert.deepEqual([...e.document.querySelectorAll('[data-field="enabled"]')].map(input => input.checked),[true,true,false]);
+    e.input('#search','Third');
+    assert.match(e.document.querySelector('#selected-shortcut-count').textContent,/2 hidden by search/);
+    await e.click('#select-visible-shortcuts');
+    assert.match(e.document.querySelector('#selected-shortcut-count').textContent,/3 selected/);
+    await e.click('#remove-selected-shortcuts');
+    assert.match(e.document.querySelector('#confirm-remove-shortcuts-text').textContent,/3 selected shortcuts/);
+    assert.equal(e.document.querySelectorAll('.binding').length,3);
+    await e.click('#cancel-remove-shortcuts');
+    assert.equal(e.document.querySelectorAll('.binding').length,3);
+    await e.click('#remove-selected-shortcuts');
+    await e.click('#confirm-remove-shortcuts-button');
+    assert.equal(e.document.querySelectorAll('.binding').length,0);
+    assert.equal(e.calls.some(c => c.command === 'save_config'),false);
+    await e.click('#discard');
+    assert.equal(e.document.querySelectorAll('.binding').length,3);
+});
+test("selection mode closes when the last shortcut is removed", async () => {
+    const e = await editor();
+    await e.click('#select-shortcuts');
+    await e.click('.binding-summary');
+    await e.click('.binding .remove');
+    assert.equal(e.document.querySelector('#shortcut-selection').hidden,true);
+    assert.equal(e.document.querySelector('#select-shortcuts').getAttribute('aria-pressed'),'false');
 });
 test("KDE editor offers the same hold settings as Windows", async () => {
     const e = await editor({platform:"linux"});
@@ -289,10 +344,61 @@ test("validation errors retain the user's unsaved edits", async () => {
     assert.equal(e.document.querySelector("#toggle").disabled, true);
     assert.equal(e.document.querySelector("#save").disabled, false);
 });
+test("settings save errors stay by settings and application errors remain visible and dismissible", async () => {
+    const e = await editor({ failSave: true });
+    e.document.querySelector("#shortcuts-page").hidden = true;
+    e.document.querySelector("#settings-page").hidden = false;
+    e.input("#hold-delay", "500");
+    await e.click("#save-settings");
+    assert.match(e.document.querySelector("#settings-message").textContent, /Duplicate/);
+    assert.equal(e.document.querySelector("#message").textContent, "");
+    assert.equal(e.document.querySelector("#hold-delay").value, "500");
+
+    e.document.querySelector("#settings-page").hidden = true;
+    e.document.querySelector("#workspaces-page").hidden = false;
+    e.listeners.get("warp-error")({payload:"An application error"});
+    assert.equal(e.document.querySelector("#app-alert").hidden, false);
+    assert.equal(e.document.querySelector("#app-alert-text").textContent, "An application error");
+    await e.click("#app-alert-dismiss");
+    assert.equal(e.document.querySelector("#app-alert").hidden, true);
+});
+test("application errors restart their countdown and manual dismissal cancels it", async () => {
+    let next = 0;
+    const pending = new Map();
+    const timers = {setTimeout:(fn, delay) => {const id = ++next; pending.set(id, {fn, delay}); return id;}, clearTimeout:id => pending.delete(id)};
+    const e = await editor({timers});
+    const alert = e.document.querySelector("#app-alert");
+    e.listeners.get("warp-error")({payload:"First error"});
+    const stale = [...pending.values()][0].fn;
+    assert.equal(alert.classList.contains("timed-error"), true);
+    assert.equal([...pending.values()][0].delay, 6000);
+    e.listeners.get("warp-error")({payload:"Second error"});
+    stale();
+    assert.equal(alert.hidden, false);
+    assert.equal(e.document.querySelector("#app-alert-text").textContent, "Second error");
+    const [id, current] = [...pending][0];
+    pending.delete(id);
+    current.fn();
+    assert.equal(alert.hidden, true);
+    e.listeners.get("warp-error")({payload:"Third error"});
+    await e.click("#app-alert-dismiss");
+    assert.equal(alert.hidden, true);
+    assert.equal(pending.size, 0);
+});
+test("quick editor save errors remain visible above the open editor", async () => {
+    const e = await editor({ failSave: true });
+    await e.control({action:"open-editor",window:{appId:"firefox.exe"}});
+    assert.equal(e.document.querySelector("#quick-edit").hidden, false);
+    await e.click("#quick-apply");
+    assert.equal(e.document.querySelector("#quick-edit").hidden, false);
+    assert.equal(e.document.querySelector("#app-alert").hidden, false);
+    assert.match(e.document.querySelector("#app-alert-text").textContent, /Duplicate/);
+});
 test("failed registration leaves controls paused and editable", async () => {
     const e = await editor({ failEnable: true });
     await e.click("#toggle");
-    assert.match(e.document.querySelector("#message").textContent, /already in use/);
+    assert.match(e.document.querySelector("#app-alert-text").textContent, /already in use/);
+    assert.equal(e.document.querySelector("#app-alert").hidden, false);
     assert.equal(e.document.querySelector("#status").textContent, "Paused");
     assert.equal(e.document.querySelector('[data-field="shortcut"]').disabled, false);
 });
@@ -306,6 +412,7 @@ test("unreadable settings never allow replacing the file with defaults", async (
 
 test("app behavior, monitor selection, and per-binding disable are saved", async () => {
     const e = await editor();
+    await e.openMonitors();
     e.input('[data-field="action"]', "pull-app");
     e.input('[data-field="appMatch"]', "firefox.exe");
     e.input('[data-field="mainMonitorAction"]', "focus-last");
@@ -321,6 +428,55 @@ test("app behavior, monitor selection, and per-binding disable are saved", async
     assert.equal(config.bindings[0].mainMonitorAction, "focus-last");
     assert.equal(config.bindings[0].burnerLayout, "tile-right");
     assert.equal(config.settings.mainMonitor, 2);
+    assert.equal(config.settings.mainMonitorId, "right-id");
+    assert.equal(config.settings.burnerMonitorId, "left-id", "the second monitor follows the other connected display");
+});
+
+test("monitor settings show detected names and keep identity after display order changes", async () => {
+    const e = await editor({settings:{mainMonitor:1,burnerMonitor:2,mainMonitorId:"left-id",burnerMonitorId:"right-id"}});
+    await e.openMonitors();
+    assert.match(e.document.querySelector('#main-monitor').textContent,/Left display/);
+    assert.match(e.document.querySelector('#burner-monitor').textContent,/Right display/);
+    e.setMonitors([{id:'right-id',name:'Right display',index:1,primary:false,stable:true},{id:'left-id',name:'Left display',index:2,primary:true,stable:true}]);
+    await e.openMonitors();
+    assert.equal(e.document.querySelector('#main-monitor').value,'2');
+    assert.equal(e.document.querySelector('#burner-monitor').value,'1');
+    e.input('#main-monitor','0');
+    await e.click('#save');
+    const settings=e.calls.filter(call=>call.command==='save_config').at(-1).args.config.settings;
+    assert.equal(settings.mainMonitor,0);
+    assert.equal(settings.mainMonitorId,'');
+    assert.equal(settings.burnerMonitorId,'right-id');
+});
+
+test("a disconnected monitor remains visible and saved while detection failures can be retried", async () => {
+    const e = await editor({settings:{mainMonitor:1,burnerMonitor:2,mainMonitorId:'missing-id',burnerMonitorId:'right-id'}});
+    await e.openMonitors();
+    assert.match(e.document.querySelector('#main-monitor').textContent,/disconnected/);
+    assert.equal(e.document.querySelector('#main-monitor').value,'missing');
+    e.setMonitors(new Error('unavailable'));
+    await e.openMonitors();
+    assert.equal(e.document.querySelector('#main-monitor').disabled,true);
+    assert.equal(e.document.querySelector('#retry-monitors').disabled,false);
+    e.setMonitors([{id:'right-id',name:'Right display',index:1,primary:true,stable:true}]);
+    await e.click('#retry-monitors');
+    assert.equal(e.document.querySelector('#main-monitor').disabled,false);
+    assert.match(e.document.querySelector('#main-monitor').textContent,/disconnected/);
+    e.input('#hold-delay','500');
+    await e.click('#save');
+    assert.equal(e.calls.filter(call=>call.command==='save_config').at(-1).args.config.settings.mainMonitorId,'missing-id');
+});
+
+test("Plasma 5 keeps positional compatibility and explains display reordering", async () => {
+    const e=await editor({platform:'linux',monitors:[{id:'0',name:'Laptop panel',index:1,primary:true,stable:false},{id:'1',name:'External monitor',index:2,primary:false,stable:false}]});
+    await e.openMonitors();
+    assert.match(e.document.querySelector('#monitor-hint').textContent,/reconnecting or rearranging/i);
+    assert.match(e.document.querySelector('#main-monitor').textContent,/Automatic/);
+    e.input('#main-monitor','2');
+    await e.click('#save');
+    const settings=e.calls.filter(call=>call.command==='save_config').at(-1).args.config.settings;
+    assert.equal(settings.mainMonitor,2);
+    assert.equal(settings.mainMonitorId,'');
 });
 
 test("a shortcut is built from modifier buttons and a key, without recording", async () => {
@@ -386,7 +542,7 @@ test("editing invalidates reassignment proposals and errors preserve the draft",
     assert.equal(e.document.querySelector('.binding:last-child [data-field="label"]').value, "Changed since preview");
     const failure = await editor({failReassignment:true});
     await conflictingShortcut(failure);
-    assert.match(failure.document.querySelector("#message").textContent, /modifier/);
+    assert.match(failure.document.querySelector(".binding:last-child .binding-feedback").textContent, /modifier/);
     assert.equal(failure.document.querySelector('[data-field="enabled"]').checked, true);
     assert.equal(failure.document.querySelector('.binding:last-child [data-field="shortcut"]').value, "alt+control+right");
 });
@@ -418,7 +574,8 @@ test("resuming saved shortcuts keeps unsaved editor changes clearly identified",
     const e = await editor();
     e.input('[data-field="label"]', "Unsaved label");
     e.listeners.get("warp-enabled")({payload:true});
-    assert.match(e.document.querySelector("#message").textContent, /Shortcuts are on\. Unsaved edits are still here/);
+    assert.equal(e.document.querySelector("#save-status").textContent, "Unsaved changes");
+    assert.equal(e.document.querySelector("#message").textContent, "");
     assert.equal(e.document.querySelector('[data-field="label"]').value, "Unsaved label");
     assert.equal(e.document.querySelector('[data-field="label"]').disabled, false);
 });
