@@ -1,12 +1,14 @@
 # Monitor, pairing, and 0.1.6 preview release
 
-- **Status:** independently reviewed; preview release preparation in progress
+- **Status:** independently reviewed; preview release published
 - **Owner:** Codex
 - **Working branch:** `codex/desktop-shortcut-ux`, base `6cd6da003b0896c11f7b7e125686ee5db6733b1e`
 - **Release ref:** `refs/heads/codex/window-warp-0.1.6-preview`; preview tag `v0.1.6`
 - **Future integration target:** `refs/heads/main`, fetched tip `16d8b97da718de47cc78749602b89c95095709b7`
 - **Last updated:** 2026-11-06
 - **Recovery checkpoint / implementation commit:** `b963cf6f1b6c6a9d56de0be78c65dc2c66553d77`
+- **Published release commit:** `e20dd653ca63cfcc59295aea3b9e712c5086f201`
+- **Release:** https://github.com/Ryushe/window-warp/releases/tag/v0.1.6
 - **References:** `AGENTS.md`, `release.md`, `desktop/HOOK-HANDOFF.md`
 
 ## Intent and contract
@@ -43,9 +45,9 @@ cannot read; empty fields are omitted to preserve ordinary rollback.
 - Independent monitor/pairing review: focused tests 136 passed; main's empty-ID
   matching regression and KDE GUI readiness fixes were reconciled. `cargo fmt
   --check` passes.
-- Both packages are built and validated; the GitHub tag and release assets
-  are pending. The Firefox listing URL and a live Mozilla
-  credential test are pending.
+- Both packages are built and validated. The GitHub preview is public, and the
+  uploaded assets' SHA-256 digests match the local builds. The Firefox listing
+  URL and a live Mozilla credential test are pending.
 
 ## Release and recovery gates
 
@@ -60,6 +62,7 @@ instead of overwriting either history. The Firefox workflow runs only from an en
 workflow on stable releases; this preview must not silently submit the user's
 in-progress Mozilla listing.
 
-Next: create the preview tag from this checkpoint, publish the reviewed
-installers, and read back the public release. Main-branch integration remains a
-separate follow-up requiring deliberate conflict resolution.
+Next: integrate the preview branch into main with deliberate conflict
+resolution, then enable and verify stable-release Firefox publishing after the
+manual listing is ready. The GitHub preview is intentionally a prerelease and
+does not test Mozilla credentials.
