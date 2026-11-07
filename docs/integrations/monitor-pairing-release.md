@@ -6,7 +6,7 @@
 - **Release ref:** `refs/heads/codex/window-warp-0.1.6-preview`; preview tag `v0.1.6`
 - **Future integration target:** `refs/heads/main`, fetched tip `16d8b97da718de47cc78749602b89c95095709b7`
 - **Last updated:** 2026-11-06
-- **Recovery checkpoint / implementation commit:** not yet committed
+- **Recovery checkpoint / implementation commit:** `b963cf6f1b6c6a9d56de0be78c65dc2c66553d77`
 - **References:** `AGENTS.md`, `release.md`, `desktop/HOOK-HANDOFF.md`
 
 ## Intent and contract
@@ -60,6 +60,6 @@ instead of overwriting either history. The Firefox workflow runs only from an en
 workflow on stable releases; this preview must not silently submit the user's
 in-progress Mozilla listing.
 
-Next: complete exact-source Windows and KDE checks, build the installers, create
-a recoverable release commit and preview tag, publish the assets, and read back
-the public release. Carry any unverified behavior into the release notes.
+Next: create the preview tag from this checkpoint, publish the reviewed
+installers, and read back the public release. Main-branch integration remains a
+separate follow-up requiring deliberate conflict resolution.
