@@ -74,6 +74,8 @@ pub fn monitor_options(app: &AppHandle) -> Result<Vec<crate::MonitorOption>, Str
                     }
                 });
             crate::MonitorOption {
+                source_id: output.id.clone(),
+                geometry: output.geometry,
                 id: output.id,
                 name: label,
                 index: index + 1,

@@ -441,6 +441,23 @@ fn delete_saved_browser(app: AppHandle, id: String) -> Result<workspaces::Worksp
     Ok(store)
 }
 
+#[tauri::command]
+fn edit_saved_browser(
+    app: AppHandle,
+    expected: workspaces::Workspace,
+    name: String,
+    tabs: Vec<firefox::Tab>,
+    active_tab: usize,
+) -> Result<workspaces::WorkspaceStore, String> {
+    let runtime = app.state::<Runtime>();
+    let _guard = runtime.workspace_io.lock().map_err(|e| e.to_string())?;
+    let mut store = workspaces::load_saved_browsers(&app)?;
+    workspaces::edit_saved_browser(&mut store, &expected, name, tabs, active_tab)?;
+    workspaces::save_saved_browsers(&app, &store)?;
+    let _ = app.emit("warp-saved-browsers-updated", ());
+    Ok(store)
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SavedBrowserRefresh {
@@ -662,6 +679,8 @@ pub(crate) struct MonitorOption {
     index: usize,
     primary: bool,
     stable: bool,
+    source_id: String,
+    geometry: geometry::Rect,
 }
 
 #[tauri::command]
@@ -1065,6 +1084,7 @@ fn main() {
             save_workspaces,
             get_saved_browsers,
             delete_saved_browser,
+            edit_saved_browser,
             refresh_saved_browser,
             add_saved_browser_to_workspace,
             restore_saved_browser,

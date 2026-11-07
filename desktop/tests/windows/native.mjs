@@ -1787,7 +1787,7 @@ try {
         await wait("!document.querySelector('.workspace-card .workspace-open-on').hidden && document.querySelector('.workspace-card .workspace-open-on').textContent.startsWith('Windows on:')",'workspace desktop location',30000);
         assert.equal(await invoke('current_desktop_workspace'),capture.profile.id);
         checks.push('opening a workspace marks the workspace associated with this desktop');
-        await click('.workspace-card .menu-button'); await click('.workspace-card [data-action=edit]');
+        await click('.workspace-card [data-action=edit]');
         await wait("!document.querySelector('#workspace-editor').hidden",'workspace draft');
         assert.equal(await evaluate("document.querySelector('.workspace-card .workspace-action-menu').hidden"),true);
         const areas = await invoke('get_import_monitors');

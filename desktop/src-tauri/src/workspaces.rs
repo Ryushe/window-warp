@@ -300,6 +300,39 @@ pub(crate) fn load_saved_browsers(app: &AppHandle) -> Result<WorkspaceStore, Str
     load_store(app, "saved-browsers.json")
 }
 
+pub(crate) fn edit_saved_browser(
+    store: &mut WorkspaceStore,
+    expected: &Workspace,
+    name: String,
+    tabs: Vec<crate::firefox::Tab>,
+    active_tab: usize,
+) -> Result<(), String> {
+    let mut updated = store.clone();
+    let profile = updated
+        .profiles
+        .iter_mut()
+        .find(|profile| profile.id == expected.id)
+        .ok_or("This saved browser no longer exists.")?;
+    if serde_json::to_value(&*profile).map_err(|error| error.to_string())?
+        != serde_json::to_value(expected).map_err(|error| error.to_string())?
+    {
+        return Err("This saved browser changed. Reopen it to keep the latest tabs.".into());
+    }
+    let [item] = profile.items.as_mut_slice() else {
+        return Err("This saved browser cannot be edited.".into());
+    };
+    let browser = item
+        .browser
+        .as_mut()
+        .ok_or("This saved browser cannot be edited.")?;
+    profile.name = name.trim().to_string();
+    browser.tabs = tabs;
+    browser.active_tab = active_tab;
+    updated.validate()?;
+    *store = updated;
+    Ok(())
+}
+
 fn load_store(app: &AppHandle, filename: &str) -> Result<WorkspaceStore, String> {
     let path = app
         .path()
@@ -963,6 +996,64 @@ mod tests {
             ..Default::default()
         });
         item
+    }
+
+    #[test]
+    fn editing_a_saved_browser_preserves_identity_and_rejects_stale_or_invalid_edits() {
+        use crate::firefox::{BrowserKind, Tab};
+        let mut profile = capture(vec![], "Research".into());
+        profile.items.push(saved_browser_item(
+            "source",
+            BrowserKind::Firefox,
+            &["https://old.test/"],
+        ));
+        let expected = profile.clone();
+        let mut store = WorkspaceStore {
+            version: 1,
+            profiles: vec![profile],
+        };
+        edit_saved_browser(
+            &mut store,
+            &expected,
+            " Updated ".into(),
+            vec![Tab {
+                url: "https://new.test/".into(),
+                title: "New".into(),
+            }],
+            1,
+        )
+        .unwrap();
+        assert_eq!(store.profiles[0].name, "Updated");
+        assert_eq!(
+            store.profiles[0].items[0]
+                .browser
+                .as_ref()
+                .unwrap()
+                .profile_path,
+            "source-profile"
+        );
+        assert_eq!(
+            store.profiles[0].items[0].window.id,
+            expected.items[0].window.id
+        );
+        let after = serde_json::to_value(&store).unwrap();
+        assert!(edit_saved_browser(&mut store, &expected, "Stale".into(), vec![], 1).is_err());
+        assert_eq!(serde_json::to_value(&store).unwrap(), after);
+        let current = store.profiles[0].clone();
+        assert!(edit_saved_browser(&mut store, &current, " ".into(), vec![], 1).is_err());
+        assert_eq!(serde_json::to_value(&store).unwrap(), after);
+        assert!(edit_saved_browser(
+            &mut store,
+            &current,
+            "Valid name".into(),
+            vec![Tab {
+                url: "https://bad.test/\nextra".into(),
+                title: String::new()
+            }],
+            1,
+        )
+        .is_err());
+        assert_eq!(serde_json::to_value(&store).unwrap(), after);
     }
 
     #[test]

@@ -51,6 +51,9 @@
   terminal and browser profiles, paths, desktops, and displays. Show missing or
   ambiguous mappings so the user can resolve them. Windows, WSL, and remote
   Linux paths are not interchangeable.
+- Allow a portable workspace to choose each system's default terminal or a
+  reviewed per-system terminal mapping. The user deferred the transfer method
+  (such as export/import or a shared folder) for a later design.
 - On Windows, investigate current-desktop detection when a window reported on
   the current desktop has an ID missing from Explorer's stored desktop list.
   This can prevent bringing Warp to the current desktop. Account for pinned

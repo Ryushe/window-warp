@@ -5,6 +5,19 @@
     let store = null;
     let draft = null;
     let selected = [];
+    let comparisonBase = null;
+    let comparisonRendered = {before:null, after:null};
+    let comparisonKept = new Map();
+    let draftSelectionSetters = [];
+    let workspaceSurface = "library";
+    let pendingSurfaceFocus = null;
+    let displayContext = {platform:"", monitors:[], areas:null, main:null};
+    let displayRequest = 0, displayRevision = 0;
+    let draftMonitorSetters = [];
+    const expandedWorkspaces = new Set();
+    let selectingWorkspaceItems = false;
+    const selectedWorkspaces = new Set(), selectedBrowsers = new Set();
+    let availableBrowsers = new Set();
     let working = false;
     let editingId = "";
     let pendingCapture = null;
@@ -39,8 +52,306 @@
         const normalized = String(path || "").replace(/\\/g, "/").replace(/\/+$/, "");
         return /^[a-z]:\//i.test(normalized) || normalized.startsWith("//") ? normalized.toLowerCase() : normalized;
     };
+    const browserProfileKey = item => profilePathKey(item.browser?.profilePath || item.browser?.profileName || "");
+    const samePhysicalWindow = (a, b) => {
+        const before = browserProfileKey(a), after = browserProfileKey(b);
+        return a.window?.id && b.window?.id && a.window?.pid && b.window?.pid && a.window.id === b.window.id && a.window.pid === b.window.pid
+            && String(a.window.appId || "").toLowerCase() === String(b.window.appId || "").toLowerCase()
+            && !(before && after && before !== after);
+    };
     const {chromiumApp, firefoxApp, chromiumName, isBrowserItem} = window.WarpBrowserKinds;
     const wantsTabs = (item, index) => selected[index] && !ignoredBrowserTabs.has(index) && isBrowserItem(item);
+    function monitorDirection(monitor) {
+        const main = displayContext.main, rect = monitor?.geometry, base = main?.geometry;
+        if (!rect || !base) return "";
+        if (monitor.index === main.index) return "Main monitor";
+        const horizontal = rect.x + rect.width <= base.x ? "left" : rect.x >= base.x + base.width ? "right" : "";
+        const vertical = rect.y + rect.height <= base.y ? "top" : rect.y >= base.y + base.height ? "bottom" : "";
+        if (vertical && horizontal) return `${vertical[0].toUpperCase() + vertical.slice(1)} ${horizontal} monitor`;
+        const direction = horizontal || vertical;
+        return direction ? `${direction[0].toUpperCase() + direction.slice(1)} monitor` : "Other monitor";
+    }
+    function monitorLabel(monitor) {
+        const direction = monitorDirection(monitor);
+        if (!direction) return "";
+        return displayContext.monitors.filter(other => monitorDirection(other) === direction).length > 1 && monitor.name
+            ? `${direction} · ${monitor.name}` : direction;
+    }
+    function lookupSavedMonitor(windowInfo) {
+        const monitors = displayContext.monitors;
+        if (!monitors.length) return {monitor:null, unavailable:false};
+        const source = String(windowInfo?.monitorName || "").toLowerCase();
+        let monitor = source && monitors.find(item => [item.id, item.sourceId].some(id => String(id || "").toLowerCase() === source));
+        if (source && !monitor && monitors.some(item => item.sourceId)) return {monitor:null, unavailable:true};
+        if (!monitor) monitor = monitors.find(item => item.index === windowInfo?.monitor);
+        return {monitor:monitor || null, unavailable:false};
+    }
+    function savedMonitorLabel(windowInfo) {
+        const result = lookupSavedMonitor(windowInfo);
+        return result.unavailable ? "Display unavailable" : monitorLabel(result.monitor);
+    }
+    function workspaceSummary(profile) {
+        const count = `${profile.items.length} ${profile.items.length === 1 ? "window" : "windows"}`;
+        return displayContext.platform && profile.platform !== displayContext.platform ? `${count} · ${profile.platform === "windows" ? "Windows" : "Linux / KDE"}` : count;
+    }
+    async function refreshDisplayContext() {
+        if (!native) return;
+        const request = ++displayRequest;
+        const [status, config, monitors, areas] = await Promise.allSettled(
+            ["get_status", "get_config", "get_monitors", "get_import_monitors"].map(command => Promise.resolve().then(() => native.core.invoke(command)))
+        );
+        if (request !== displayRequest) return;
+        const available = monitors.status === "fulfilled" && Array.isArray(monitors.value) ? monitors.value : [];
+        const settings = config.status === "fulfilled" ? config.value?.settings || {} : {};
+        const configuredId = String(settings.mainMonitorId || "").toLowerCase();
+        const primary = available.find(monitor => monitor.primary) || available[0] || null;
+        const main = configuredId ? available.find(monitor => [monitor.id, monitor.sourceId].some(id => String(id || "").toLowerCase() === configuredId)) || primary
+            : settings.mainMonitor ? available.find(monitor => monitor.index === settings.mainMonitor) || available[available.length - 1] || primary : primary;
+        displayContext = {platform:status.status === "fulfilled" ? status.value?.platform || "" : displayContext.platform, monitors:available, areas:areas.status === "fulfilled" && Array.isArray(areas.value) ? areas.value : [], main};
+        displayRevision++;
+        if (store) {
+            for (const card of select("#workspace-list").querySelectorAll(".workspace-card")) {
+                const profile = store.profiles.find(value => value.id === card.dataset.workspaceId);
+                if (!profile) continue;
+                card.querySelector(".workspace-summary-text").textContent = workspaceSummary(profile);
+                const preview = card.querySelector(".workspace-preview"), content = card.querySelector(".workspace-preview-content");
+                if (!preview.hidden) {
+                    const focused = document.activeElement === content, scroll = content.scrollTop;
+                    content.replaceChildren(workspaceContents(profile)); content.scrollTop = scroll;
+                    if (focused) content.focus({preventScroll:true});
+                }
+            }
+        }
+        draftMonitorSetters.forEach(set => set?.());
+        renderComparison();
+    }
+    function displayWorkspaceSurface(surface) {
+        workspaceSurface = surface;
+        select("#workspace-library").hidden = surface !== "library";
+        select("#workspace-hotkey-choice").hidden = surface !== "choice";
+        select("#workspace-editor").hidden = surface !== "editor";
+        select("#workspace-back-to-library").hidden = surface === "library";
+        select(".workspace-header-buttons").hidden = surface !== "library";
+        select("#workspace-draft-banner").hidden = surface !== "library" || !draft;
+        if (draft) select("#workspace-draft-banner-text").textContent = `Draft: ${select("#workspace-name").value || "New workspace"}`;
+    }
+    function selectionUI() {
+        const total = selectedWorkspaces.size + selectedBrowsers.size;
+        const available = (store?.profiles.length || 0) + availableBrowsers.size;
+        const browserDeleting = select("#saved-browser-list").dataset.deleting === "true";
+        const toggle = select("#select-workspace-items");
+        toggle.textContent = selectingWorkspaceItems ? "Done" : "Select";
+        toggle.setAttribute("aria-pressed", String(selectingWorkspaceItems));
+        toggle.disabled = working || browserDeleting || !store || !!draft || (!available && !selectingWorkspaceItems);
+        select("#capture-workspace").disabled = working || !store || selectingWorkspaceItems;
+        select("#workspaces-page").classList.toggle("is-selecting", selectingWorkspaceItems);
+        select("#workspace-selection").hidden = !selectingWorkspaceItems;
+        select("#selected-workspace-count").textContent = `${total} selected`;
+        select("#select-all-workspace-items").disabled = working || browserDeleting || !available;
+        select("#select-all-workspace-items").textContent = available && total === available ? "Clear all" : "Select all";
+        select("#delete-selected-workspace-items").disabled = working || browserDeleting || !total;
+        select("#confirm-delete-workspace-button").disabled = working || browserDeleting || !total;
+        select("#cancel-delete-workspace-items").disabled = working || browserDeleting;
+        document.querySelectorAll(".workspace-bulk-checkbox, .saved-browser-bulk-checkbox").forEach(box => {
+            const browser = box.classList.contains("saved-browser-bulk-checkbox");
+            const card = box.closest(browser ? ".saved-browser-card" : ".workspace-card");
+            const id = card?.dataset[browser ? "profileId" : "workspaceId"];
+            box.hidden = !selectingWorkspaceItems;
+            box.checked = (browser ? selectedBrowsers : selectedWorkspaces).has(id);
+            box.disabled = working || (browser && browserDeleting) || (browser ? selectingWorkspaceItems && !store : !store || pendingSavedTabRefreshes.has(id));
+            const row = card?.querySelector(browser ? ".saved-browser-description" : ".workspace-preview-toggle");
+            if (row) {
+                row.disabled = working || (browser && browserDeleting) || (browser ? selectingWorkspaceItems && !store : !store || pendingSavedTabRefreshes.has(id));
+                if (selectingWorkspaceItems) { row.removeAttribute("aria-expanded"); row.setAttribute("aria-pressed", String(box.checked)); }
+                else { row.removeAttribute("aria-pressed"); row.setAttribute("aria-expanded", String(!card.querySelector(browser ? ".saved-browser-preview" : ".workspace-preview").hidden)); }
+            }
+        });
+    }
+    function clearWorkspaceSelection() {
+        selectingWorkspaceItems = false; selectedWorkspaces.clear(); selectedBrowsers.clear();
+        select("#confirm-delete-workspace-items").hidden = true;
+        selectionUI();
+    }
+    window.WarpWorkspaceSelection = {
+        registerBrowsers(ids) {
+            const count = selectedBrowsers.size;
+            availableBrowsers = new Set(ids);
+            for (const id of selectedBrowsers) if (!availableBrowsers.has(id)) selectedBrowsers.delete(id);
+            if (selectedBrowsers.size !== count) selectionChangedDuringRefresh();
+            selectionUI();
+        },
+        set(kind, id, checked) {
+            const group = kind === "browser" ? selectedBrowsers : selectedWorkspaces;
+            if (checked) group.add(id); else group.delete(id);
+            select("#confirm-delete-workspace-items").hidden = true;
+            selectionUI();
+        },
+        active:() => selectingWorkspaceItems,
+        refresh:selectionUI,
+        refreshControls:controls
+    };
+    function selectionChangedDuringRefresh() {
+        select("#confirm-delete-workspace-items").hidden = true;
+        if (selectingWorkspaceItems && !working) inlineStatus("#workspace-status", "Selection changed. Review it before deleting.");
+    }
+    function focusWhenReady(action) {
+        if (working) pendingSurfaceFocus = action;
+        else action();
+    }
+    function workspaceChanges() {
+        const previous = comparisonBase?.items || [];
+        const current = draft?.items || [];
+        const pairs = new Map(), used = new Set(), badges = new Map();
+        const appIdentity = item => {
+            const app = String(item.window?.appId || "").toLowerCase();
+            const kind = item.browser?.kind || (chromiumApp(app) ? "chromium" : firefoxApp(app) || item.browser ? "firefox" : "");
+            return [app, kind].join("\0");
+        };
+        const identity = item => [appIdentity(item), browserProfileKey(item)].join("\0");
+        const launchIdentity = item => JSON.stringify({kind:item.launch?.kind || "executable",program:profilePathKey(item.launch?.program || ""),args:item.launch?.args || [],workingDirectory:profilePathKey(item.launch?.workingDirectory || ""),terminal:item.terminal || null});
+        const hasSpecificIdentity = item => item.browser ? !!browserProfileKey(item) : !!(item.launch?.args?.length || item.launch?.workingDirectory || item.terminal?.profilePath || item.terminal?.profileName || item.terminal?.shell || item.terminal?.workingDirectory);
+        const sameWindow = samePhysicalWindow;
+        current.forEach((item, index) => {
+            if (!selected[index]) return;
+            const matches = previous.map((old, oldIndex) => ({old, oldIndex})).filter(({old, oldIndex}) => !used.has(oldIndex) && sameWindow(old, item));
+            if (matches.length === 1) { pairs.set(index, matches[0].oldIndex); used.add(matches[0].oldIndex); }
+        });
+        const keys = new Set([...previous.map(identity), ...current.filter((_, index) => selected[index]).map(identity)]);
+        for (const key of keys) {
+            const old = previous.map((item, index) => ({item, index})).filter(value => !used.has(value.index) && identity(value.item) === key);
+            const fresh = current.map((item, index) => ({item, index})).filter(value => selected[value.index] && !pairs.has(value.index) && identity(value.item) === key);
+            if (old.length === 1 && fresh.length === 1 && hasSpecificIdentity(old[0].item) && hasSpecificIdentity(fresh[0].item) && launchIdentity(old[0].item) === launchIdentity(fresh[0].item)) { pairs.set(fresh[0].index, old[0].index); used.add(old[0].index); }
+        }
+        const appKeys = new Set([...previous.map(appIdentity), ...current.filter((_, index) => selected[index]).map(appIdentity)]);
+        const removedItems = [], unresolvedItems = [];
+        for (const key of appKeys) {
+            const old = previous.map((item, index) => ({item, index})).filter(value => !used.has(value.index) && appIdentity(value.item) === key);
+            const fresh = current.map((item, index) => ({item, index})).filter(value => selected[value.index] && !pairs.has(value.index) && appIdentity(value.item) === key);
+            if (old.length === 1 && fresh.length === 1) {
+                const beforeProfile = profilePathKey(old[0].item.browser?.profilePath || old[0].item.browser?.profileName || "");
+                const afterProfile = profilePathKey(fresh[0].item.browser?.profilePath || fresh[0].item.browser?.profileName || "");
+                if ((beforeProfile && afterProfile && beforeProfile !== afterProfile) || launchIdentity(old[0].item) !== launchIdentity(fresh[0].item)) { removedItems.push(old[0].item); badges.set(fresh[0].index, "new"); }
+                else { badges.set(fresh[0].index, "review"); unresolvedItems.push(old[0].item); }
+            }
+            else if (!old.length) fresh.forEach(value => badges.set(value.index, "new"));
+            else if (!fresh.length) removedItems.push(...old.map(value => value.item));
+            else { fresh.forEach(value => badges.set(value.index, "review")); unresolvedItems.push(...old.map(value => value.item)); }
+        }
+        const comparable = item => ({
+            label:item.label || "", window:{title:item.window?.title || "",appId:item.window?.appId || "",desktopId:item.window?.desktopId || "",path:item.window?.path || "",className:item.window?.className || "",rect:item.window?.rect || null,workArea:item.window?.workArea || null,monitor:item.window?.monitor || 0,monitorName:item.window?.monitorName || "",maximizedHorizontal:!!item.window?.maximizedHorizontal,maximizedVertical:!!item.window?.maximizedVertical,fullscreen:!!item.window?.fullscreen,minimized:!!item.window?.minimized},
+            launch:{kind:item.launch?.kind || "executable",program:item.launch?.program || "",args:item.launch?.args || [],workingDirectory:item.launch?.workingDirectory || "",newWindow:!!item.launch?.newWindow},
+            browser:item.browser ? {kind:item.browser.kind || "firefox",profilePath:item.browser.profilePath || "",profileName:item.browser.profileName || "",tabs:item.browser.tabs || [],activeTab:item.browser.activeTab} : null,
+            terminal:item.terminal || null
+        });
+        for (const [index, oldIndex] of pairs) if (JSON.stringify(comparable(current[index])) !== JSON.stringify(comparable(previous[oldIndex]))) badges.set(index, "changed");
+        for (const kept of comparisonKept.values()) { const index = current.indexOf(kept); if (index >= 0) badges.delete(index); }
+        const isExcluded = old => current.some((item, index) => {
+            if (selected[index]) return false;
+            if (sameWindow(old, item)) return true;
+            return previous.filter(saved => identity(saved) === identity(old)).length === 1 && identity(item) === identity(old) && launchIdentity(item) === launchIdentity(old);
+        });
+        const missingItems = [...removedItems.filter(old => !comparisonKept.has(old) && !isExcluded(old)), ...unresolvedItems.filter(old => !comparisonKept.has(old) && !isExcluded(old))];
+        return {badges, removed:removedItems.length, missingItems};
+    }
+    function workspaceContents(profile, showPlacement = false) {
+        const content = document.createElement("div");
+        const items = profile?.items || [];
+        if (!items.length) { const note = document.createElement("p"); note.textContent = "No windows."; content.append(note); return content; }
+        const list = document.createElement("ul"); list.className = "workspace-contents-list";
+        for (const item of items) {
+            const row = document.createElement("li");
+            const label = document.createElement("strong"); label.textContent = item.label || item.window?.title || item.window?.appId || "Window";
+            row.append(label);
+            const parts = [];
+            if (item.window?.appId) parts.push(isBrowserItem(item) ? (item.browser?.kind === "chromium" || chromiumApp(item.window.appId) ? chromiumName(item.window.appId) : "Firefox") : item.window.appId.replace(/\.(?:exe|desktop)$/i, ""));
+            const monitor = savedMonitorLabel(item.window);
+            if (monitor) parts.push(monitor);
+            else if (showPlacement && item.window?.monitor) parts.push(`Monitor ${item.window.monitor}`);
+            if (showPlacement && item.window?.rect?.width && item.window?.rect?.height) parts.push(`${item.window.rect.width} × ${item.window.rect.height} at ${item.window.rect.x ?? 0}, ${item.window.rect.y ?? 0}`);
+            if (parts.length) { const meta = document.createElement("small"); meta.textContent = parts.join(" · "); row.append(meta); }
+            if (item.browser) {
+                const tabs = item.browser.tabs || [];
+                const description = document.createElement("small"); description.textContent = `${tabs.length} ${tabs.length === 1 ? "tab" : "tabs"}`; row.append(description);
+                if (tabs.length) {
+                    const urls = document.createElement("ul"); urls.className = "workspace-content-tabs";
+                    tabs.forEach((tab, index) => { const entry = document.createElement("li"); entry.textContent = `${index + 1 === item.browser.activeTab ? "Current: " : ""}${tab.title ? tab.title + " — " : ""}${tab.url}`; urls.append(entry); });
+                    row.append(urls);
+                }
+            }
+            if (showPlacement) {
+                const info = [];
+                if (item.launch?.program) info.push(`Launch: ${item.launch.program}`);
+                if (item.launch?.args?.length) info.push(`Arguments: ${item.launch.args.join(" · ")}`);
+                if (item.launch?.workingDirectory) info.push(`Working directory: ${item.launch.workingDirectory}`);
+                if (item.launch?.newWindow) info.push("Require a new window");
+                if (item.browser?.profileName || item.browser?.profilePath) info.push(`Browser profile: ${[item.browser.profileName, item.browser.profilePath].filter(Boolean).join(" · ")}`);
+                if (item.terminal) info.push(`Terminal: ${[item.terminal.kind, item.terminal.profileName, item.terminal.shell, item.terminal.workingDirectory].filter(Boolean).join(" · ")}`);
+                if (info.length) {
+                    const details = document.createElement("details"); details.className = "workspace-content-details";
+                    const summary = document.createElement("summary"); summary.textContent = "Launch and profile details"; details.append(summary);
+                    info.forEach(text => { const line = document.createElement("small"); line.textContent = text; details.append(line); });
+                    row.append(details);
+                }
+            }
+            list.append(row);
+        }
+        content.append(list);
+        return content;
+    }
+    function renderComparison() {
+        const comparison = select("#workspace-comparison");
+        comparison.hidden = !comparisonBase || !draft;
+        const summary = select("#workspace-change-summary");
+        summary.hidden = comparison.hidden;
+        const changes = comparison.hidden ? null : workspaceChanges();
+        const missing = select("#workspace-missing-windows"), missingList = select("#workspace-missing-list");
+        missing.hidden = !changes?.missingItems.length;
+        missingList.replaceChildren();
+        for (const item of changes?.missingItems || []) {
+            const row = document.createElement("div"); row.className = "workspace-removed-row";
+            const name = item.label || item.window?.title || item.window?.appId || "Window";
+            const details = workspaceContents({items:[item]}); details.className = "workspace-missing-details"; details.tabIndex = 0; details.setAttribute("aria-label", `Saved details for ${name}`);
+            const keep = document.createElement("button"); keep.type = "button"; keep.textContent = "Keep"; keep.setAttribute("aria-label", `Keep ${name} in workspace`);
+            keep.addEventListener("click", () => {
+                const copy = clone(item);
+                if (appendDraftWindow?.(copy)) {
+                    comparisonKept.set(item, copy);
+                    renderComparison();
+                    inlineStatus("#workspace-editor-status", "Saved window added to the draft.");
+                    select("#workspace-items").lastElementChild?.querySelector(".workspace-item-toggle")?.focus({preventScroll:true});
+                }
+            });
+            row.append(details, keep); missingList.append(row);
+        }
+        const badges = changes?.badges || new Map();
+        select("#workspace-items").querySelectorAll(".workspace-item").forEach((card, index) => {
+            const badge = card.querySelector(".workspace-change-badge"), kind = badges.get(index);
+            badge.hidden = !kind;
+            badge.textContent = {new:"New",changed:"Changed",review:"Review match"}[kind] || "";
+            badge.dataset.kind = kind || "";
+        });
+        if (comparison.hidden) return;
+        const count = kind => [...changes.badges.values()].filter(value => value === kind).length;
+        const parts = [[count("new"), "new"], [count("changed"), "changed"], [changes.removed, "removed"], [count("review"), "need matching review"]].filter(([number]) => number).map(([number, label]) => `${number} ${label}`);
+        if (select("#workspace-name").value.trim() !== comparisonBase.name) parts.push("Name changed");
+        if (select("#workspace-platform").value !== comparisonBase.platform) parts.push("Platform changed");
+        summary.textContent = parts.length ? parts.join(" · ") : "No changes yet";
+        if (!comparison.open) return;
+        const after = {...draft, name:select("#workspace-name").value, platform:select("#workspace-platform").value, items:draft.items.filter((_, index) => selected[index])};
+        for (const [side, profile] of [["before", comparisonBase], ["after", after]]) {
+            const container = select(`#workspace-comparison-${side}`);
+            let summary = container.querySelector(".workspace-comparison-summary");
+            if (!summary) { summary = document.createElement("p"); summary.className = "workspace-comparison-summary"; container.replaceChildren(summary); }
+            summary.textContent = `${profile.name || "Unnamed workspace"} · ${workspaceSummary(profile)}`;
+            const signature = `${displayRevision}:${JSON.stringify(profile.items)}`;
+            if (comparisonRendered[side] !== signature) {
+                container.replaceChildren(summary, workspaceContents(profile, true));
+                comparisonRendered[side] = signature;
+            }
+        }
+        select("#workspace-comparison-loading").hidden = ![...draftCaptures].some(job => job.profile === draft && job.items.some(isBrowserItem));
+    }
+    select("#workspace-comparison").addEventListener("toggle", renderComparison);
     function refreshBrowserGuide() {
         const items = draft?.items.filter(wantsTabs) || [];
         const disconnected = !!browserBridgeStatus && items.some(item =>
@@ -83,12 +394,13 @@
         select("#workspace-keep-draft").focus();
     }
     function controls() {
-        select("#workspaces-page").querySelectorAll("input, textarea, select, button").forEach(el => { el.disabled = working || !store; });
+        select("#workspaces-page").querySelectorAll("input, textarea, select, button").forEach(el => { el.disabled = working || !!el.closest('[data-deleting="true"]') || (!store && !el.closest("#saved-browsers")); });
         select("#workspace-list").querySelectorAll(".workspace-card").forEach(card => {
             if (pendingSavedTabRefreshes.has(card.dataset.workspaceId)) card.querySelectorAll("button").forEach(button => { button.disabled = true; });
         });
         select("#cancel-restore").disabled = false;
         select("#save-workspace").disabled = working || !store || !draft || !selected.some(Boolean);
+        select("#remove-all-workspace-windows").disabled = working || !store || !draft || !selected.some(Boolean);
         select("#workspace-hotkey-urls").disabled = working || !store?.profiles.length;
         select("#workspace-hotkey-update").disabled = working || !store?.profiles.length;
         select("#workspace-hotkey-target").disabled = working || !store?.profiles.length;
@@ -96,6 +408,7 @@
         const updateTabs = select("#refresh-workspace-tabs");
         updateTabs.hidden = !draft?.items.some(isBrowserItem);
         updateTabs.disabled = working || !store || !draft?.items.some(wantsTabs);
+        selectionUI();
     }
     async function perform(action, reportError = error => say(String(error), true)) {
         if (working) return;
@@ -103,6 +416,7 @@
         try { await action(); } catch (error) { reportError(error); }
         finally {
             working = false; controls();
+            const focus = pendingSurfaceFocus; pendingSurfaceFocus = null; focus?.();
             if (saveAfterCapture && draft && ![...draftCaptures].some(job => job.profile === draft)) {
                 saveAfterCapture = false;
                 saveWorkspace();
@@ -194,7 +508,7 @@
         store = result.store;
         render();
         const message = tabUpdateMessage(result.updated, result.unmatched, source?.name, result.failure);
-        savedTabStatus(profile.id, message, !result.updated);
+        savedTabStatus(profile.id, result.updated ? `Saved: ${message}` : message, !result.updated);
     }
     function refreshSavedTabs(profile) {
         const run = async action => {
@@ -217,14 +531,47 @@
         });
     }
     function render() {
+        const available = new Set(store.profiles.map(profile => profile.id));
+        const count = selectedWorkspaces.size;
+        for (const id of selectedWorkspaces) if (!available.has(id)) selectedWorkspaces.delete(id);
+        if (selectedWorkspaces.size !== count) selectionChangedDuringRefresh();
+        const focused = document.activeElement;
+        const focusSelector = focused?.classList.contains("workspace-preview-toggle") ? ".workspace-preview-toggle"
+            : focused?.classList.contains("workspace-bulk-checkbox") ? ".workspace-bulk-checkbox"
+            : focused?.classList.contains("workspace-preview-content") ? ".workspace-preview-content" : null;
+        const focusId = focusSelector ? focused.closest(".workspace-card")?.dataset.workspaceId : null;
+        const focusScroll = focused?.scrollTop || 0;
         select("#workspace-list").replaceChildren();
         select("#workspace-empty").hidden = store.profiles.length > 0;
         store.profiles.forEach((profile, index) => {
             const fragment = select("#workspace-card-template").content.cloneNode(true);
             const card = fragment.querySelector("article");
             card.dataset.workspaceId = profile.id;
+            const checkbox = card.querySelector(".workspace-bulk-checkbox");
+            checkbox.setAttribute("aria-label", `Select workspace ${profile.name}`);
+            checkbox.addEventListener("change", () => window.WarpWorkspaceSelection.set("workspace", profile.id, checkbox.checked));
+            card.querySelector('[data-action="edit"]').setAttribute("aria-label", `Edit workspace ${profile.name}`);
+            card.querySelector('[data-action="delete"]').setAttribute("aria-label", `Delete workspace ${profile.name}`);
             card.querySelector(".workspace-title").textContent = profile.name;
-            card.querySelector(".workspace-summary-text").textContent = `${profile.items.length} ${profile.items.length === 1 ? "window" : "windows"} · ${profile.platform === "windows" ? "Windows" : "Linux / KDE"}`;
+            card.querySelector(".workspace-summary-text").textContent = workspaceSummary(profile);
+            const preview = card.querySelector(".workspace-preview");
+            const previewContent = card.querySelector(".workspace-preview-content");
+            const toggle = card.querySelector(".workspace-preview-toggle");
+            preview.id = `workspace-preview-${index}`;
+            previewContent.setAttribute("role", "region"); previewContent.setAttribute("aria-label", `Windows in ${profile.name}`); previewContent.tabIndex = 0;
+            toggle.setAttribute("aria-controls", preview.id);
+            const expanded = expandedWorkspaces.has(profile.id);
+            preview.hidden = !expanded;
+            if (expanded) previewContent.append(workspaceContents(profile));
+            toggle.setAttribute("aria-expanded", String(expanded));
+            toggle.addEventListener("click", () => {
+                if (selectingWorkspaceItems) { if (!checkbox.disabled) window.WarpWorkspaceSelection.set("workspace", profile.id, !checkbox.checked); return; }
+                const open = preview.hidden;
+                preview.hidden = !open;
+                toggle.setAttribute("aria-expanded", String(open));
+                if (open) { previewContent.replaceChildren(workspaceContents(profile)); expandedWorkspaces.add(profile.id); }
+                else { previewContent.replaceChildren(); expandedWorkspaces.delete(profile.id); }
+            });
             card.querySelector('[data-action="refresh-tabs"]').hidden = !profile.items.some(isBrowserItem);
             if (pendingSavedTabRefreshes.has(profile.id)) {
                 card.querySelectorAll("button").forEach(button => { button.disabled = true; });
@@ -234,7 +581,11 @@
             card.querySelectorAll("[data-action]").forEach(button => button.addEventListener("click", () => {
                 const action = button.dataset.action;
                 if (button.closest(".menu")) button.closest(".menu").hidden = true;
-                if (action === "delete" || action === "cancel-delete") { card.querySelector(".workspace-delete-confirm").hidden = action !== "delete"; return; }
+                if (action === "delete" || action === "cancel-delete") {
+                    card.querySelector(".workspace-delete-confirm").hidden = action !== "delete";
+                    card.querySelector(action === "delete" ? '[data-action="cancel-delete"]' : '[data-action="delete"]').focus();
+                    return;
+                }
                 if (action === "edit") { replaceDraft(() => { currentCapture = null; openDraft(clone(profile), profile.id); }); return; }
                 if (action === "update") { capture(profile.id); return; }
                 if (action === "restore") { restore(profile, card); return; }
@@ -266,6 +617,11 @@
             select("#workspace-list").append(fragment);
         });
         markWorkspaceLocations();
+        selectionUI();
+        if (focusId) {
+            const target = savedWorkspaceCard(focusId)?.querySelector(focusSelector);
+            if (target) { target.scrollTop = focusScroll; target.focus({preventScroll:true}); }
+        }
     }
     async function refreshPendingWorkspaceStore() {
         if (browserUpdatePending) {
@@ -279,10 +635,69 @@
             }
         }
     }
+    select("#select-workspace-items").addEventListener("click", () => {
+        if (selectingWorkspaceItems) { clearWorkspaceSelection(); return; }
+        if (draft || working || !store) return;
+        selectingWorkspaceItems = true;
+        selectionUI();
+    });
+    select("#select-all-workspace-items").addEventListener("click", () => {
+        const workspaceIds = store.profiles.map(profile => profile.id);
+        const all = workspaceIds.length + availableBrowsers.size;
+        const clear = all && selectedWorkspaces.size + selectedBrowsers.size === all;
+        selectedWorkspaces.clear(); selectedBrowsers.clear();
+        if (!clear) { workspaceIds.forEach(id => selectedWorkspaces.add(id)); availableBrowsers.forEach(id => selectedBrowsers.add(id)); }
+        select("#confirm-delete-workspace-items").hidden = true;
+        selectionUI();
+    });
+    select("#delete-selected-workspace-items").addEventListener("click", () => {
+        const pieces = [];
+        if (selectedWorkspaces.size) pieces.push(`${selectedWorkspaces.size} ${selectedWorkspaces.size === 1 ? "workspace" : "workspaces"}`);
+        if (selectedBrowsers.size) pieces.push(`${selectedBrowsers.size} saved ${selectedBrowsers.size === 1 ? "browser" : "browsers"}`);
+        if (!pieces.length) return;
+        select("#confirm-delete-workspace-text").textContent = `Delete ${pieces.join(" and ")}? Open windows will stay open.`;
+        select("#confirm-delete-workspace-items").hidden = false;
+        select("#cancel-delete-workspace-items").focus();
+    });
+    select("#cancel-delete-workspace-items").addEventListener("click", () => { select("#confirm-delete-workspace-items").hidden = true; select("#delete-selected-workspace-items").focus(); });
+    select("#confirm-delete-workspace-button").addEventListener("click", () => {
+        const workspaces = [...selectedWorkspaces], browsers = [...selectedBrowsers];
+        if (!workspaces.length && !browsers.length) return;
+        perform(async () => {
+            let deletedWorkspaces = 0, deletedBrowsers = 0;
+            if (workspaces.length) {
+                await Promise.all([...pendingSavedTabRefreshes.values()]);
+                if (browserUpdatePending) await refreshPendingWorkspaceStore();
+                store = await native.core.invoke("get_workspaces");
+                const next = clone(store);
+                next.profiles = next.profiles.filter(profile => !workspaces.includes(profile.id));
+                deletedWorkspaces = store.profiles.length - next.profiles.length;
+                if (deletedWorkspaces) await persist(next);
+                workspaces.forEach(id => selectedWorkspaces.delete(id));
+            }
+            const failures = [];
+            for (const id of browsers) {
+                try { await native.core.invoke("delete_saved_browser", {id}); selectedBrowsers.delete(id); deletedBrowsers++; }
+                catch (error) { failures.push(errorText(error)); }
+            }
+            if (browsers.length) window.dispatchEvent(new window.Event("warp-saved-browsers-updated"));
+            select("#confirm-delete-workspace-items").hidden = true;
+            const result = `${deletedWorkspaces} ${deletedWorkspaces === 1 ? "workspace" : "workspaces"} and ${deletedBrowsers} saved ${deletedBrowsers === 1 ? "browser" : "browsers"} deleted.`;
+            if (failures.length) inlineStatus("#workspace-status", `${result} ${failures.length} could not be deleted: ${failures[0]}`, true);
+            else { clearWorkspaceSelection(); inlineStatus("#workspace-status", result); }
+            selectionUI();
+        }, error => { select("#confirm-delete-workspace-items").hidden = true; inlineStatus("#workspace-status", errorText(error), true); }).then(() => {
+            focusWhenReady(() => {
+                const target = selectingWorkspaceItems && (selectedWorkspaces.size || selectedBrowsers.size)
+                    ? select("#delete-selected-workspace-items") : select("#select-workspace-items");
+                (target.disabled ? select("#capture-workspace") : target).focus({preventScroll:true});
+            });
+        });
+    });
     async function useRecapture(capture) {
         await refreshPendingWorkspaceStore();
         openDraft(capture.profile);
-        select("#workspace-name").focus(); select("#workspace-name").select?.();
+        focusWhenReady(() => { if (workspaceSurface === "editor") { select("#workspace-name").focus(); select("#workspace-name").select?.(); } });
     }
     function keepKnownBrowserTabs(profile, previous) {
         if (!previous) return;
@@ -296,6 +711,7 @@
         draftCaptures.add(job);
         select("#workspace-tabs-loading").hidden = ![...draftCaptures].some(pending => pending.profile === profile && pending.items.some(isBrowserItem));
         refreshBrowserGuide();
+        renderComparison();
         return job;
     }
     function markCapturedBrowserEdited(item) {
@@ -317,6 +733,7 @@
         const remaining = [...draftCaptures].some(pending => pending.profile === draft);
         select("#workspace-tabs-loading").hidden = ![...draftCaptures].some(pending => pending.profile === draft && pending.items.some(isBrowserItem));
         refreshBrowserGuide();
+        renderComparison();
         const failed = !!error || missing;
         if (failed) {
             const message = error
@@ -333,6 +750,7 @@
         }
     }
     function openDraft(profile, id = "", replaceSaved = false) {
+        if (selectingWorkspaceItems) clearWorkspaceSelection();
         closeWindowList();
         draftCaptures.clear(); saveAfterCapture = false;
         select("#workspace-tabs-loading").hidden = true;
@@ -348,18 +766,29 @@
         inlineStatus("#workspace-editor-status", "");
         inlineStatus("#workspace-save-status", "");
         draft = profile; editingId = id; selected = profile.items.map(() => true); ignoredBrowserTabs = new Set();
+        comparisonBase = replaceSaved && id ? clone(store.profiles.find(saved => saved.id === id) || null) : null;
+        comparisonRendered = {before:null, after:null};
+        comparisonKept = new Map();
+        select("#workspace-comparison").open = false;
+        select("#workspace-comparison-before").replaceChildren();
+        select("#workspace-comparison-after").replaceChildren();
+        draftSelectionSetters = []; draftMonitorSetters = [];
+        select("#workspace-removed-items").replaceChildren();
+        select("#workspace-removed").hidden = true;
+        select("#workspace-removed").open = false;
         browserSetters = []; browserMissingSetters = [];
         inlineStatus("#workspace-tabs-status", "");
-        select("#workspace-editor").hidden = false;
+        displayWorkspaceSurface("editor");
         select("#workspace-editor-title").textContent = id ? `Edit “${store.profiles.find(p => p.id === id)?.name || profile.name}”` : "New workspace";
         select(".workspace-options").removeAttribute("open");
         select("#workspace-name").value = profile.name;
         select("#workspace-platform").value = profile.platform;
         select("#workspace-items").replaceChildren();
         select("#workspace-items-empty").hidden = profile.items.length > 0;
-        const monitors = native.core.invoke("get_import_monitors").catch(() => null);
+        refreshDisplayContext();
         const renderItem = (item, index) => {
             const fragment = select("#workspace-item-template").content.cloneNode(true);
+            const itemCard = fragment.querySelector(".workspace-item");
             fragment.querySelector(".window-title").textContent = item.label || item.window.title;
             const windowOptions = fragment.querySelector(".workspace-window-options");
             const windowToggle = fragment.querySelector(".workspace-item-toggle");
@@ -375,39 +804,56 @@
             const monitorFallback = fragment.querySelector(".monitor-number");
             const fallbackLabel = fragment.querySelector(".window-placement-fallback");
             const windowName = item.label || item.window.title || "window";
+            // Native restore accepts a stable Windows display ID or a KWin output name.
+            // Plasma 5 exposes numeric output names, which can change after reconnecting.
+            const monitorIdentity = monitor => monitor ? (monitor.stable && monitor.id || monitor.sourceId || "") : "";
             placement.setAttribute("aria-label", `Monitor for ${windowName}`);
             monitorFallback.setAttribute("aria-label", `Monitor number for ${windowName}`);
             const showMonitor = () => {
-                const value = String(item.window.monitor);
+                const resolved = lookupSavedMonitor(item.window);
+                const value = resolved.unavailable ? "unavailable" : String(resolved.monitor?.index || item.window.monitor);
                 if (![...placement.options].some(option => option.value === value)) {
-                    const option = document.createElement("option"); option.value = value; option.textContent = `Monitor ${value} (unavailable)`; placement.append(option);
+                    const option = document.createElement("option"); option.value = value; option.textContent = value === "unavailable" ? "Display unavailable" : `Monitor ${value} (unavailable)`; placement.append(option);
                 }
                 placement.value = value;
-                monitorFallback.value = value;
+                monitorFallback.value = String(item.window.monitor);
             };
             const changeMonitor = value => {
                 const number = Number(value);
                 if (!Number.isInteger(number) || number < 1 || number > 100) { showMonitor(); return; }
-                if (item.window.monitor !== number) { item.window.monitor = number; item.window.monitorName = ""; }
+                const target = displayContext.monitors.find(monitor => monitor.index === number);
+                item.window.monitor = number;
+                item.window.monitorName = monitorIdentity(target);
                 showMonitor();
             };
             placement.addEventListener("change", () => changeMonitor(placement.value));
             monitorFallback.addEventListener("change", () => changeMonitor(monitorFallback.value));
             showMonitor();
-            monitors.then(areas => {
+            const updateMonitorChoices = () => {
                 if (draft !== profile) return;
-                if (!Array.isArray(areas) || !areas.length) { placement.hidden = true; fallbackLabel.hidden = false; return; }
+                const options = displayContext.monitors.length ? displayContext.monitors : displayContext.areas;
+                if (!options?.length) { placement.hidden = true; fallbackLabel.hidden = false; return; }
+                placement.hidden = false; fallbackLabel.hidden = true;
                 placement.replaceChildren();
-                areas.slice(0, 100).forEach((area, number) => { const option = document.createElement("option"); option.value = String(number + 1); option.textContent = `Monitor ${number + 1}`; placement.append(option); });
+                options.slice(0, 100).forEach((monitor, number) => {
+                    const index = monitor.index || number + 1;
+                    const option = document.createElement("option"); option.value = String(index);
+                    option.textContent = monitorLabel(displayContext.monitors.find(current => current.index === index)) || `Monitor ${index}`;
+                    placement.append(option);
+                });
                 showMonitor();
-            });
+            };
+            draftMonitorSetters[index] = updateMonitorChoices;
+            updateMonitorChoices();
             fragment.querySelector(".set-position").addEventListener("click", () => perform(async () => {
                 const result = await native.core.invoke("choose_position", {rect:clone(item.window.rect)});
                 if (!result) return;
+                await refreshDisplayContext();
                 Object.assign(item.window.rect, result.rect);
                 Object.assign(item.window.workArea ||= {}, result.workArea);
                 item.window.monitor = result.monitor;
-                item.window.monitorName = "";
+                const target = displayContext.monitors.find(monitor => ["x", "y", "width", "height"].every(key => monitor.geometry?.[key] === result.workArea[key]));
+                item.window.monitorName = monitorIdentity(target);
                 item.window.maximizedHorizontal = false;
                 item.window.maximizedVertical = false;
                 item.window.fullscreen = false;
@@ -415,6 +861,7 @@
                 rectInputs.forEach(input => { input.value = result.rect[input.dataset.rect]; });
                 areaInputs.forEach(input => { input.value = result.workArea[input.dataset.area]; });
                 showMonitor();
+                renderComparison();
             }));
             fragment.querySelectorAll("[data-window], [data-rect], [data-area]").forEach(input => {
                 const field = input.dataset.window || input.dataset.rect || input.dataset.area;
@@ -490,7 +937,7 @@
                     item.browser = browser; restoreBrowser.checked = true; ignoredBrowserTabs.delete(index);
                     tabsInput.value = browser.tabs.map(tab => tab.url).join("\n"); activeInput.value = browser.activeTab;
                     item.captureNote = ""; note.textContent = ""; note.hidden = true;
-                    reviewTabs.hidden = true; refreshBrowserGuide(); showTabCount();
+                    reviewTabs.hidden = true; refreshBrowserGuide(); showTabCount(); renderComparison();
                     return true;
                 };
                 browserSetters[index] = applyCurrentTabs;
@@ -544,7 +991,7 @@
                     activeInput.value = browser.activeTab;
                     item.captureNote = "";
                     note.textContent = ""; note.hidden = true;
-                    reviewTabs.hidden = true; refreshBrowserGuide();
+                    reviewTabs.hidden = true; refreshBrowserGuide(); renderComparison();
                     window.WarpErrorTimer.set(sessionStatus, "Tabs added to this draft. Review them before saving.");
                 });
                 native.core.invoke("browser_profiles", {browser:firefox ? "firefox" : "chromium"}).then(profiles => {
@@ -594,6 +1041,26 @@
             }
             const include = fragment.querySelector(".include-window");
             include.checked = selected[index];
+            const remove = fragment.querySelector(".remove-workspace-window");
+            remove.setAttribute("aria-label", `Remove ${windowName} from workspace`);
+            const removedRow = document.createElement("div"); removedRow.className = "workspace-removed-row"; removedRow.hidden = true;
+            const removedName = document.createElement("span"); removedName.textContent = windowName;
+            const undo = document.createElement("button"); undo.type = "button"; undo.textContent = "Undo";
+            undo.setAttribute("aria-label", `Restore ${windowName} to workspace`);
+            removedRow.append(removedName, undo); select("#workspace-removed-items").append(removedRow);
+            const setSelected = value => {
+                if (value && !selected[index] && selected.filter(Boolean).length >= 100) {
+                    include.checked = false;
+                    inlineStatus("#workspace-editor-status", "A workspace can contain up to 100 windows.", true);
+                    return false;
+                }
+                selected[index] = value; include.checked = value; itemCard.hidden = !value; removedRow.hidden = value;
+                return true;
+            };
+            draftSelectionSetters[index] = setSelected;
+            const changed = () => { count(); refreshBrowserGuide(); controls(); };
+            remove.addEventListener("click", () => { setSelected(false); changed(); select("#workspace-removed").open = true; undo.focus(); });
+            undo.addEventListener("click", () => { if (setSelected(true)) { changed(); remove.focus(); } });
             if (item.terminal) {
                 const terminal = item.terminal;
                 fragment.querySelector(".terminal-settings").hidden = false;
@@ -619,7 +1086,7 @@
                     });
                 });
             }
-            include.addEventListener("change", () => { selected[index] = include.checked; count(); refreshBrowserGuide(); controls(); });
+            include.addEventListener("change", () => { setSelected(include.checked); changed(); });
             item.launch.kind ||= "executable";
             const launchTargetLabel = fragment.querySelector(".launch-target-label");
             const launchArgsLabel = fragment.querySelector(".launch-args-label");
@@ -640,21 +1107,24 @@
                     if (field === "kind") launchFields();
                 });
             });
+            fragment.querySelectorAll("input, textarea, select").forEach(input => {
+                input.addEventListener("input", renderComparison);
+                input.addEventListener("change", renderComparison);
+            });
             select("#workspace-items").append(fragment);
         };
         profile.items.forEach(renderItem);
         appendDraftWindow = item => {
             if (draft !== profile) return false;
-            const existing = profile.items.findIndex(saved => item.window.id && saved.window.id === item.window.id && saved.window.pid === item.window.pid);
+            const existing = profile.items.findIndex(saved => samePhysicalWindow(saved, item));
             if (existing >= 0) {
-                selected[existing] = true;
-                const input = select("#workspace-items").querySelectorAll(".include-window")[existing];
-                if (input) input.checked = true;
-                inlineStatus("#workspace-editor-status", "That window is already in this workspace.");
-                count(); controls();
+                const wasSelected = selected[existing];
+                if (!draftSelectionSetters[existing](true)) return false;
+                inlineStatus("#workspace-editor-status", wasSelected ? "That window is already in this workspace." : "Window added back to this workspace.");
+                count(); refreshBrowserGuide(); controls();
                 return false;
             }
-            if (profile.items.length >= 100) { inlineStatus("#workspace-editor-status", "A workspace can contain up to 100 windows.", true); return false; }
+            if (selected.filter(Boolean).length >= 100) { inlineStatus("#workspace-editor-status", "A workspace can contain up to 100 windows.", true); return false; }
             profile.items.push(item); selected.push(true);
             renderItem(item, profile.items.length - 1);
             select("#workspace-items-empty").hidden = true;
@@ -664,8 +1134,44 @@
         };
         count(); refreshBrowserGuide(); controls(); refreshBridgeStatus();
         select("#workspace-editor").scrollIntoView?.({block:"start"});
+        focusWhenReady(() => { if (draft === profile && workspaceSurface === "editor") select("#workspace-name").focus(); });
     }
-    function count() { const count = selected.filter(Boolean).length; select("#workspace-item-count").textContent = `${count} ${count === 1 ? "window" : "windows"} selected`; }
+    function count() {
+        const total = selected.filter(Boolean).length;
+        const removed = selected.length - total;
+        select("#workspace-item-count").textContent = `${total} ${total === 1 ? "window" : "windows"} selected`;
+        select("#workspace-removed").hidden = !removed;
+        select("#workspace-removed-heading").textContent = `Removed windows (${removed})`;
+        const empty = select("#workspace-items-empty");
+        empty.hidden = !!total;
+        empty.textContent = selected.length ? "All windows were removed. Add a window or restore one below." : "No windows were captured. Open the windows you want, then capture again.";
+        renderComparison();
+    }
+    select("#remove-all-workspace-windows").addEventListener("click", () => {
+        draftSelectionSetters.forEach(set => set(false));
+        count(); refreshBrowserGuide(); controls();
+        select("#workspace-removed").open = true;
+        select("#restore-all-workspace-windows").focus();
+    });
+    select("#restore-all-workspace-windows").addEventListener("click", () => {
+        draftSelectionSetters.forEach(set => set(true));
+        count(); refreshBrowserGuide(); controls();
+        (selected.every(Boolean) ? select("#remove-all-workspace-windows") : select("#restore-all-workspace-windows")).focus();
+    });
+    select("#workspace-name").addEventListener("input", renderComparison);
+    select("#workspace-platform").addEventListener("change", renderComparison);
+    select("#workspace-back-to-library").addEventListener("click", () => {
+        if (workspaceSurface === "choice") { pendingCapture = null; currentCapture = null; }
+        const cancel = pendingDraftCancel;
+        select("#workspace-recapture").hidden = true; select("#workspace-capture-pending").hidden = true; pendingDraftAction = null; pendingDraftCancel = null; cancel?.();
+        displayWorkspaceSurface("library");
+        (draft ? select("#workspace-resume-draft") : select("#capture-workspace")).focus({preventScroll:true});
+    });
+    select("#workspace-resume-draft").addEventListener("click", () => {
+        if (!draft) return;
+        displayWorkspaceSurface("editor");
+        select("#workspace-name").focus({preventScroll:true});
+    });
     function tabFailureMessage(failure) {
         if (failure === "extensionDidNotRespond") return "The browser extension didn't respond. Open it in the profile for this window, then try again. Saved URLs were kept.";
         return "The connected extension couldn't identify this window. Check that it's connected in the same browser profile. Saved URLs were kept.";
@@ -720,7 +1226,7 @@
             if (mode === "update") keepKnownBrowserTabs(profile, target);
             openDraft(profile, mode === "new" ? "" : target.id, mode !== "new");
             currentCapture.draftJob = beginDraftCapture(profile, currentCapture.id);
-            if (focus) select("#workspace-name").focus();
+            if (focus) focusWhenReady(() => { if (workspaceSurface === "editor") select("#workspace-name").focus(); });
             return;
         }
         const profile = clone(mode === "urls" ? target : capture.profile);
@@ -734,7 +1240,7 @@
             pendingTabRefresh = true;
             if (!working) { pendingTabRefresh = false; refreshDraftTabs(); }
         }
-        if (focus) select("#workspace-name").focus();
+        if (focus) focusWhenReady(() => { if (workspaceSurface === "editor") select("#workspace-name").focus(); });
     }
     select("#workspace-hotkey-new").addEventListener("click", () => finishHotkeyChoice("new"));
     select("#workspace-hotkey-urls").addEventListener("click", () => finishHotkeyChoice("urls"));
@@ -796,8 +1302,8 @@
     };
     windowList.addEventListener("keydown", dismissWindowList);
     windowListButton.addEventListener("keydown", dismissWindowList);
-    select("#workspace-hotkey-cancel").addEventListener("click", () => { pendingCapture = null; currentCapture = null; select("#workspace-hotkey-choice").hidden = true; });
-    select("#workspace-capture-cancel").addEventListener("click", () => { pendingCapture = null; currentCapture = null; select("#workspace-capture-pending").hidden = true; });
+    select("#workspace-hotkey-cancel").addEventListener("click", () => { pendingCapture = null; currentCapture = null; displayWorkspaceSurface("library"); select("#capture-workspace").focus({preventScroll:true}); });
+    select("#workspace-capture-cancel").addEventListener("click", () => { pendingCapture = null; currentCapture = null; select("#workspace-capture-pending").hidden = true; displayWorkspaceSurface(draft ? "editor" : "library"); });
     function capture(id = "", confirmed = false) {
         if (draft && !confirmed) { replaceDraft(() => capture(id, true)); return; }
         currentCapture = null;
@@ -814,7 +1320,7 @@
             native.core.invoke("enrich_workspace_capture", {profile:clone(draft)})
                 .then(profile => finishDraftCapture(job, profile), error => finishDraftCapture(job, null, error));
             inlineStatus("#workspace-status", "");
-            if (!id) { select("#workspace-name").focus(); select("#workspace-name").select?.(); }
+            if (!id) focusWhenReady(() => { if (workspaceSurface === "editor") { select("#workspace-name").focus(); select("#workspace-name").select?.(); } });
         }, error => inlineStatus("#workspace-status", String(error), true));
     }
     function chooseWorkspaceDesktop(profile, card, locations) {
@@ -880,6 +1386,7 @@
             inlineStatus("#workspace-save-status", "Saving when URLs finish loading…");
             return;
         }
+        let savedId = null;
         perform(async () => {
             const draftChanged = () => editingId && (browserUpdateUnknown || browserUpdatedIds.has(editingId));
             if (browserUpdatePending && draftChanged()) throw new Error("Browser URLs changed while this draft was open. Cancel and reopen the workspace to avoid overwriting them.");
@@ -903,10 +1410,13 @@
             draft = null;
             pendingDraftAction = null;
             select("#workspace-recapture").hidden = true;
-            select("#workspace-editor").hidden = true;
+            displayWorkspaceSurface("library");
+            savedId = profile.id;
             const savedCard = [...select("#workspace-list").querySelectorAll(".workspace-card")].find(card => card.dataset.workspaceId === profile.id);
             if (savedCard) { const status = savedCard.querySelector(".workspace-card-status"); status.hidden = false; status.textContent = "Saved."; }
-        }, error => inlineStatus("#workspace-save-status", String(error), true));
+        }, error => inlineStatus("#workspace-save-status", String(error), true)).then(() => {
+            if (savedId) focusWhenReady(() => (savedWorkspaceCard(savedId)?.querySelector(".workspace-preview-toggle") || select("#capture-workspace")).focus());
+        });
     }
     select("#save-workspace").addEventListener("click", () => {
         if (replacingSaved && editingId) {
@@ -919,7 +1429,7 @@
     });
     select("#workspace-replace-cancel").addEventListener("click", () => { select("#workspace-replace-saved").hidden = true; });
     select("#workspace-replace-confirm").addEventListener("click", () => { select("#workspace-replace-saved").hidden = true; saveWorkspace(); });
-    select("#discard-workspace").addEventListener("click", () => { draft = null; draftCaptures.clear(); saveAfterCapture = false; currentCapture = null; pendingCapture = null; pendingDraftAction = null; select("#workspace-tabs-loading").hidden = true; select("#workspace-recapture").hidden = true; select("#workspace-editor").hidden = true; controls(); refreshBrowserUpdate(); });
+    select("#discard-workspace").addEventListener("click", () => { draft = null; draftCaptures.clear(); saveAfterCapture = false; currentCapture = null; pendingCapture = null; pendingDraftAction = null; select("#workspace-tabs-loading").hidden = true; select("#workspace-recapture").hidden = true; displayWorkspaceSurface("library"); controls(); refreshBrowserUpdate(); select("#capture-workspace").focus({preventScroll:true}); });
     select("#workspace-keep-draft").addEventListener("click", () => { const cancel = pendingDraftCancel; pendingDraftAction = null; pendingDraftCancel = null; select("#workspace-recapture").hidden = true; cancel?.(); });
     select("#workspace-recapture-confirm").addEventListener("click", () => {
         const action = pendingDraftAction;
@@ -964,8 +1474,9 @@
         if (store.profiles.some(p => p.id === pendingCapture.suggestedId)) picker.value = pendingCapture.suggestedId;
         else if (store.profiles.length === 1) picker.value = store.profiles[0].id;
         inlineStatus("#workspace-hotkey-status", "");
-        select("#workspace-hotkey-choice").hidden = false;
+        displayWorkspaceSurface("choice");
         select("#workspace-hotkey-choice").scrollIntoView?.({block:"start"});
+        focusWhenReady(() => { if (workspaceSurface === "choice") select("#workspace-hotkey-new").focus({preventScroll:true}); });
     }
     function receiveWorkspaceRequest(request) {
         showPage("workspaces");
@@ -1041,8 +1552,8 @@
         });
     }
     window.addEventListener("warp-workspace-request", event => receiveWorkspaceRequest(event.detail));
-    window.addEventListener("focus", () => { if (!select("#workspaces-page").hidden) refreshWorkspaceLocations(); });
-    window.addEventListener("warp-desktop-changed", () => { if (!select("#workspaces-page").hidden) refreshWorkspaceLocations(); });
+    window.addEventListener("focus", () => { if (!select("#workspaces-page").hidden) { refreshWorkspaceLocations(); refreshDisplayContext(); } });
+    window.addEventListener("warp-desktop-changed", () => { if (!select("#workspaces-page").hidden) { refreshWorkspaceLocations(); refreshDisplayContext(); } });
     window.addEventListener("warp-browser-updated", event => {
         browserUpdateSequence++;
         browserUpdatePending = true;
@@ -1057,6 +1568,7 @@
     select("#show-workspaces").addEventListener("click", async () => {
         showPage("workspaces");
         refreshWorkspaceLocations();
+        refreshDisplayContext();
         const before = bridgeBeforeSettings;
         bridgeBeforeSettings = null;
         if (native) {

@@ -25,7 +25,17 @@ async function fixture(workspaces=[defaultWorkspace], options={}) {
             return {profile:structuredClone(saved.profiles[0]),refreshed:true};
         }
         if(command==="restore_saved_browser") return [{restored:true}];
-        if(command==="delete_saved_browser") {saved.profiles=[];return structuredClone(saved);}
+        if(command==="delete_saved_browser") {
+            if(options.deleteGate) await options.deleteGate;
+            if(options.deleteError) throw new Error(options.deleteError);
+            saved.profiles=[];return structuredClone(saved);
+        }
+        if(command==="edit_saved_browser") {
+            if (options.editError) throw new Error(options.editError);
+            if (JSON.stringify(args.expected) !== JSON.stringify(saved.profiles[0])) throw new Error("This saved browser changed. Reopen it to keep the latest tabs.");
+            saved.profiles[0].name=args.name; saved.profiles[0].items[0].browser.tabs=structuredClone(args.tabs); saved.profiles[0].items[0].browser.activeTab=args.activeTab;
+            return structuredClone(saved);
+        }
         if(command==="add_saved_browser_to_workspace") {
             if(options.addGate) await options.addGate;
             if(options.addError) throw new Error(options.addError);
@@ -37,8 +47,23 @@ async function fixture(workspaces=[defaultWorkspace], options={}) {
     document.querySelector("#show-workspaces").click(); await tick();
     const click=async label=>{const element=[...document.querySelectorAll("#saved-browser-list button")].find(button=>button.textContent===label);assert.ok(element,`Missing ${label}`);element.click();await tick();await tick();};
     const press=async selector=>{const element=document.querySelector(selector);assert.ok(element,`Missing ${selector}`);element.click();await tick();await tick();};
-    return {window,document,calls,click,press};
+    return {window,document,calls,click,press,replaceSaved:value=>{saved=structuredClone(value);}};
 }
+
+test("saved browsers expand to show tabs and remain expanded after a live refresh",async()=>{
+    const e=await fixture();
+    assert.equal(e.document.querySelector(".saved-browser-preview").hidden,true);
+    await e.press(".saved-browser-description");
+    assert.equal(e.document.querySelector(".saved-browser-description").getAttribute("aria-expanded"),"true");
+    assert.match(e.document.querySelector(".saved-browser-preview").textContent,/https:\/\/new\.test\//);
+    assert.equal(e.calls.some(call=>["restore_saved_browser","add_saved_browser_to_workspace"].includes(call.command)),false);
+    e.replaceSaved({version:1,profiles:[{id:"saved",name:"Research tabs",platform:"windows",items:[item("Research Chrome","chromium","https://changed.test/")]}]});
+    e.window.dispatchEvent(new e.window.Event("warp-saved-browsers-updated")); await tick(); await tick();
+    assert.equal(e.document.querySelector(".saved-browser-preview").hidden,false);
+    assert.match(e.document.querySelector(".saved-browser-preview").textContent,/https:\/\/changed\.test\//);
+    await e.press(".saved-browser-description");
+    assert.equal(e.document.querySelector(".saved-browser-preview").hidden,true);
+});
 
 test("a single workspace opens a browser-and-URLs chooser before adding",async()=>{
     const e=await fixture();
@@ -182,10 +207,10 @@ test("the workspace list can be dismissed with Escape",async()=>{
 
 test("a slow workspace lookup cannot replace a different open menu",async()=>{
     let release; const workspaces=new Promise(resolve=>{release=resolve;});
-    const e=await fixture(workspaces); await e.click("Add to workspace"); await e.click("···");
+    const e=await fixture(workspaces); await e.click("Add to workspace"); await e.press('[data-action="delete"]');
     release([defaultWorkspace]); await tick(); await tick();
-    assert.equal(e.document.querySelector('[data-action="more"]').getAttribute("aria-expanded"),"true");
-    assert.equal(e.document.querySelector(".saved-browser-popover button").textContent,"Delete");
+    assert.equal(e.document.querySelector(".saved-browser-delete-confirm").hidden,false);
+    assert.equal(e.document.querySelector(".saved-browser-popover").hidden,true);
     assert.equal(e.calls.some(call=>call.command==="add_saved_browser_to_workspace"),false);
 });
 
@@ -213,9 +238,76 @@ test("when there are no workspaces, the browser offers to create one",async()=>{
 });
 
 test("deleting a saved browser requires an explicit confirmation",async()=>{
-    const e=await fixture(); await e.click("···"); await e.click("Delete");
+    const e=await fixture(); await e.press('[data-action="delete"]');
     assert.equal(e.calls.some(call=>call.command==="delete_saved_browser"),false);
-    await e.click("Keep it"); await e.click("···"); await e.click("Delete"); await e.click("Delete saved browser");
+    await e.click("Keep it"); await e.press('[data-action="delete"]'); await e.click("Delete saved browser");
     assert.equal(e.calls.filter(call=>call.command==="delete_saved_browser").length,1);
     assert.equal(e.document.querySelector("#saved-browsers-empty").hidden,false);
+});
+
+test("a pending saved-browser deletion cannot be cancelled or submitted twice",async()=>{
+    let release; const deleteGate=new Promise(resolve=>{release=resolve;});
+    const e=await fixture([defaultWorkspace],{deleteGate});
+    await e.press('[data-action="delete"]'); await e.click("Delete saved browser");
+    const confirmation=e.document.querySelector(".saved-browser-delete-confirm");
+    const confirm=[...confirmation.querySelectorAll("button")].find(button=>button.textContent==="Delete saved browser");
+    const keep=[...confirmation.querySelectorAll("button")].find(button=>button.textContent==="Keep it");
+    assert.equal(confirm.disabled,true); assert.equal(keep.disabled,true);
+    assert.equal(e.document.querySelector('[data-action="edit"]').disabled,true);
+    keep.click(); confirm.click();
+    e.window.dispatchEvent(new e.window.Event("warp-saved-browsers-updated")); await tick();
+    assert.equal(confirmation.hidden,false);
+    assert.equal(e.calls.filter(call=>call.command==="delete_saved_browser").length,1);
+    release(); await tick(); await tick();
+    assert.equal(e.document.querySelector("#saved-browsers-empty").hidden,false);
+});
+
+test("a failed saved-browser deletion keeps confirmation available for retry or cancel",async()=>{
+    const e=await fixture([defaultWorkspace],{deleteError:"Disk is read-only"});
+    await e.press('[data-action="delete"]'); await e.click("Delete saved browser");
+    const confirmation=e.document.querySelector(".saved-browser-delete-confirm");
+    assert.equal(confirmation.hidden,false);
+    assert.equal([...confirmation.querySelectorAll("button")].every(button=>!button.disabled),true);
+    assert.match(e.document.querySelector("#saved-browser-status").textContent,/Disk is read-only/);
+    await e.click("Keep it"); assert.equal(confirmation.hidden,true);
+});
+
+test("editing a saved browser changes its name and tabs only after Save",async()=>{
+    const e=await fixture(); await e.press('[data-action="edit"]');
+    assert.equal(e.document.querySelector("#saved-browser-editor").hasAttribute("open"),true);
+    e.document.querySelector("#saved-browser-editor-name").value="Updated research";
+    e.document.querySelector("#saved-browser-editor-tabs").value="https://new.test/\nhttps://second.test/";
+    assert.equal(e.calls.some(call=>call.command==="edit_saved_browser"),false);
+    await e.press("#saved-browser-editor-save");
+    const request=e.calls.find(call=>call.command==="edit_saved_browser");
+    assert.equal(request.args.name,"Updated research");
+    assert.deepEqual(JSON.parse(JSON.stringify(request.args.tabs)).map(tab=>tab.url),["https://new.test/","https://second.test/"]);
+    assert.equal(e.document.querySelector("#saved-browser-editor").hasAttribute("open"),false);
+    assert.match(e.document.querySelector(".saved-browser-name").textContent,/Updated research/);
+});
+
+test("editing validates the name and selected tab without losing the draft",async()=>{
+    const e=await fixture(); await e.press('[data-action="edit"]');
+    e.document.querySelector("#saved-browser-editor-name").value="";
+    await e.press("#saved-browser-editor-save");
+    assert.match(e.document.querySelector("#saved-browser-editor-status").textContent,/name/);
+    e.document.querySelector("#saved-browser-editor-name").value="Draft";
+    e.document.querySelector("#saved-browser-editor-active").value="2";
+    await e.press("#saved-browser-editor-save");
+    assert.match(e.document.querySelector("#saved-browser-editor-status").textContent,/between 1 and 1/);
+    assert.equal(e.calls.some(call=>call.command==="edit_saved_browser"),false);
+    assert.equal(e.document.querySelector("#saved-browser-editor").hasAttribute("open"),true);
+});
+
+test("a live change to a saved browser cannot be overwritten by a stale edit",async()=>{
+    const e=await fixture(); await e.press('[data-action="edit"]');
+    e.replaceSaved({version:1,profiles:[{id:"saved",name:"Research tabs",platform:"windows",items:[item("Research Chrome","chromium","https://live.test/")]}]});
+    e.window.dispatchEvent(new e.window.Event("warp-saved-browsers-updated")); await tick();
+    e.document.querySelector("#saved-browser-editor-name").value="Draft";
+    await e.press("#saved-browser-editor-save");
+    assert.equal(e.document.querySelector("#saved-browser-editor").hasAttribute("open"),true);
+    assert.match(e.document.querySelector("#saved-browser-editor-status").textContent,/changed/);
+    await e.press("#saved-browser-editor-cancel"); await tick();
+    await e.press(".saved-browser-description");
+    assert.match(e.document.querySelector(".saved-browser-preview").textContent,/https:\/\/live\.test/);
 });

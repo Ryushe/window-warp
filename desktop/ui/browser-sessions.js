@@ -12,12 +12,17 @@
     const appendButton = document.querySelector("#saved-browser-append");
     const replaceButton = document.querySelector("#saved-browser-replace");
     const cancelButton = document.querySelector("#saved-browser-destination-cancel");
+    const editor = document.querySelector("#saved-browser-editor");
+    const editorStatus = document.querySelector("#saved-browser-editor-status");
     const {chromiumApp, chromiumName, isBrowserItem} = window.WarpBrowserKinds;
     let store = null;
     let choice = null;
     let destination = null;
+    let browserEdit = null;
+    let deletingBrowser = false;
     let refreshPending = false;
     let request = 0;
+    const expandedBrowsers = new Set();
 
     function feedback(message, error = false) {
         window.WarpErrorTimer.set(status, message, {error, hideWhenEmpty:true});
@@ -28,6 +33,72 @@
         element.addEventListener("click", action);
         return element;
     }
+    function iconButton(label, kind, action) {
+        const element=button("", action); element.className=`workspace-icon-button${kind === "delete" ? " danger-icon" : ""}`;
+        element.title=label; element.setAttribute("aria-label", label);
+        element.innerHTML=kind === "edit"
+            ? '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4Zm9-13 4 4"/></svg>'
+            : '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>';
+        return element;
+    }
+    function editorFeedback(message, error = false) {
+        window.WarpErrorTimer.set(editorStatus, message, {error, hideWhenEmpty:true});
+    }
+    function editorControls() {
+        const busy=!!browserEdit?.busy;
+        editor.querySelectorAll("input, textarea, button").forEach(element => { element.disabled=busy; });
+    }
+    function finishBrowserEdit() {
+        if (!browserEdit) return;
+        const previous=browserEdit; browserEdit=null;
+        if (previous.updated) { store=previous.updated; render(); }
+        if (refreshPending) { refreshPending=false; refresh({profileId:previous.profileId,action:"edit"}); }
+        else if (previous.updated) [...list.children].find(card=>card.dataset.profileId===previous.profileId)?.querySelector('[data-action="edit"]')?.focus();
+        else previous.trigger.focus();
+    }
+    function closeBrowserEdit() {
+        if (!browserEdit || browserEdit.busy) return;
+        if (typeof editor.close === "function" && editor.hasAttribute("open")) editor.close();
+        else { editor.removeAttribute("open"); finishBrowserEdit(); }
+    }
+    function openBrowserEdit(profile, trigger) {
+        if (!profile.items?.[0]?.browser) { feedback("This saved browser cannot be edited.", true); return; }
+        closeChoice({flush:false});
+        browserEdit={profileId:profile.id,expected:JSON.parse(JSON.stringify(profile)),trigger,busy:false,updated:null};
+        const browser=profile.items[0].browser;
+        document.querySelector("#saved-browser-editor-name").value=profile.name;
+        document.querySelector("#saved-browser-editor-tabs").value=browser.tabs.map(tab=>tab.url).join("\n");
+        document.querySelector("#saved-browser-editor-active").value=browser.activeTab || 1;
+        editorFeedback(""); editorControls();
+        if (typeof editor.showModal === "function") editor.showModal(); else editor.setAttribute("open", "");
+        document.querySelector("#saved-browser-editor-name").focus();
+    }
+    async function saveBrowserEdit() {
+        const opened=browserEdit;
+        if (!opened || opened.busy) return;
+        const name=document.querySelector("#saved-browser-editor-name").value.trim();
+        const urls=document.querySelector("#saved-browser-editor-tabs").value.split(/\r?\n/).map(value=>value.trim()).filter(Boolean);
+        const active=Number(document.querySelector("#saved-browser-editor-active").value);
+        if (!name) { editorFeedback("Give this saved browser a name.", true); return; }
+        if (!Number.isInteger(active) || active < 1 || active > (urls.length || 1)) { editorFeedback(`Choose a selected tab between 1 and ${urls.length || 1}.`, true); return; }
+        const previous=opened.expected.items[0].browser.tabs.slice();
+        const tabs=urls.map(url=>{
+            const index=previous.findIndex(tab=>tab.url === url);
+            return {url,title:index < 0 ? "" : previous.splice(index, 1)[0].title};
+        });
+        opened.busy=true; editorControls(); editorFeedback("");
+        try {
+            opened.updated=await native.core.invoke("edit_saved_browser", {expected:opened.expected,name,tabs,activeTab:active});
+            opened.busy=false; closeBrowserEdit(); feedback("Saved browser updated.");
+        } catch (error) {
+            if (browserEdit === opened) { opened.busy=false; editorControls(); editorFeedback(String(error?.message || error), true); }
+        }
+    }
+    editor.addEventListener("close", finishBrowserEdit);
+    editor.addEventListener("cancel", event => { if (browserEdit?.busy) event.preventDefault(); });
+    document.querySelector("#saved-browser-editor-close").addEventListener("click", closeBrowserEdit);
+    document.querySelector("#saved-browser-editor-cancel").addEventListener("click", closeBrowserEdit);
+    document.querySelector("#saved-browser-editor-save").addEventListener("click", saveBrowserEdit);
     function closeChoice({restoreFocus = false, flush = true} = {}) {
         if (!choice) return;
         const previous = choice;
@@ -57,10 +128,15 @@
         return item.browser?.kind === "chromium" || chromiumApp(item.window?.appId)
             ? chromiumName(item.window?.appId || "") : "Firefox";
     }
-    function tabList(tabs) {
+    function tabList(tabs, showTitles = false, label = "Saved browser tabs") {
         if (!tabs.length) { const note=document.createElement("small"); note.textContent="No saved URLs."; return note; }
         const urls=document.createElement("ul"); urls.className="saved-browser-urls";
-        for (const tab of tabs) { const row=document.createElement("li"); row.textContent=tab.url; urls.append(row); }
+        urls.tabIndex=0; urls.setAttribute("aria-label", label);
+        for (const tab of tabs) {
+            const row=document.createElement("li");
+            if (showTitles && tab.title) { const title=document.createElement("strong"); title.textContent=tab.title; row.append(title); }
+            const url=document.createElement("span"); url.textContent=tab.url; row.append(url); urls.append(row);
+        }
         return urls;
     }
     function dialogControls() {
@@ -186,18 +262,37 @@
     appendButton.addEventListener("click", () => applyDestination("append"));
     replaceButton.addEventListener("click", () => handleChooserShortcut("replace"));
     function render() {
+        const focused=document.activeElement;
+        const focusSelector=focused?.classList.contains("saved-browser-description") ? ".saved-browser-description"
+            : focused?.classList.contains("saved-browser-bulk-checkbox") ? ".saved-browser-bulk-checkbox"
+            : focused?.classList.contains("saved-browser-urls") ? ".saved-browser-preview .saved-browser-urls" : null;
+        const focusId=focusSelector ? focused.closest(".saved-browser-card")?.dataset.profileId : null;
+        const focusScroll=focused?.scrollTop || 0;
         list.replaceChildren();
         empty.hidden = !!store?.profiles.length;
         for (const [index, profile] of (store?.profiles || []).entries()) {
             const item = profile.items[0], browser = item?.browser;
             const card = document.createElement("article"); card.className="group saved-browser-card"; card.dataset.profileId=profile.id;
             const main = document.createElement("div"); main.className="saved-browser-main";
-            const text = document.createElement("div"); text.className="saved-browser-description";
-            const title = document.createElement("h3"); title.textContent=profile.name;
-            const summary = document.createElement("p");
+            const checkbox = document.createElement("input"); checkbox.type="checkbox"; checkbox.className="saved-browser-bulk-checkbox"; checkbox.hidden=true;
+            checkbox.setAttribute("aria-label", `Select saved browser ${profile.name}`);
+            checkbox.addEventListener("change", () => window.WarpWorkspaceSelection?.set("browser", profile.id, checkbox.checked));
+            const text = document.createElement("button"); text.type="button"; text.className="saved-browser-description"; text.dataset.action="preview";
+            const title = document.createElement("span"); title.className="saved-browser-name"; title.textContent=profile.name;
+            const summary = document.createElement("span"); summary.className="saved-browser-summary";
             const count = browser?.tabs?.length || 0;
             summary.textContent=`${browser?.kind === "chromium" ? "Chromium browser" : "Firefox"} · ${count} ${count === 1 ? "tab" : "tabs"}`;
             text.append(title, summary);
+            const preview=document.createElement("div"); preview.className="saved-browser-preview"; preview.id=`saved-browser-preview-${index}`;
+            const expanded=expandedBrowsers.has(profile.id); preview.hidden=!expanded;
+            if (expanded) preview.append(tabList(browser?.tabs || [], true, `Tabs in ${profile.name}`));
+            text.setAttribute("aria-controls", preview.id); text.setAttribute("aria-expanded", String(expanded));
+            text.addEventListener("click", () => {
+                if (window.WarpWorkspaceSelection?.active()) { if (!checkbox.disabled) window.WarpWorkspaceSelection.set("browser", profile.id, !checkbox.checked); return; }
+                const open=preview.hidden; preview.hidden=!open; text.setAttribute("aria-expanded", String(open));
+                if (open) { preview.replaceChildren(tabList(browser?.tabs || [], true, `Tabs in ${profile.name}`)); expandedBrowsers.add(profile.id); }
+                else { preview.replaceChildren(); expandedBrowsers.delete(profile.id); }
+            });
             const actions = document.createElement("div"); actions.className="saved-browser-actions";
             const panel = document.createElement("div"); panel.className="saved-browser-popover"; panel.hidden=true; panel.id=`saved-browser-choice-${index}`;
             const open = button("Open", () => run(async () => {
@@ -208,7 +303,7 @@
                     if (failed) throw new Error(failed.error || "Could not open this saved browser.");
                     if (!results.some(result=>result.restored)) throw new Error("The saved browser did not open.");
                     feedback(results.find(result=>result.warning)?.warning || `Opened ${profile.name}.`);
-                } finally { open.disabled=false; }
+                } finally { open.disabled=deletingBrowser; }
             }));
             const add = button("Add to workspace", async () => {
                 if (!openChoice(panel, add, profile.id, "add")) return;
@@ -233,44 +328,58 @@
                 } catch (error) {
                     if (choice === opened) closeChoice({restoreFocus:true});
                     feedback(String(error?.message || error), true);
-                } finally { add.disabled=false; }
+                } finally { add.disabled=deletingBrowser; }
             });
             add.dataset.action="add"; add.setAttribute("aria-expanded", "false"); add.setAttribute("aria-controls", panel.id);
-            const more = button("···", () => {
-                document.querySelectorAll(".menu").forEach(menu => { menu.hidden=true; });
-                if (!openChoice(panel, more, profile.id, "more")) return;
-                const opened = choice;
-                panel.append(button("Delete", () => {
-                    panel.replaceChildren();
-                    const hint=document.createElement("p"); hint.textContent="Delete this saved browser? Open windows and workspaces will stay as they are.";
-                    const confirm=button("Delete saved browser", () => run(async () => {
-                        confirm.disabled=true;
-                        try {
-                            store=await native.core.invoke("delete_saved_browser", {id:profile.id});
-                            if (choice && choice !== opened) refreshPending=true;
-                            else { closeChoice(); render(); }
-                            feedback("Saved browser deleted.");
-                        } finally { confirm.disabled=false; }
-                    }));
-                    confirm.className="saved-browser-delete";
-                    panel.append(hint, confirm, button("Keep it", () => closeChoice({restoreFocus:true})));
-                    confirm.focus();
-                }));
-                panel.querySelector("button")?.focus();
+            const edit=iconButton(`Edit saved browser ${profile.name}`, "edit", () => openBrowserEdit(profile, edit)); edit.dataset.action="edit";
+            const confirmation=document.createElement("div"); confirmation.className="saved-browser-delete-confirm"; confirmation.hidden=true;
+            const hint=document.createElement("p"); hint.textContent="Delete this saved browser? Open windows and workspaces will stay as they are.";
+            const keep=button("Keep it", () => {
+                if (deletingBrowser) return;
+                confirmation.hidden=true; remove.focus();
+                if (refreshPending) { refreshPending=false; refresh(); }
             });
-            more.className="menu-button"; more.dataset.action="more";
-            more.setAttribute("aria-label", `Actions for ${profile.name}`); more.setAttribute("aria-expanded", "false"); more.setAttribute("aria-controls", panel.id);
-            actions.append(open, add, more, panel); main.append(text, actions); card.append(main); list.append(card);
+            const confirm=button("Delete saved browser", () => run(async () => {
+                if (deletingBrowser) return;
+                deletingBrowser=true; list.dataset.deleting="true"; request++;
+                list.querySelectorAll("button, input").forEach(element => { element.disabled=true; });
+                window.WarpWorkspaceSelection?.refreshControls?.();
+                try {
+                    store=await native.core.invoke("delete_saved_browser", {id:profile.id});
+                } catch (error) {
+                    deletingBrowser=false; delete list.dataset.deleting;
+                    list.querySelectorAll("button, input").forEach(element => { element.disabled=false; });
+                    window.WarpWorkspaceSelection?.refreshControls?.();
+                    keep.focus();
+                    throw error;
+                }
+                deletingBrowser=false; delete list.dataset.deleting;
+                closeChoice({flush:false}); render();
+                window.WarpWorkspaceSelection?.refreshControls?.();
+                if (refreshPending) { refreshPending=false; await refresh(); }
+                const next=list.children[Math.min(index, list.children.length - 1)]?.querySelector(".saved-browser-description");
+                (next || document.querySelector("#capture-workspace")).focus();
+                feedback("Saved browser deleted.");
+            }));
+            confirm.className="saved-browser-delete";
+            confirmation.append(hint, confirm, keep);
+            const remove=iconButton(`Delete saved browser ${profile.name}`, "delete", () => { if (deletingBrowser) return; closeChoice(); confirmation.hidden=false; keep.focus(); }); remove.dataset.action="delete";
+            actions.append(open, add, edit, remove, panel); main.append(checkbox, text, actions); card.append(main, preview, confirmation); list.append(card);
+        }
+        window.WarpWorkspaceSelection?.registerBrowsers((store?.profiles || []).map(profile => profile.id));
+        if (focusId) {
+            const target=[...list.children].find(card => card.dataset.profileId === focusId)?.querySelector(focusSelector);
+            if (target) { target.scrollTop=focusScroll; target.focus({preventScroll:true}); }
         }
     }
     async function refresh(focus = null) {
         if (!native) return;
-        if (choice || destination) { refreshPending=true; return; }
+        if (choice || destination || browserEdit || deletingBrowser) { refreshPending=true; return; }
         const sequence=++request;
         try {
             const next=await native.core.invoke("get_saved_browsers");
             if (sequence === request) {
-                if (choice || destination) { refreshPending=true; return; }
+                if (choice || destination || browserEdit || deletingBrowser) { refreshPending=true; return; }
                 store=next; render();
                 if (focus) [...list.children].find(card => card.dataset.profileId === focus.profileId)?.querySelector(`[data-action="${focus.action}"]`)?.focus();
             }

@@ -215,7 +215,7 @@ pub fn monitor_options(_: &AppHandle) -> Result<Vec<crate::MonitorOption>, Strin
         Ok(all
             .iter()
             .enumerate()
-            .map(|(index, (handle, _))| {
+            .map(|(index, (handle, area))| {
                 let source = monitor_name(*handle);
                 let label = targets
                     .get(&source)
@@ -231,6 +231,8 @@ pub fn monitor_options(_: &AppHandle) -> Result<Vec<crate::MonitorOption>, Strin
                     stable: targets
                         .get(&source)
                         .is_some_and(|target| !target.id.is_empty()),
+                    source_id: source,
+                    geometry: *area,
                 }
             })
             .collect())
@@ -1032,10 +1034,13 @@ unsafe fn restore_native(
             return Err("The selected window has closed or changed identity.".into());
         }
         let all = monitors()?;
+        let targets = display_targets();
         let target = all
             .iter()
             .find(|(id, _)| {
-                !saved.monitor_name.is_empty() && monitor_name(*id) == saved.monitor_name
+                !saved.monitor_name.is_empty()
+                    && (monitor_identifier(*id, &targets).eq_ignore_ascii_case(&saved.monitor_name)
+                        || monitor_name(*id).eq_ignore_ascii_case(&saved.monitor_name))
             })
             .unwrap_or(&all[saved.monitor.saturating_sub(1).min(all.len() - 1)])
             .1;
