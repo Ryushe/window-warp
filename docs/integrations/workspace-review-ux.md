@@ -7,8 +7,8 @@
 - **Intended integration target:** `refs/heads/main`, last fetched at `16d8b97da718de47cc78749602b89c95095709b7`
 - **Owning recovery ref:** `refs/heads/codex/workspace-review-ux` in `desktop/src-tauri/target/window-warp-release-cache.git`
 - **Last updated:** 2026-11-06
-- **Latest immutable recovery checkpoint:** not yet created
-- **Feature implementation commits:** not yet created
+- **Latest immutable recovery checkpoint:** `4ab4db8eb81b52af996106b44d87aa805fb5997c`
+- **Feature implementation commit:** `4ab4db8eb81b52af996106b44d87aa805fb5997c`
 - **Inspiration / references:** user feedback, `AGENTS.md`, `desktop/TODO.md`, and `desktop/HOOK-HANDOFF.md`
 
 ## Intent and implemented contract
@@ -68,12 +68,15 @@ editable; the terminal capture does not replay commands that were running.
 
 - **Owning recovery ref:** `refs/heads/codex/workspace-review-ux` in the bare
   release cache; preserve the real checkout and its unrelated uncommitted files.
-- **Latest immutable recovery checkpoint:** pending creation.
+- **Latest immutable recovery checkpoint:** `4ab4db8eb81b52af996106b44d87aa805fb5997c`.
+- **Feature implementation commit:** `4ab4db8eb81b52af996106b44d87aa805fb5997c`.
 - **Exact resume point:** review the preview with the user, then reconcile the
   release branch with `main` and run integrated checks before any new release.
 - **Working-tree state:** intentionally uncommitted in the user's checkout;
   its real `.git` object store has unavailable OneDrive placeholders. A separate
   index in the task-owned bare cache is used for recovery, not the real index.
+  Two test fixtures are normalized to their existing repository LF line endings
+  in the checkpoint; their working-tree files were not rewritten.
 
 ## Decision gates
 
