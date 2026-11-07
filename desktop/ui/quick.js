@@ -68,6 +68,7 @@ watchShortcutPicker(document.querySelector(".quick-sheet"), (shortcut) => {
 function showHint() {
     const behavior = document.querySelector("#quick-behavior-hint");
     const layout = document.querySelector("#quick-layout-hint");
+    document.querySelector("#quick-layout").closest("label").hidden = document.querySelector("#quick-behavior").value !== "burner";
     if (behavior) behavior.textContent = HINTS[document.querySelector("#quick-behavior").value] || "";
     if (layout) layout.textContent = HINTS[document.querySelector("#quick-layout").value] || "";
 }

@@ -432,6 +432,41 @@ test("app behavior, monitor selection, and per-binding disable are saved", async
     assert.equal(config.settings.burnerMonitorId, "left-id", "the second monitor follows the other connected display");
 });
 
+test("second-monitor placement follows the chosen app behavior and is preserved", async () => {
+    const binding={label:"Discord",shortcut:"Super+D",action:"pull-app",appMatch:"Discord.exe",enabled:true,mainMonitorAction:"focus-last",burnerLayout:"tile-right"};
+    const e=await editor({bindings:[binding]});
+    const options=e.document.querySelector(".app-options");
+    const placement=e.document.querySelector(".burner-layout-field");
+    assert.equal(options.hidden,false);
+    assert.equal(options.firstElementChild.textContent,"Behavior");
+    assert.equal(placement.hidden,true);
+    e.input('[data-field="mainMonitorAction"]',"burner");
+    assert.equal(placement.hidden,false);
+    assert.equal(e.document.querySelector('[data-field="burnerLayout"]').value,"tile-right");
+    e.input('[data-field="burnerLayout"]',"tile-left");
+    e.input('[data-field="mainMonitorAction"]',"focus-last");
+    assert.equal(placement.hidden,true);
+    await e.click("#save");
+    const saved=e.calls.find(call=>call.command==="save_config").args.config.bindings[0];
+    assert.equal(saved.mainMonitorAction,"focus-last");
+    assert.equal(saved.burnerLayout,"tile-left");
+});
+
+test("the inline quick editor hides only the unused monitor placement", async () => {
+    const binding={label:"Discord",shortcut:"Super+D",action:"pull-app",appMatch:"Discord.exe",enabled:true,mainMonitorAction:"focus-last",burnerLayout:"tile-right"};
+    const e=await editor({bindings:[binding]});
+    await e.control({action:"open-editor",window:{appId:"Discord.exe"}});
+    const behavior=e.document.querySelector("#quick-behavior"), layout=e.document.querySelector("#quick-layout");
+    assert.equal(layout.closest("label").hidden,true);
+    behavior.value="burner"; behavior.dispatchEvent(new e.window.Event("change"));
+    assert.equal(layout.closest("label").hidden,false);
+    assert.equal(layout.value,"tile-right");
+    behavior.value="focus-last"; behavior.dispatchEvent(new e.window.Event("change"));
+    assert.equal(e.document.querySelector("#quick-layout-hint").hidden,true);
+    await e.click("#quick-apply");
+    assert.equal(e.calls.find(call=>call.command==="save_config").args.config.bindings[0].burnerLayout,"tile-right");
+});
+
 test("monitor settings show detected names and keep identity after display order changes", async () => {
     const e = await editor({settings:{mainMonitor:1,burnerMonitor:2,mainMonitorId:"left-id",burnerMonitorId:"right-id"}});
     await e.openMonitors();

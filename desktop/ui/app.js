@@ -177,6 +177,7 @@ function render() {
         const match = card.querySelector(".match-field");
         const alternatives = card.querySelector(".alternative-matches");
         const options = card.querySelector(".app-options");
+        const burnerLayoutField = card.querySelector(".burner-layout-field");
         const windowsFields = card.querySelector(".windows-match-field");
         const windowsDetails = card.querySelector(".windows-match-details");
         const windowsToggle = card.querySelector(".windows-match-enabled");
@@ -209,6 +210,7 @@ function render() {
             windowsFields.hidden = !appAction;
             windowsDetails.hidden = !binding.windowsMatch;
             options.hidden = binding.action !== "pull-app";
+            burnerLayoutField.hidden = (binding.mainMonitorAction || "burner") !== "burner";
             pushOptions.hidden = !String(binding.action).startsWith("push-");
             tileOptions.hidden = !String(binding.action).startsWith("tile-");
         };
@@ -264,7 +266,7 @@ function render() {
                     if (!String(binding.action).startsWith("tile-")) binding.action = "tile-left";
                     tileSide.value = binding.action.slice(5);
                 } else binding[input.dataset.field] = input.type === "checkbox" ? input.checked : input.value;
-                if (input.dataset.field === "action") appFields();
+                if (input.dataset.field === "action" || input.dataset.field === "mainMonitorAction") appFields();
                 changed();
             });
         });
@@ -412,6 +414,8 @@ function openQuick(app) {
     syncShortcutPicker($("#quick-edit"), binding.shortcut || "");
     $("#quick-behavior").value = binding.mainMonitorAction || "burner";
     $("#quick-layout").value = binding.burnerLayout || "float";
+    $("#quick-layout").closest("label").hidden = $("#quick-behavior").value !== "burner";
+    $("#quick-layout-hint").hidden = $("#quick-behavior").value !== "burner";
     $("#quick-behavior-hint").textContent = CHOICE_HINTS[$("#quick-behavior").value] || "";
     $("#quick-layout-hint").textContent = CHOICE_HINTS[$("#quick-layout").value] || "";
     $("#quick-edit").hidden = false;
@@ -429,6 +433,8 @@ function showQuickHint(select, hint) {
     if (!quick) return;
     config.bindings[quick.index][select.id === "quick-behavior" ? "mainMonitorAction" : "burnerLayout"] = select.value;
     hint.textContent = CHOICE_HINTS[select.value] || "";
+    $("#quick-layout").closest("label").hidden = $("#quick-behavior").value !== "burner";
+    $("#quick-layout-hint").hidden = $("#quick-behavior").value !== "burner";
 }
 $("#add").addEventListener("click", () => {
     $("#search").value = "";

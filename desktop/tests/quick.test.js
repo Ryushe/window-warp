@@ -78,6 +78,22 @@ const discord = {
     burnerLayout: "tile-left"
 };
 
+test("quick editor hides unused second-monitor placement without losing it", async () => {
+    const page=await popup([{...discord,mainMonitorAction:"focus-last",burnerLayout:"tile-right"}]);
+    await page.listeners.get("quick-edit")({payload:{window:{appId:"discord.exe"},label:"Discord",shortcut:"Super+D",bindingIndex:0}});
+    const behavior=page.document.querySelector("#quick-behavior"), layout=page.document.querySelector("#quick-layout");
+    assert.equal(layout.closest("label").hidden,true);
+    behavior.value="burner"; behavior.dispatchEvent(new page.window.Event("change"));
+    assert.equal(layout.closest("label").hidden,false);
+    assert.equal(layout.value,"tile-right");
+    behavior.value="focus-last"; behavior.dispatchEvent(new page.window.Event("change"));
+    assert.equal(layout.closest("label").hidden,true);
+    page.document.querySelector("#quick-apply").click(); await tick();
+    const saved=page.calls.find(call=>call.command==="save_config").args.config.bindings[0];
+    assert.equal(saved.mainMonitorAction,"focus-last");
+    assert.equal(saved.burnerLayout,"tile-right");
+});
+
 test("popup prefills the Discord shortcut from the same binding the list shows", async () => {
     const page = await popup([discord]);
     await page.listeners.get("quick-edit")({ payload: {

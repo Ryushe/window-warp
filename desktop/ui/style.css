@@ -310,6 +310,7 @@ label.switch { position: relative; display: grid; place-items: center; width: 44
 .binding.is-open .binding-inner { padding: 14px 16px 16px; }
 .binding-top, .binding-bottom, .push-options, .tile-options { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; margin: 0; }
 .app-options { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; margin: 0; }
+.app-options .behavior-heading { grid-column: 1 / -1; margin: 0; }
 .push-options[hidden], .tile-options[hidden], .app-options[hidden] { display: none !important; }
 .key-field { max-width: none; }
 .mod-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
