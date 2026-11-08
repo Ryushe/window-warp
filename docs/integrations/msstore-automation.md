@@ -38,6 +38,8 @@ release whose tag contains this workflow can trigger it before a merge to
   tests. Its local Firefox mock requires loopback access outside the sandbox.
 - The GitHub-hosted build and live Store access cannot be tested until the
   workflow and the user's Partner Center credentials are available.
+- A temporary push trigger on this feature branch runs only the read-only Store
+  account check. Remove that trigger after checking the newly supplied secrets.
 - The parent release candidate and fetched `main` have known conflicts. Preserve
   both histories and resolve those conflicts before enabling the workflow on
   `main`; do not reset or stage the user's shared checkout.
