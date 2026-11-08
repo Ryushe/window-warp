@@ -13,6 +13,13 @@ const response = (status, body) => ({status, ok:status >= 200 && status < 300, j
 const args = {id:"window-warp@ryushe.local",version:"0.1.7",fingerprint:"a".repeat(64),apiKey:"test-key",apiSecret:"test-secret"};
 const listed = (fingerprint = args.fingerprint, status = "public") => ({channel:"listed",file:{status},approval_notes:`Reviewer notes\n\nWindow Warp source SHA-256: ${fingerprint}`});
 
+test("Firefox release workflow packages for manual submission without uploading", async () => {
+    const workflow=await fs.readFile(new URL("../../.github/workflows/firefox-addon.yml",import.meta.url),"utf8");
+    assert.match(workflow,/web-ext build/);
+    assert.match(workflow,/actions\/upload-artifact/);
+    assert.doesNotMatch(workflow,/web-ext sign|firefox-release\.mjs\s+(?:plan|policy)|AMO_JWT_/);
+});
+
 async function temporary(t) {
     const parent = path.resolve(os.tmpdir());
     const root = await fs.mkdtemp(path.join(parent, "warp-firefox-release-"));

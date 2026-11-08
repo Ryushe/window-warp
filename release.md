@@ -2,7 +2,7 @@
 
 - **Windows:** Build an MSIX package for the Microsoft Store.
 - **Linux:** Build a Debian `.deb` package for official app releases.
-- **Browser extensions:** Firefox Add-ons submission is prepared below. Chrome
+- **Browser extensions:** Firefox Add-ons is packaged for manual submission below. Chrome
   Web Store distribution is pending.
 
 ## Firefox Add-ons
@@ -12,38 +12,17 @@ own version in `desktop/browser-extension/firefox-manifest.json`. The Firefox
 distribution is MIT-licensed; its license notice is
 `desktop/browser-extension/FIREFOX-LICENSE`.
 
-To enable automatic submission:
+Create a Mozilla Add-ons developer account and accept its agreements before
+uploading the ZIP through the developer dashboard. The first listing uses the
+MIT license, the Tabs category, and the approved `Privacy Policy.txt`.
 
-1. Create a Mozilla Add-ons developer account, accept any required agreements,
-   and create an API key and secret on the [API credentials page](https://addons.mozilla.org/en-US/developers/addon/api/key/).
-2. In the repository's [Actions secrets](https://github.com/Ryushe/window-warp/settings/secrets/actions),
-   add `AMO_JWT_ISSUER` for the API key and `AMO_JWT_SECRET` for the secret.
-   Do not put either value in the repository or a chat message.
-3. Commit the workflow, extension files, `Privacy Policy.txt`, and these release
-   instructions into the release tag. Publish a **stable** GitHub release.
-
-`.github/workflows/firefox-addon.yml` checks out that release commit, runs the
-JavaScript checks and tests, assembles the Firefox extension, runs Mozilla's
-`web-ext lint`, and submits it to the **listed** Firefox Add-ons channel.
-Pre-releases do not submit. The first listing uses the MIT license, the Tabs
-category, and `firefox-amo-metadata.json`; its description links to the
-approved privacy policy at the release commit. After submission, the workflow
-adds that policy to the listing if none exists. Existing listing descriptions
-and privacy policies are left alone. Update an existing policy on Mozilla
-Add-ons when needed.
-
-Mozilla may make a submitted listing available before any later review is
-complete. Monitor the Actions run and Mozilla's developer dashboard for
-validation or review results. No signing credentials or live submission are
-needed to run the local tests and `web-ext lint`.
-
-On later desktop releases, the workflow skips an already submitted listed
-Firefox version only when the submitted source fingerprint matches. If the
-same version has different or unverifiable source, or exists in another
-distribution channel, it fails with instructions to increase the extension
-version. Keep the fingerprint in the version's Mozilla reviewer notes. When
-extension files change, increase the version in **both** browser manifests so
-prepared development copies can update.
+For a stable GitHub release, `.github/workflows/firefox-addon.yml` checks out
+the release commit, runs the JavaScript checks and tests, assembles the Firefox
+extension, runs Mozilla's `web-ext lint`, and saves an unsigned ZIP as an Actions
+artifact for manual submission. It does not upload, sign, or submit the add-on.
+No Mozilla API credentials are required to build the ZIP or submit it manually.
+When extension files change, increase the version in **both** browser manifests
+so prepared development copies can update.
 
 Once Mozilla has assigned the public add-on URL, set
 `WINDOW_WARP_FIREFOX_ADDON_URL` to that exact URL when building the desktop app.
@@ -51,12 +30,6 @@ The regular Settings screen then opens the listing and offers a pairing code.
 Without a listing URL, it keeps the temporary Firefox setup available instead.
 Quit any running copy before launching with `--developer-extensions` to expose
 the Firefox and Chromium development-install controls.
-
-GitHub does not normally trigger a new release-event workflow for a release
-created by another workflow using `GITHUB_TOKEN`. If release creation is
-automated later, use a suitably scoped GitHub App or personal access token,
-or invoke the Firefox submission in that release workflow. See [GitHub's event
-documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
 
 ## Windows MSIX
 

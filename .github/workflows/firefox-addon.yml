@@ -1,4 +1,4 @@
-name: Publish Firefox add-on
+name: Package Firefox add-on
 
 on:
   release:
@@ -8,11 +8,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: firefox-addon-publish
+  group: firefox-addon-package
   cancel-in-progress: false
 
 jobs:
-  publish:
+  package:
     if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-24.04
     env:
@@ -40,26 +40,15 @@ jobs:
         run: node scripts/firefox-release.mjs prepare "$RUNNER_TEMP/window-warp-firefox"
       - name: Validate Firefox extension
         run: npx --no-install web-ext lint --source-dir "$RUNNER_TEMP/window-warp-firefox/extension" --no-config-discovery
-      - name: Check existing Mozilla version
-        id: version
-        env:
-          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
-          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
-        run: node scripts/firefox-release.mjs plan "$RUNNER_TEMP/window-warp-firefox"
-      - name: Submit to Firefox Add-ons
-        if: steps.version.outputs.submit == 'true'
-        env:
-          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
-          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+      - name: Build ZIP for manual submission
         run: >-
-          npx --no-install web-ext sign
+          npx --no-install web-ext build
           --source-dir "$RUNNER_TEMP/window-warp-firefox/extension"
-          --channel listed
-          --amo-metadata "$RUNNER_TEMP/window-warp-firefox/amo-metadata.json"
-          --approval-timeout 0
+          --artifacts-dir "$RUNNER_TEMP/window-warp-firefox/artifacts"
           --no-config-discovery
-      - name: Add the privacy policy if missing
-        env:
-          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
-          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
-        run: node scripts/firefox-release.mjs policy "$RUNNER_TEMP/window-warp-firefox"
+      - name: Keep ZIP for manual submission
+        uses: actions/upload-artifact@v4
+        with:
+          name: window-warp-firefox-manual-submission
+          path: ${{ runner.temp }}/window-warp-firefox/artifacts/*.zip
+          if-no-files-found: error
