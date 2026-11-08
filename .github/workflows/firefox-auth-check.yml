@@ -23,7 +23,7 @@ jobs:
           const issuer = process.env.AMO_JWT_ISSUER;
           const secret = process.env.AMO_JWT_SECRET;
           if (!issuer || !secret) {
-            console.error('The Mozilla issuer or secret is not configured in GitHub Actions.');
+            console.log('::error title=Mozilla credential check::The Mozilla issuer or secret is not configured in GitHub Actions.');
             process.exit(1);
           }
 
@@ -46,18 +46,20 @@ jobs:
             const actual = await probe(secret);
             const control = await probe('window-warp-invalid-signature-control');
             if (![401,403].includes(control)) {
-              console.error(`Cannot confirm that this endpoint checks credentials (control HTTP ${control}).`);
+              console.log(`::error title=Mozilla credential check::Cannot confirm that this endpoint checks credentials (control HTTP ${control}).`);
               process.exitCode = 1;
             } else if (actual === 200) {
               console.log('Mozilla accepted the credentials. No upload or submission was made.');
             } else if (actual === 404) {
               console.log('Mozilla accepted the credentials; the add-on was not found or is not visible. No upload or submission was made.');
             } else {
-              console.error(`Mozilla authentication was not confirmed (HTTP ${actual}). No upload or submission was made.`);
+              console.log(`::error title=Mozilla credential check::Mozilla authentication was not confirmed (HTTP ${actual}). No upload or submission was made.`);
               process.exitCode = 1;
             }
-          } catch {
-            console.error('The read-only Mozilla API request could not be completed.');
+          } catch (error) {
+            const names = new Set(['AbortError','TimeoutError','TypeError']);
+            const reason = names.has(error?.name) ? error.name : 'NetworkError';
+            console.log(`::error title=Mozilla credential check::The read-only Mozilla API request failed (${reason}).`);
             process.exitCode = 1;
           }
           NODE
