@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Window Warp
+Comment=Window shortcuts for Windows and KDE Plasma
+Exec=/usr/bin/window-warp
+Icon=com.windowwarp.desktop
+Terminal=false
+Categories=Utility;
+StartupWMClass=window-warp
+X-KDE-Wayland-Interfaces=org_kde_kwin_fake_input

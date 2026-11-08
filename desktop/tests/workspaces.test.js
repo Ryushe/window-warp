@@ -5,10 +5,551 @@ import vm from "node:vm";
 import {parseHTML} from "linkedom";
 
 const html = fs.readFileSync(new URL("../ui/index.html", import.meta.url), "utf8");
-const source = fs.readFileSync(new URL("../ui/workspaces.js", import.meta.url), "utf8");
+const source = ["error-timer.js", "browser-kinds.js", "workspaces.js"].map(file => fs.readFileSync(new URL(`../ui/${file}`, import.meta.url), "utf8")).join("\n");
+const savedBrowserSource = fs.readFileSync(new URL("../ui/browser-sessions.js", import.meta.url), "utf8");
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const item = title => ({label:title, window:{title, appId:"fixture", monitor:1, rect:{width:640,height:400}}, launch:{program:"fixture", args:[], workingDirectory:"", newWindow:false}});
 const profile = (id, name) => ({id,name,platform:"linux",items:[item(name + " window")]});
+
+test("workspace cards expand to show saved windows and browser tabs without opening them", async () => {
+    const saved = profile("work", "Research");
+    saved.items.push({...item("Firefox"), browser:{kind:"firefox",tabs:[{url:"https://example.test/article",title:"Article"}],activeTab:1}});
+    const e = await editor({profiles:[saved]});
+    const toggle = e.document.querySelector(".workspace-preview-toggle");
+    const preview = e.document.querySelector(".workspace-preview");
+    assert.equal(preview.hidden, true);
+    await e.click(".workspace-preview-toggle");
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+    assert.equal(preview.hidden, false);
+    assert.match(preview.textContent, /Research window/);
+    assert.match(preview.textContent, /Article.*https:\/\/example\.test\/article/);
+    assert.equal(e.calls.some(call => ["restore_workspace", "save_workspaces"].includes(call.command)), false);
+    await e.click(".workspace-preview-toggle");
+    assert.equal(preview.hidden, true);
+});
+
+test("workspace windows use directions relative to the configured main monitor", async () => {
+    const display = (index,id,x,y,primary=false) => ({index,id,sourceId:id,name:id,primary,stable:true,geometry:{x,y,width:1920,height:1080}});
+    const monitors = [display(1,"left",-1920,0),display(2,"top",0,-1080),display(3,"main",0,0,true),display(4,"right",1920,0)];
+    const saved = profile("work", "Research"); saved.platform="windows";
+    saved.items = monitors.map(monitor => { const value=item(monitor.id); value.window.monitor=monitor.index; value.window.monitorName=monitor.sourceId; return value; });
+    saved.items[0].window.monitor=4; // A display can move to a different index after rearrangement.
+    const e = await editor({profiles:[saved],monitors:monitors.map(value=>value.geometry),monitorOptions:monitors,displaySettings:{mainMonitorId:"main"},currentPlatform:"windows"});
+    await e.click(".workspace-preview-toggle");
+    const text=e.document.querySelector(".workspace-preview-content").textContent;
+    for (const label of ["Main monitor", "Left monitor", "Right monitor", "Top monitor"]) assert.match(text, new RegExp(label));
+    assert.match(e.document.querySelector(".workspace-contents-list > li:first-child").textContent, /Left monitor/);
+    assert.equal(e.document.querySelector(".workspace-summary-text").textContent, "4 windows");
+    await e.click('[data-action="edit"]');
+    assert.deepEqual([...e.document.querySelector(".window-placement").options].map(option=>option.textContent), ["Left monitor", "Top monitor", "Main monitor", "Right monitor"]);
+    assert.equal(e.document.querySelector(".window-placement").value, "1", "the saved display name wins over its old index");
+    const shifted=await editor({profiles:[saved],monitorOptions:monitors,displaySettings:{mainMonitorId:"left"},currentPlatform:"windows"});
+    await shifted.click(".workspace-preview-toggle");
+    assert.match(shifted.document.querySelector(".workspace-preview-content").textContent, /Main monitor/);
+    assert.match(shifted.document.querySelector(".workspace-preview-content").textContent, /Right monitor/);
+});
+
+test("a disconnected named display is not mislabeled as a current monitor", async () => {
+    const saved=profile("work","Research"); saved.items[0].window.monitor=1; saved.items[0].window.monitorName="disconnected";
+    const monitor={index:1,id:"connected",sourceId:"connected",name:"Connected",primary:true,stable:true,geometry:{x:0,y:0,width:1920,height:1080}};
+    const e=await editor({profiles:[saved],monitorOptions:[monitor]}); await e.click(".workspace-preview-toggle");
+    assert.match(e.document.querySelector(".workspace-preview-content").textContent,/Display unavailable/);
+});
+
+test("an expanded workspace shows the latest saved tabs after an update", async () => {
+    const saved = profile("work", "Research");
+    Object.assign(saved.items[0].window, {id:"browser",pid:42,appId:"firefox.exe"});
+    saved.items[0].browser = {kind:"firefox",tabs:[{url:"https://before.test/",title:"Before"}],activeTab:1};
+    const updated = {kind:"firefox",tabs:[{url:"https://after.test/",title:"After"}],activeTab:1};
+    const e = await editor({profiles:[saved],savedTabUpdates:[{index:0,browser:updated}]});
+    await e.click(".workspace-preview-toggle");
+    await e.click('[data-action="refresh-tabs"]');
+    assert.equal(e.document.querySelector(".workspace-preview").hidden, false);
+    assert.match(e.document.querySelector(".workspace-preview").textContent, /https:\/\/after\.test/);
+    assert.doesNotMatch(e.document.querySelector(".workspace-preview").textContent, /https:\/\/before\.test/);
+});
+
+test("removing captured windows is reversible until the draft is saved", async () => {
+    const e = await editor();
+    await e.click("#capture-workspace");
+    await e.click(".workspace-item:nth-child(2) .remove-workspace-window");
+    assert.equal(e.document.querySelector(".workspace-item:nth-child(2)").hidden, true);
+    assert.match(e.document.querySelector("#workspace-removed-heading").textContent, /1/);
+    assert.equal(e.calls.some(call => call.command === "save_workspaces"), false);
+    await e.click(".workspace-removed-row:nth-child(2) button");
+    assert.equal(e.document.querySelector(".workspace-item:nth-child(2)").hidden, false);
+    await e.click("#select-draft-windows");
+    await e.click("#select-all-draft-windows");
+    await e.click("#remove-selected-draft-windows");
+    assert.equal(e.document.querySelector("#save-workspace").disabled, true);
+    assert.match(e.document.querySelector("#workspace-items-empty").textContent, /All windows were removed/);
+    await e.click("#restore-all-workspace-windows");
+    await e.click(".workspace-item:nth-child(2) .remove-workspace-window");
+    e.input("#workspace-name", "Research");
+    await e.click("#save-workspace");
+    assert.deepEqual(e.stored().profiles[0].items.map(saved => saved.label), ["First"]);
+});
+
+test("workspace updates compare the saved snapshot with the current editable draft", async () => {
+    const saved = profile("work", "Research");
+    Object.assign(saved.items[0].window, {id:"browser",pid:42,appId:"firefox.exe"});
+    saved.items[0].browser = {kind:"firefox",tabs:[{url:"https://before.test/",title:"Before"}],activeTab:1};
+    const captured = structuredClone(saved);
+    captured.items[0].browser.tabs = [{url:"https://after.test/",title:"After"}];
+    captured.items.push(item("New window"));
+    const e = await editor({profiles:[saved]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request", {detail:{action:"update-workspace",capture:{profile:captured,suggestedId:"work"}}}));
+    await tick(); await e.click("#workspace-hotkey-update");
+    const comparison = e.document.querySelector("#workspace-comparison");
+    comparison.open = true; comparison.dispatchEvent(new e.window.Event("toggle"));
+    const before = e.document.querySelector("#workspace-comparison-before");
+    const after = e.document.querySelector("#workspace-comparison-after");
+    assert.equal(comparison.hidden, false);
+    assert.equal(e.document.querySelector(".workspace-item:first-child .workspace-change-badge").textContent, "Changed");
+    assert.equal(e.document.querySelector(".workspace-item:nth-child(2) .workspace-change-badge").textContent, "New");
+    assert.match(before.textContent, /https:\/\/before\.test/);
+    assert.doesNotMatch(before.textContent, /New window/);
+    assert.match(after.textContent, /https:\/\/after\.test/);
+    assert.match(after.textContent, /New window/);
+    await e.click(".workspace-item:nth-child(2) .remove-workspace-window");
+    assert.doesNotMatch(after.textContent, /New window/);
+    e.input('[data-browser="tabs"]', "https://edited.test/");
+    assert.match(after.textContent, /https:\/\/edited\.test/);
+    assert.match(before.textContent, /https:\/\/before\.test/);
+    e.input("#workspace-name", "Renamed research");
+    assert.match(e.document.querySelector("#workspace-change-summary").textContent, /Name changed/);
+    await e.click("#discard-workspace");
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url, "https://before.test/");
+});
+
+test("the comparison follows browser tabs that arrive after an update draft opens", async () => {
+    const saved = profile("work", "Research");
+    Object.assign(saved.items[0].window, {id:"browser",pid:42,appId:"firefox.exe"});
+    saved.items[0].browser = {kind:"firefox",tabs:[{url:"https://before.test/",title:"Before"}],activeTab:1};
+    const initial = structuredClone(saved), enriched = structuredClone(saved);
+    enriched.items[0].browser.tabs = [{url:"https://later.test/",title:"Loaded"}];
+    const e = await editor({profiles:[saved]});
+    const send = (capturing, profile) => e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request", {detail:{action:"update-workspace",captureId:1,capturing,capture:{profile,suggestedId:"work"}}}));
+    send(true, initial); await tick(); await e.click("#workspace-hotkey-update");
+    const comparison = e.document.querySelector("#workspace-comparison");
+    comparison.open = true; comparison.dispatchEvent(new e.window.Event("toggle"));
+    assert.equal(e.document.querySelector("#workspace-comparison-loading").hidden, false);
+    send(false, enriched); await tick(); await tick();
+    assert.equal(e.document.querySelector("#workspace-comparison-loading").hidden, true);
+    assert.match(e.document.querySelector("#workspace-comparison-after").textContent, /https:\/\/later\.test/);
+    assert.match(e.document.querySelector("#workspace-comparison-before").textContent, /https:\/\/before\.test/);
+});
+
+test("ambiguous repeated browser windows ask for review instead of claiming they are new", async () => {
+    const saved = profile("work", "Research");
+    const makeBrowser = (name, id) => ({...item(name),window:{...item(name).window,id,pid:10,appId:"firefox.exe"},browser:{kind:"firefox",profilePath:"",profileName:"",tabs:[{url:`https://${id}.test/`,title:""}],activeTab:1}});
+    saved.items = [makeBrowser("Firefox one", "old-one"), makeBrowser("Firefox two", "old-two")];
+    const captured = structuredClone(saved);
+    captured.items = [makeBrowser("Firefox one", "new-one"), makeBrowser("Firefox two", "new-two")];
+    const e = await editor({profiles:[saved]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request", {detail:{action:"update-workspace",capture:{profile:captured,suggestedId:"work"}}}));
+    await tick(); await e.click("#workspace-hotkey-update");
+    assert.deepEqual([...e.document.querySelectorAll(".workspace-change-badge")].map(badge => badge.textContent), ["Review match", "Review match"]);
+    assert.match(e.document.querySelector("#workspace-change-summary").textContent, /2 need matching review/);
+});
+
+test("a known browser window gaining tabs is changed rather than added", async () => {
+    const saved = profile("work", "Research");
+    Object.assign(saved.items[0].window, {id:"firefox",pid:7,appId:"firefox.exe"});
+    const captured = structuredClone(saved);
+    captured.items[0].browser = {kind:"firefox",profilePath:"",profileName:"",tabs:[{url:"https://new.test/",title:"New tab"}],activeTab:1};
+    const e = await editor({profiles:[saved]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request", {detail:{action:"update-workspace",capture:{profile:captured,suggestedId:"work"}}}));
+    await tick(); await e.click("#workspace-hotkey-update");
+    assert.equal(e.document.querySelector(".workspace-change-badge").textContent, "Changed");
+    assert.doesNotMatch(e.document.querySelector("#workspace-change-summary").textContent, /new|removed/);
+});
+
+test("a browser with no stable window or profile identity remains available for review", async () => {
+    const saved = profile("work", "Research");
+    saved.items[0].window.appId = "firefox.exe";
+    saved.items[0].browser = {kind:"firefox",profilePath:"",profileName:"",tabs:[{url:"https://saved.test/",title:"Saved"}],activeTab:1};
+    const captured = structuredClone(saved);
+    captured.items[0].browser.tabs = [{url:"https://current.test/",title:"Current"}];
+    const e = await editor({profiles:[saved]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request", {detail:{action:"update-workspace",capture:{profile:captured,suggestedId:"work"}}}));
+    await tick(); await e.click("#workspace-hotkey-update");
+    assert.equal(e.document.querySelector(".workspace-change-badge").textContent, "Review match");
+    assert.match(e.document.querySelector("#workspace-missing-list").textContent, /https:\/\/saved\.test/);
+});
+
+test("a different known browser profile is new and the old profile can be kept", async () => {
+    const saved = profile("work", "Research");
+    Object.assign(saved.items[0].window, {id:"old",pid:7,appId:"firefox.exe"});
+    saved.items[0].browser = {kind:"firefox",profilePath:"C:/Profiles/A",profileName:"A",tabs:[{url:"https://a.test/",title:"A"}],activeTab:1};
+    const captured = structuredClone(saved);
+    captured.items[0].window.id = "new"; captured.items[0].window.pid = 8;
+    captured.items[0].browser = {kind:"firefox",profilePath:"C:/Profiles/B",profileName:"B",tabs:[{url:"https://b.test/",title:"B"}],activeTab:1};
+    const e = await editor({profiles:[saved]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request", {detail:{action:"update-workspace",capture:{profile:captured,suggestedId:"work"}}}));
+    await tick(); await e.click("#workspace-hotkey-update");
+    assert.equal(e.document.querySelector(".workspace-change-badge").textContent, "New");
+    assert.match(e.document.querySelector("#workspace-change-summary").textContent, /1 removed/);
+    assert.equal(e.document.querySelector("#workspace-missing-windows").hidden, false);
+    await e.click("#workspace-missing-list button");
+    await e.click("#save-workspace"); await e.click("#workspace-replace-confirm");
+    assert.deepEqual(e.stored().profiles[0].items.map(value => value.browser.profilePath), ["C:/Profiles/B", "C:/Profiles/A"]);
+});
+
+test("a reused window ID does not hide a different known browser profile", async () => {
+    const saved = profile("work", "Research");
+    Object.assign(saved.items[0].window, {id:"reused",pid:7,appId:"firefox.exe"});
+    saved.items[0].browser = {kind:"firefox",profilePath:"C:/Profiles/A",profileName:"A",tabs:[{url:"https://a.test/",title:"A"}],activeTab:1};
+    const captured = structuredClone(saved);
+    captured.items[0].browser = {kind:"firefox",profilePath:"C:/Profiles/B",profileName:"B",tabs:[{url:"https://b.test/",title:"B"}],activeTab:1};
+    const e = await editor({profiles:[saved]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request", {detail:{action:"update-workspace",capture:{profile:captured,suggestedId:"work"}}}));
+    await tick(); await e.click("#workspace-hotkey-update");
+    assert.equal(e.document.querySelector(".workspace-change-badge").textContent, "New");
+    assert.equal(e.document.querySelector("#workspace-missing-windows").hidden, false);
+    await e.click("#workspace-missing-list button");
+    assert.equal(e.document.querySelectorAll("#workspace-items .workspace-item").length, 2);
+});
+
+test("a different document opened by the same app leaves the saved document available to keep", async () => {
+    const saved = profile("work", "Research");
+    Object.assign(saved.items[0].window, {id:"old",pid:7,appId:"notepad.exe"});
+    saved.items[0].launch.args = ["C:/Docs/old.txt"];
+    const captured = structuredClone(saved);
+    Object.assign(captured.items[0].window, {id:"new",pid:8});
+    captured.items[0].launch.args = ["C:/Docs/new.txt"];
+    const e = await editor({profiles:[saved]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request", {detail:{action:"update-workspace",capture:{profile:captured,suggestedId:"work"}}}));
+    await tick(); await e.click("#workspace-hotkey-update");
+    assert.equal(e.document.querySelector(".workspace-change-badge").textContent, "New");
+    assert.match(e.document.querySelector("#workspace-change-summary").textContent, /1 removed/);
+    assert.equal(e.document.querySelector("#workspace-missing-windows").hidden, false);
+});
+
+test("ambiguous saved browsers remain available to keep with their tab details", async () => {
+    const saved = profile("work", "Research");
+    saved.items = ["one", "two"].map((id, index) => ({...item(`Firefox ${index + 1}`),window:{...item(id).window,id,pid:10,appId:"firefox.exe"},browser:{kind:"firefox",tabs:[{url:`https://${id}.test/`,title:id}],activeTab:1}}));
+    const captured = structuredClone(saved); captured.items = [structuredClone(saved.items[0])]; captured.items[0].window.id = "new"; captured.items[0].window.pid = 20;
+    const e = await editor({profiles:[saved]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request", {detail:{action:"update-workspace",capture:{profile:captured,suggestedId:"work"}}}));
+    await tick(); await e.click("#workspace-hotkey-update");
+    assert.equal(e.document.querySelector(".workspace-change-badge").textContent, "Review match");
+    assert.equal(e.document.querySelectorAll("#workspace-missing-list button").length, 2);
+    assert.match(e.document.querySelector("#workspace-missing-list").textContent, /https:\/\/one\.test/);
+    assert.match(e.document.querySelector("#workspace-missing-list").textContent, /https:\/\/two\.test/);
+});
+
+test("keeping an ambiguous window without a stable ID removes that candidate", async () => {
+    const saved = profile("work", "Research");
+    saved.items = ["one", "two"].map((id, index) => ({...item(`Firefox ${index + 1}`),window:{...item(id).window,id:"",pid:0,appId:"firefox.exe"},browser:{kind:"firefox",tabs:[{url:`https://${id}.test/`,title:id}],activeTab:1}}));
+    const captured = structuredClone(saved); captured.items = [structuredClone(saved.items[0])];
+    const e = await editor({profiles:[saved]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request", {detail:{action:"update-workspace",capture:{profile:captured,suggestedId:"work"}}}));
+    await tick(); await e.click("#workspace-hotkey-update");
+    await e.click('[aria-label="Keep Firefox 1 in workspace"]');
+    assert.equal(e.document.querySelector('[aria-label="Keep Firefox 1 in workspace"]'), null);
+    assert.equal(e.document.querySelectorAll("#workspace-items .workspace-item").length, 2);
+    assert.ok(e.document.querySelector('[aria-label="Keep Firefox 2 in workspace"]'));
+});
+
+test("a recapture can keep a saved window that was not open, including its tabs", async () => {
+    const saved = profile("work", "Research");
+    Object.assign(saved.items[0].window, {id:"notes",pid:6});
+    const browser = item("Saved Firefox");
+    browser.window.appId = "firefox.exe"; browser.window.id = "firefox"; browser.window.pid = 7;
+    browser.browser = {kind:"firefox",profilePath:"",profileName:"",tabs:[{url:"https://saved.test/",title:"Saved"}],activeTab:1};
+    saved.items.push(browser);
+    const captured = structuredClone(saved); captured.items.pop();
+    const e = await editor({profiles:[saved]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request", {detail:{action:"update-workspace",capture:{profile:captured,suggestedId:"work"}}}));
+    await tick(); await e.click("#workspace-hotkey-update");
+    assert.match(e.document.querySelector("#workspace-missing-windows").textContent, /Saved Firefox/);
+    assert.match(e.document.querySelector("#workspace-change-summary").textContent, /1 removed/);
+    await e.click("#workspace-missing-list button");
+    assert.equal(e.document.querySelector("#workspace-missing-windows").hidden, true);
+    await e.click("#save-workspace"); await e.click("#workspace-replace-confirm");
+    assert.equal(e.stored().profiles[0].items.find(value => value.label === "Saved Firefox").browser.tabs[0].url, "https://saved.test/");
+});
+
+test("removed windows can be replaced without exceeding the workspace limit", async () => {
+    const capture = {id:"capture",name:"Full",platform:"linux",items:Array.from({length:100}, (_, index) => {
+        const window = item(`Window ${index}`); window.window.id = String(index + 1); window.window.pid = 1; return window;
+    })};
+    const replacement = item("Replacement"); replacement.window.id = "new"; replacement.window.pid = 2;
+    const e = await editor({captureInitial:capture,pickedWindow:replacement});
+    await e.click("#capture-workspace");
+    await e.click(".workspace-item:first-child .remove-workspace-window");
+    await e.click("#add-workspace-window");
+    await e.click("#workspace-pick-on-screen");
+    assert.match(e.document.querySelector("#workspace-item-count").textContent, /^100 windows/);
+    await e.click(".workspace-removed-row:first-child button");
+    assert.match(e.document.querySelector("#workspace-editor-status").textContent, /up to 100 windows/);
+    await e.click("#save-workspace");
+    assert.equal(e.stored().profiles[0].items.length, 100);
+    assert.equal(e.stored().profiles[0].items.at(-1).label, "Replacement");
+});
+
+test("bulk selection deletes only confirmed workspaces and saved browsers", async () => {
+    const e = await editor({profiles:[profile("a", "First"), profile("b", "Second")],savedBrowsers:[profile("browser-a", "Saved first"), profile("browser-b", "Saved second")]});
+    await e.click("#select-workspace-items");
+    e.change('[data-workspace-id="a"] .workspace-bulk-checkbox', true);
+    e.change('[data-profile-id="browser-b"] .saved-browser-bulk-checkbox', true);
+    assert.match(e.document.querySelector("#selected-workspace-count").textContent, /2 selected/);
+    await e.click("#delete-selected-workspace-items");
+    assert.match(e.document.querySelector("#confirm-delete-workspace-text").textContent, /1 workspace and 1 saved browser/);
+    await e.click("#cancel-delete-workspace-items");
+    assert.deepEqual(e.stored().profiles.map(value => value.id), ["a", "b"]);
+    assert.deepEqual(e.storedBrowsers().profiles.map(value => value.id), ["browser-a", "browser-b"]);
+    await e.click("#delete-selected-workspace-items");
+    await e.click("#confirm-delete-workspace-button"); await tick(); await tick();
+    assert.deepEqual(e.stored().profiles.map(value => value.id), ["b"]);
+    assert.deepEqual(e.storedBrowsers().profiles.map(value => value.id), ["browser-a"]);
+    assert.equal(e.document.querySelector("#workspace-selection").hidden, true);
+});
+
+test("clicking a workspace or browser row selects it in selection mode", async () => {
+    const e = await editor({profiles:[profile("a", "First")],savedBrowsers:[profile("browser", "Saved")]});
+    await e.click("#select-workspace-items");
+    await e.click(".workspace-preview-toggle"); await e.click(".saved-browser-description");
+    assert.equal(e.document.querySelector(".workspace-bulk-checkbox").checked, true);
+    assert.equal(e.document.querySelector(".saved-browser-bulk-checkbox").checked, true);
+    assert.equal(e.document.querySelector(".workspace-preview-toggle").getAttribute("aria-pressed"), "true");
+    assert.equal(e.document.querySelector(".workspace-preview").hidden, true);
+    await e.click("#select-workspace-items");
+    assert.equal(e.document.querySelector(".workspace-preview-toggle").getAttribute("aria-expanded"), "false");
+});
+
+test("returning to the workspace library keeps the draft available to resume", async () => {
+    const e = await editor({profiles:[profile("a", "First")]});
+    await e.click('[data-action="edit"]');
+    e.input("#workspace-name", "Unfinished workspace");
+    assert.equal(e.document.querySelector("#workspace-library").hidden, true);
+    await e.click("#workspace-back-to-library");
+    assert.equal(e.document.querySelector("#workspace-library").hidden, false);
+    assert.equal(e.document.querySelector("#workspace-editor").hidden, true);
+    assert.match(e.document.querySelector("#workspace-draft-banner-text").textContent, /Unfinished workspace/);
+    await e.click("#workspace-resume-draft");
+    assert.equal(e.document.querySelector("#workspace-name").value, "Unfinished workspace");
+    assert.equal(e.calls.some(call => call.command === "save_workspaces"), false);
+});
+
+test("selection mode can be exited when the last workspace disappears during refresh", async () => {
+    const e = await editor({profiles:[profile("a", "First")],savedBrowsers:[]});
+    await e.click("#select-workspace-items");
+    e.replaceStored({version:1,profiles:[]});
+    e.window.dispatchEvent(new e.window.Event("warp-browser-updated")); await tick(); await tick();
+    assert.equal(e.document.querySelector("#select-workspace-items").disabled, false);
+    await e.click("#select-workspace-items");
+    assert.equal(e.document.querySelector("#workspace-selection").hidden, true);
+    assert.equal(e.document.querySelector("#capture-workspace").disabled, false);
+});
+
+test("a live browser refresh dismisses a stale bulk-delete confirmation", async () => {
+    const e = await editor({profiles:[profile("a", "First")],savedBrowsers:[profile("browser", "Saved")]});
+    await e.click("#select-workspace-items"); await e.click("#select-all-workspace-items"); await e.click("#delete-selected-workspace-items");
+    assert.equal(e.document.querySelector("#confirm-delete-workspace-items").hidden, false);
+    e.replaceStoredBrowsers({version:1,profiles:[]});
+    e.window.dispatchEvent(new e.window.Event("warp-saved-browsers-updated")); await tick(); await tick();
+    assert.equal(e.document.querySelector("#confirm-delete-workspace-items").hidden, true);
+    assert.match(e.document.querySelector("#selected-workspace-count").textContent, /1 selected/);
+});
+
+test("saved browser previews remain available if the workspace store cannot load", async () => {
+    const saved = profile("browser", "Saved browser");
+    saved.items[0].browser = {kind:"firefox",tabs:[{url:"https://saved.test/",title:"Saved"}],activeTab:1};
+    const e = await editor({failLoad:true,savedBrowsers:[saved]});
+    const toggle = e.document.querySelector(".saved-browser-description");
+    assert.equal(toggle.disabled, false);
+    await e.click(".saved-browser-description");
+    assert.match(e.document.querySelector(".saved-browser-preview").textContent, /https:\/\/saved\.test/);
+});
+
+test("returning to the library clears an asynchronous capture failure panel", async () => {
+    const e = await editor({profiles:[profile("a", "First")]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request", {detail:{action:"update-workspace",captureId:1,capturing:true,capture:{profile:profile("new", "Captured"),suggestedId:"a"}}}));
+    await tick();
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request", {detail:{action:"workspace-capture-failed",captureId:1,error:"Capture failed"}}));
+    await tick();
+    assert.equal(e.document.querySelector("#workspace-capture-pending").hidden, false);
+    await e.click("#workspace-back-to-library");
+    assert.equal(e.document.querySelector("#workspace-capture-pending").hidden, true);
+    assert.equal(e.document.querySelector("#workspace-library").hidden, false);
+});
+
+test("bulk deletion reports a partial browser failure and keeps the failed item selected", async () => {
+    const e = await editor({profiles:[profile("a", "First")],savedBrowsers:[profile("browser-a", "Saved first"),profile("browser-b", "Saved second")],failBrowserDeletes:["browser-b"]});
+    await e.click("#select-workspace-items"); await e.click("#select-all-workspace-items");
+    await e.click("#delete-selected-workspace-items"); await e.click("#confirm-delete-workspace-button"); await tick(); await tick();
+    assert.deepEqual(e.stored().profiles, []);
+    assert.deepEqual(e.storedBrowsers().profiles.map(value => value.id), ["browser-b"]);
+    assert.match(e.document.querySelector("#workspace-status").textContent, /1 workspace and 1 saved browser deleted.*1 could not be deleted/);
+    assert.equal(e.document.querySelector('[data-profile-id="browser-b"] .saved-browser-bulk-checkbox').checked, true);
+    assert.equal(e.document.querySelector("#workspace-selection").hidden, false);
+});
+
+test("a failed workspace deletion does not start deleting selected saved browsers", async () => {
+    const e = await editor({profiles:[profile("a", "First")],savedBrowsers:[profile("browser", "Saved")],failWorkspaceDelete:true});
+    await e.click("#select-workspace-items"); await e.click("#select-all-workspace-items");
+    await e.click("#delete-selected-workspace-items"); await e.click("#confirm-delete-workspace-button"); await tick();
+    assert.match(e.document.querySelector("#workspace-status").textContent, /Disk is read-only/);
+    assert.equal(e.calls.some(call => call.command === "delete_saved_browser"), false);
+    assert.equal(e.stored().profiles.length, 1);
+    assert.equal(e.storedBrowsers().profiles.length, 1);
+});
+
+test("workspace locations refresh without changing saved workspaces", async () => {
+    const e=await editor({profiles:[profile("work","Work"),profile("home","Home")], desktopWorkspace:"work"});
+    const open = () => [...e.document.querySelectorAll('.workspace-card')].filter(card=>card.querySelector('.workspace-open-on').textContent.startsWith('Windows on:')).map(card=>card.dataset.workspaceId);
+    assert.deepEqual(open(),["work"]);
+    e.setDesktopWorkspace("home");
+    e.window.dispatchEvent(new e.window.Event("focus")); await tick();
+    assert.deepEqual(open(),["home"]);
+    e.setDesktopWorkspace(null);
+    e.window.dispatchEvent(new e.window.Event("focus")); await tick();
+    assert.deepEqual(open(),[]);
+    assert.equal(e.calls.some(call=>call.command==='save_workspaces'),false);
+});
+
+test("opening an existing workspace offers to move its windows or go to them", async () => {
+    const p=profile("work","Work");
+    const other={id:"desk-six",name:"Desktop 6",current:false,windowCount:1,browserCount:0,browserTitles:[],ambiguous:false};
+    const e=await editor({profiles:[p],openLocationsByWorkspace:{work:[other]}});
+    await e.click('[data-action="restore"]');
+    assert.equal(e.calls.some(call=>call.command==='restore_workspace'),false);
+    assert.equal(e.document.querySelector('.workspace-open-choice').hidden,false);
+    assert.match(e.document.querySelector('.workspace-open-choice').textContent,/Desktop 6/);
+    await e.click('.workspace-open-choice-row button:first-of-type');
+    assert.equal(e.calls.find(call=>call.command==='workspace_move_to_desktop').args.desktopId,'desk-six');
+    assert.equal(e.calls.some(call=>call.command==='restore_workspace'),true);
+
+    const go=await editor({profiles:[p],openLocationsByWorkspace:{work:[other]}});
+    await go.click('[data-action="restore"]');
+    await go.click('.workspace-open-choice-row button:nth-of-type(2)');
+    assert.equal(go.calls.find(call=>call.command==='workspace_go_to_desktop').args.desktopId,'desk-six');
+    assert.equal(go.calls.some(call=>call.command==='restore_workspace'),false);
+});
+
+test("opening a workspace already on this desktop does not ask to move it", async () => {
+    const current={id:"here",name:"Desktop 1",current:true,windowCount:1,browserCount:0,browserTitles:[],ambiguous:false};
+    const e=await editor({profiles:[profile("work","Work")],openLocationsByWorkspace:{work:[current]}});
+    await e.click('[data-action="restore"]');
+    assert.equal(e.calls.some(call=>call.command==='restore_workspace'),true);
+    assert.equal(e.document.querySelector('.workspace-open-choice').hidden,true);
+});
+
+test("workspace URL update chooses a desktop only when multiple sources exist", async () => {
+    const p=profile("browser","Research"); p.items[0].window.appId="firefox.exe";
+    p.items[0].browser={kind:"firefox",tabs:[{url:"https://saved.test/",title:"Saved"}],activeTab:1};
+    const location=(id,name,title)=>({id,name,current:false,windowCount:1,browserCount:1,browserTitles:[title],ambiguous:false});
+    const sources=[location("one","Desktop 1","Firefox — One"),location("three","Desktop 3","Firefox — Three")];
+    const e=await editor({profiles:[p],locationsByWorkspace:{browser:sources},savedTabUpdatesByDesktop:{three:[{index:0,browser:{kind:"firefox",tabs:[{url:"https://three.test/",title:"Three"}],activeTab:1}}]}});
+    assert.match(e.document.querySelector('.workspace-open-on').textContent,/Browsers on: Desktop 1, Desktop 3/);
+    assert.ok(e.calls.filter(call=>call.command==='workspace_locations').every(call=>!call.args?.resolveBrowsers), 'viewing workspaces does not request tabs');
+    await e.click('[data-action="refresh-tabs"]');
+    assert.ok(e.calls.some(call=>call.command==='workspace_locations' && call.args?.resolveBrowsers), 'the explicit update may look for restarted browsers');
+    assert.equal(e.calls.some(call=>call.command==='update_saved_workspace_tabs'),false);
+    assert.equal(e.document.querySelector('.workspace-source-menu').hidden,false);
+    await e.click('.workspace-source-menu button:nth-of-type(2)');
+    const request=e.calls.find(call=>call.command==='update_saved_workspace_tabs');
+    assert.equal(request.args.desktopId,'three');
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url,'https://three.test/');
+    assert.match(e.document.querySelector('.workspace-card-status').textContent,/from Desktop 3/);
+
+    const single=await editor({profiles:[p],locationsByWorkspace:{browser:[sources[1]]},savedTabUpdates:[{index:0,browser:p.items[0].browser}]});
+    await single.click('[data-action="refresh-tabs"]');
+    assert.equal(single.calls.find(call=>call.command==='update_saved_workspace_tabs').args.desktopId,'three');
+    assert.equal(single.document.querySelector('.workspace-source-menu').hidden,true);
+});
+
+test("workspace cards show the browser's desktop instead of unrelated partial window locations", async () => {
+    const p=profile("browser","Research"); p.items[0].window.appId="firefox.exe";
+    p.items[0].browser={kind:"firefox",tabs:[{url:"https://saved.test/",title:"Saved"}],activeTab:1};
+    for (let index=0; index<6; index++) p.items.push(item(`Other window ${index}`));
+    const locations=[
+        {id:"six",name:"Desktop 6",current:false,windowCount:2,browserCount:1,browserTitles:["Firefox"],ambiguous:false},
+        {id:"other",name:"Another desktop",current:true,windowCount:2,browserCount:0,browserTitles:[],ambiguous:false}
+    ];
+    const e=await editor({profiles:[p],locationsByWorkspace:{browser:locations},savedTabUpdates:[{index:0,browser:p.items[0].browser}]});
+    assert.equal(e.document.querySelector('.workspace-open-on').textContent,'Browser on: Desktop 6');
+    await e.click('[data-action="refresh-tabs"]');
+    assert.equal(e.calls.find(call=>call.command==='update_saved_workspace_tabs').args.desktopId,'six');
+    assert.equal(e.document.querySelector('.workspace-source-menu').hidden,true);
+});
+
+test("waiting for an idle browser does not lock other workspaces", async () => {
+    const p=profile("browser","Research"); p.items[0].window.appId="firefox.exe";
+    p.items[0].browser={kind:"firefox",tabs:[{url:"https://saved.test/",title:"Saved"}],activeTab:1};
+    const source={id:"six",name:"Desktop 6",current:false,windowCount:1,browserCount:1,browserTitles:["Firefox"],ambiguous:false};
+    let release;
+    const savedTabGate=new Promise(resolve=>{release=resolve;});
+    const e=await editor({profiles:[p,profile("other","Other")],locationsByWorkspace:{browser:[source]},savedTabGate,savedTabUpdates:[{index:0,browser:p.items[0].browser}]});
+    await e.click('[data-workspace-id="browser"] [data-action="refresh-tabs"]');
+    assert.match(e.document.querySelector('[data-workspace-id="browser"] .workspace-card-status').textContent,/Waiting for the browser/);
+    assert.equal(e.document.querySelector('[data-workspace-id="browser"] [data-action="refresh-tabs"]').disabled,true);
+    assert.equal(e.document.querySelector('[data-workspace-id="other"] [data-action="edit"]').disabled,false);
+    await e.click('[data-workspace-id="other"] [data-action="edit"]');
+    assert.equal(e.document.querySelector('#workspace-editor').hidden,false);
+    release(); await tick(); await tick();
+    assert.match(e.document.querySelector('[data-workspace-id="browser"] .workspace-card-status').textContent,/1 window updated from Desktop 6/);
+    assert.equal(e.document.querySelector('[data-workspace-id="browser"] [data-action="refresh-tabs"]').disabled,false);
+});
+
+test("saving another workspace preserves URLs updated while its draft was open", async () => {
+    const p=profile("browser","Research"); p.items[0].window.appId="firefox.exe";
+    p.items[0].browser={kind:"firefox",tabs:[{url:"https://saved.test/",title:"Saved"}],activeTab:1};
+    const updated={kind:"firefox",tabs:[{url:"https://current.test/",title:"Current"}],activeTab:1};
+    const source={id:"six",name:"Desktop 6",current:false,windowCount:1,browserCount:1,browserTitles:["Firefox"],ambiguous:false};
+    let release; const savedTabGate=new Promise(resolve=>{release=resolve;});
+    const e=await editor({profiles:[p,profile("other","Other")],locationsByWorkspace:{browser:[source]},savedTabGate,savedTabUpdates:[{index:0,browser:updated}]});
+    await e.click('[data-workspace-id="browser"] [data-action="refresh-tabs"]');
+    await e.click('[data-workspace-id="other"] [data-action="edit"]');
+    e.input('#workspace-name','Updated other');
+    await e.click('#save-workspace');
+    assert.match(e.document.querySelector('#workspace-save-status').textContent,/Waiting for the browser update/);
+    release(); await tick(); await tick(); await tick();
+    assert.equal(e.stored().profiles.find(profile=>profile.id==='browser').items[0].browser.tabs[0].url,'https://current.test/');
+    assert.equal(e.stored().profiles.find(profile=>profile.id==='other').name,'Updated other');
+});
+
+test("a pending URL update protects the same workspace from a hotkey overwrite", async () => {
+    const p=profile("browser","Research"); p.items[0].window.appId="firefox.exe";
+    p.items[0].browser={kind:"firefox",tabs:[{url:"https://saved.test/",title:"Saved"}],activeTab:1};
+    const source={id:"six",name:"Desktop 6",current:false,windowCount:1,browserCount:1,browserTitles:["Firefox"],ambiguous:false};
+    let release; const savedTabGate=new Promise(resolve=>{release=resolve;});
+    const e=await editor({profiles:[p],locationsByWorkspace:{browser:[source]},savedTabGate,savedTabUpdates:[{index:0,browser:p.items[0].browser}]});
+    await e.click('[data-action="refresh-tabs"]');
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request",{detail:{action:"update-workspace",capture:{profile:structuredClone(p),suggestedId:"browser"}}}));
+    await tick(); await e.click('#workspace-hotkey-update');
+    assert.match(e.document.querySelector('#workspace-hotkey-status').textContent,/Updating URLs/);
+    assert.equal(e.document.querySelector('#workspace-editor').hidden,true);
+    release(); await tick(); await tick();
+});
+
+test("a disappeared desktop source keeps the saved URLs", async () => {
+    const p=profile("browser","Research"); p.items[0].window.appId="firefox.exe";
+    p.items[0].browser={kind:"firefox",tabs:[{url:"https://saved.test/",title:"Saved"}],activeTab:1};
+    const location={id:"gone",name:"Desktop 3",current:false,windowCount:1,browserCount:1,browserTitles:["Firefox"],ambiguous:false};
+    const e=await editor({profiles:[p],locationsByWorkspace:{browser:[location]},failSavedDesktop:"gone"});
+    await e.click('[data-action="refresh-tabs"]');
+    assert.match(e.document.querySelector('.workspace-card-status').textContent,/no longer open/);
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url,'https://saved.test/');
+});
+
+test("workspace updates explain an unresponsive extension and keep saved URLs", async () => {
+    const p=profile("browser","Research"); p.items[0].window.appId="firefox.exe";
+    p.items[0].browser={kind:"firefox",tabs:[{url:"https://saved.test/",title:"Saved"}],activeTab:1};
+    const source={id:"other",name:"Desktop 3",current:false,windowCount:1,browserCount:1,browserTitles:["Firefox"],ambiguous:false};
+    const e=await editor({profiles:[p],locationsByWorkspace:{browser:[source]},tabFailure:"extensionDidNotRespond"});
+    await e.click('[data-action="refresh-tabs"]');
+    assert.match(e.document.querySelector('.workspace-card-status').textContent,/extension didn't respond/);
+    assert.match(e.document.querySelector('.workspace-card-status').textContent,/profile/);
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url,'https://saved.test/');
+
+    const noSource=await editor({profiles:[p],locationFailures:{browser:"extensionDidNotRespond"}});
+    await noSource.click('[data-action="refresh-tabs"]');
+    assert.match(noSource.document.querySelector('.workspace-card-status').textContent,/extension didn't respond/);
+    assert.equal(noSource.calls.some(call=>call.command==='update_saved_workspace_tabs'),false,"do not wait for a second request after discovery already failed");
+});
 
 test("settings opens from the left navigation and leaves shortcuts", async () => {
     const e = await editor();
@@ -21,6 +562,30 @@ test("settings opens from the left navigation and leaves shortcuts", async () =>
     await e.click("#show-shortcuts");
     assert.equal(e.document.querySelector("#settings-page").hidden, true);
     assert.equal(e.document.querySelector("#shortcuts-page").hidden, false);
+});
+
+test("settings use expandable sections and browser setup opens its section", async () => {
+    const p=profile("browser-setup","Research");
+    p.items[0].window.appId="chrome.exe";
+    const e=await editor({profiles:[p]});
+    const sections=[...e.document.querySelectorAll('#settings-page > .setting-item')];
+    assert.equal(sections.length,6);
+    assert.ok(sections.every(section=>section.querySelector(':scope > summary')));
+    await e.click('[data-action="edit"]');
+    await e.click('.browser-connection-dot');
+    assert.equal(e.document.querySelector('#settings-page').hidden,false);
+    assert.equal(e.document.querySelector('#browser-extensions-settings').open,true);
+});
+
+test("workspace save errors appear beside Save and retain the draft", async () => {
+    const e = await editor({profiles:[profile("a", "Research")]});
+    await e.click('[data-action="edit"]');
+    e.input('#workspace-name', '');
+    await e.click('#save-workspace');
+    assert.match(e.document.querySelector('#workspace-save-status').textContent, /Give this workspace a name/);
+    assert.equal(e.document.querySelector('#workspace-editor').hidden, false);
+    assert.equal(e.document.querySelector('#message').textContent, '');
+    assert.equal(e.stored().profiles[0].name, 'Research');
 });
 
 test("launch types round trip through the editor and keep target and argument semantics visible",async()=>{
@@ -123,7 +688,366 @@ test("Firefox profile, tabs, active tab and capture notes survive review and sav
     await e.click("#save-workspace");
     assert.equal(e.stored().profiles[0].items[0].browser,null);
 });
-async function editor({profiles = [], failSave = false, failLoad = false, prepareImport = p => p} = {}) {
+test("Use current tabs updates the draft only and reports a missing match", async () => {
+    const p=profile("browser-current","Research");
+    Object.assign(p.items[0].window,{id:"42",pid:10});
+    p.items[0].browser={profilePath:"/profiles/work",profileName:"Work",tabs:[{url:"https://old.test",title:"Old"}],activeTab:1};
+    const current={profilePath:"/profiles/work",profileName:"Work",tabs:[{url:"https://new.test",title:"New"}],activeTab:1};
+    const e=await editor({profiles:[p],currentBrowserTabs:current});
+    await e.click('[data-action="edit"]'); await e.click('.use-current-browser-tabs');
+    assert.match(e.document.querySelector('.browser-current-status').textContent,/Save the workspace/);
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url,"https://old.test");
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url,"https://new.test");
+    const missing=await editor({profiles:[p]});
+    await missing.click('[data-action="edit"]'); await missing.click('.use-current-browser-tabs');
+    assert.match(missing.document.querySelector('.browser-current-status').textContent,/No connected browser window matched/);
+    assert.equal(missing.document.querySelector('.browser-current-status').classList.contains('error'),true);
+});
+test("current tabs do not replace a manually chosen different browser profile", async () => {
+    const p=profile("browser-profile-change","Research");
+    Object.assign(p.items[0].window,{id:"42",pid:10});
+    p.items[0].browser={profilePath:"/profiles/work",profileName:"Work",tabs:[{url:"https://saved.test",title:"Saved"}],activeTab:1};
+    const current={profilePath:"/profiles/work",profileName:"Work",tabs:[{url:"https://other.test",title:"Other"}],activeTab:1};
+    const e=await editor({profiles:[p],currentBrowserTabs:current});
+    await e.click('[data-action="edit"]');
+    e.input('[data-browser="profilePath"]',"/profiles/personal");
+    await e.click('.use-current-browser-tabs');
+    assert.equal(e.document.querySelector('[data-browser="profilePath"]').value,"/profiles/personal");
+    assert.equal(e.document.querySelector('[data-browser="tabs"]').value,"https://saved.test");
+    assert.equal(e.document.querySelector('.browser-current-status').classList.contains('error'),true);
+});
+test("a Chromium window captured before connecting can use current tabs later", async () => {
+    const p=profile("chrome-current","Research");
+    Object.assign(p.items[0].window,{id:"43",pid:11,appId:"chrome.exe"});
+    const current={kind:"chromium",profilePath:"",profileName:"",tabs:[{url:"https://new.test",title:"New"}],activeTab:1};
+    const e=await editor({profiles:[p],currentBrowserTabs:current});
+    await e.click('[data-action="edit"]');
+    assert.equal(e.document.querySelector('.browser-settings').hidden,false);
+    assert.equal(e.document.querySelector('.browser-summary').textContent,'Chrome profile and tabs');
+    assert.equal(e.document.querySelector('.restore-browser').checked,false);
+    await e.click('.use-current-browser-tabs');
+    assert.equal(e.document.querySelector('.restore-browser').checked,true);
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url,"https://new.test");
+});
+test("manually adding tabs to a previously uncaptured Chromium window enables tab restore", async () => {
+    const p=profile("chrome-manual","Research");
+    p.items[0].window.appId="chrome.exe";
+    const e=await editor({profiles:[p],bridgeStatus:{enabled:true,chromiumConnected:true}});
+    await e.click('[data-action="edit"]');
+    assert.equal(e.document.querySelector('.browser-connection-dot').hidden,false);
+    assert.equal(e.document.querySelector('.review-browser-tabs').hidden,false);
+    await e.click('.review-browser-tabs');
+    assert.equal(e.document.querySelector('.workspace-window-options').open,true);
+    assert.equal(e.document.querySelector('.workspace-item-toggle').getAttribute('aria-expanded'),'true');
+    assert.equal(e.document.querySelector('.browser-settings').hidden,false);
+    e.input('[data-browser="tabs"]',"https://example.test/");
+    assert.equal(e.document.querySelector('.restore-browser').checked,true);
+    assert.equal(e.document.querySelector('.browser-connection-dot').hidden,false);
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url,"https://example.test/");
+});
+test("browser connection is shown only on browser windows", async () => {
+    const p=profile("missing-tabs","Research");
+    p.items.push(item("Browser")); p.items[1].window.appId="firefox.exe";
+    p.items[1].browser={profilePath:"",profileName:"",tabs:[],activeTab:1};
+    const e=await editor({profiles:[p]});
+    await e.click('[data-action="edit"]');
+    assert.equal(e.document.querySelector('.workspace-item:first-child .browser-connection-dot').hidden,true);
+    assert.equal(e.document.querySelector('.workspace-item:nth-child(2) .browser-connection-dot').hidden,false);
+    e.change('.workspace-item:nth-child(2) .include-window',false);
+    assert.equal(e.document.querySelector('.workspace-item:nth-child(2)').hidden,true);
+    e.change('.workspace-item:nth-child(2) .include-window',true);
+    assert.equal(e.document.querySelector('.workspace-item:nth-child(2)').hidden,false);
+});
+test("the browser connection dot updates after returning from setup", async () => {
+    const p=profile("browser-warning","Research");
+    p.items[0].window.appId="chrome.exe";
+    p.items[0].browser={kind:"chromium",profilePath:"",profileName:"",tabs:[{url:"https://saved.test",title:""}],activeTab:1};
+    const e=await editor({profiles:[p],bridgeStatus:{enabled:true,chromiumConnected:false}});
+    await e.click('[data-action="edit"]');
+    const dot=e.document.querySelector('.browser-connection-dot');
+    assert.equal(dot.dataset.status,'disconnected');
+    assert.match(dot.title,/Not connected/);
+    await e.click('.browser-connection-dot');
+    e.setBridgeStatus({enabled:true,chromiumConnected:true});
+    await e.click('#show-workspaces');
+    assert.equal(dot.dataset.status,'connected');
+    assert.match(dot.getAttribute('aria-label'),/Connected/);
+});
+test("returning from browser setup fills missing draft tabs without replacing manual tabs", async () => {
+    const p=profile("connect-later","Research");
+    Object.assign(p.items[0].window,{id:"1",pid:1,appId:"chrome.exe"});
+    const manual=structuredClone(p.items[0]); manual.window.id="2"; p.items.push(manual);
+    const fresh={kind:"chromium",profilePath:"",profileName:"",tabs:[{url:"https://fresh.test",title:""}],activeTab:1};
+    const e=await editor({profiles:[p],currentWorkspaceTabs:[{index:0,browser:fresh},{index:1,browser:fresh}]});
+    await e.click('[data-action="edit"]');
+    e.input('.workspace-item:nth-child(2) [data-browser="tabs"]','https://manual.test');
+    await e.click('.browser-connection-dot');
+    e.setBridgeStatus({enabled:true,chromiumConnected:true});
+    await e.click('#show-workspaces'); await tick();
+    assert.equal(e.calls.filter(call=>call.command==='current_workspace_tabs').length,1);
+    assert.equal(e.document.querySelector('.workspace-item:nth-child(1) [data-browser="tabs"]').value,'https://fresh.test');
+    assert.equal(e.document.querySelector('.workspace-item:nth-child(2) [data-browser="tabs"]').value,'https://manual.test');
+    assert.equal(e.stored().profiles[0].items[0].browser,undefined);
+});
+test("one workspace action refreshes selected browser tabs without losing draft edits", async () => {
+    const p=profile("refresh-draft","Research");
+    Object.assign(p.items[0].window,{id:"1",pid:1,appId:"chrome.exe"});
+    p.items[0].browser={kind:"chromium",profilePath:"",profileName:"",tabs:[{url:"https://old.test",title:""}],activeTab:1};
+    const excluded=structuredClone(p.items[0]); excluded.window.id="2";
+    const unmatched=structuredClone(p.items[0]); unmatched.window.id="3";
+    p.items.push(excluded,unmatched);
+    const latest={kind:"chromium",profilePath:"",profileName:"",tabs:[{url:"https://new.test",title:"New"}],activeTab:1};
+    const e=await editor({profiles:[p],currentWorkspaceTabs:[{index:0,browser:latest},{index:1,browser:latest}],bridgeStatus:{enabled:true,chromiumConnected:true}});
+    await e.click('[data-action="edit"]');
+    e.input('#workspace-name','Draft name');
+    await e.click('.workspace-item-toggle');
+    e.change('.workspace-item:nth-child(2) .include-window',false);
+    await e.click('#refresh-workspace-tabs');
+    assert.equal(e.calls.filter(call=>call.command==='current_workspace_tabs').length,1);
+    assert.equal(e.document.querySelector('.workspace-item-toggle').getAttribute('aria-expanded'),'true');
+    assert.match(e.document.querySelector('#workspace-tabs-status').textContent,/1 couldn't be matched/);
+    assert.match(e.document.querySelector('.workspace-item:nth-child(3) .capture-note').textContent,/Saved tabs were kept/);
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url,'https://old.test');
+    await e.click('#save-workspace');
+    const saved=e.stored().profiles[0];
+    assert.equal(saved.name,'Draft name');
+    assert.equal(saved.items.length,2);
+    assert.equal(saved.items[0].browser.tabs[0].url,'https://new.test');
+    assert.equal(saved.items[1].browser.tabs[0].url,'https://old.test');
+});
+test("saved workspaces update all matched browser tabs with one action", async () => {
+    const p=profile("refresh-saved","Research");
+    p.items[0].window.appId="chrome.exe";
+    p.items[0].browser={kind:"chromium",profilePath:"",profileName:"",tabs:[{url:"https://old.test",title:""}],activeTab:1};
+    const latest={kind:"chromium",profilePath:"",profileName:"",tabs:[{url:"https://new.test",title:""}],activeTab:1};
+    const e=await editor({profiles:[p],savedTabUpdates:[{index:0,browser:latest}]});
+    await e.click('[data-action="refresh-tabs"]');
+    assert.equal(e.calls.filter(call=>call.command==='update_saved_workspace_tabs').length,1);
+    assert.equal(e.calls.filter(call=>call.command==='save_workspaces').length,0);
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url,'https://new.test');
+    assert.match(e.document.querySelector('.workspace-card-status').textContent,/1 window updated/);
+    await e.click('[data-action="edit"]');
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url,'https://new.test');
+});
+test("a tab refresh with no matching connection keeps existing saved tabs", async () => {
+    const p=profile("no-connection","Research");
+    p.items[0].window.appId="chrome.exe";
+    p.items[0].browser={kind:"chromium",profilePath:"",profileName:"",tabs:[{url:"https://saved.test",title:""}],activeTab:1};
+    const e=await editor({profiles:[p]});
+    await e.click('[data-action="refresh-tabs"]');
+    assert.match(e.document.querySelector('.workspace-card-status').textContent,/couldn't identify/);
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url,'https://saved.test');
+});
+test("editing a saved tab list keeps the selected tab within the remaining tabs", async () => {
+    const p=profile("browser-clamp","Research");
+    p.items[0].browser={profilePath:"",profileName:"",tabs:[{url:"https://one.test",title:""},{url:"https://two.test",title:""}],activeTab:2};
+    const e=await editor({profiles:[p]});
+    await e.click('[data-action="edit"]');
+    e.input('[data-browser="tabs"]',"https://one.test");
+    assert.equal(e.document.querySelector('[data-browser="activeTab"]').value,"1");
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].items[0].browser.activeTab,1);
+});
+test("visual position selection updates only the draft and cancel preserves the saved position", async () => {
+    const p = profile("position", "Position");
+    Object.assign(p.items[0].window, {rect:{x:10,y:20,width:640,height:400}, workArea:{x:0,y:0,width:1920,height:1080}, maximizedHorizontal:true, maximizedVertical:true});
+    const position = {rect:{x:-800,y:50,width:700,height:600},workArea:{x:-1920,y:0,width:1920,height:1080},monitor:1};
+    const e = await editor({profiles:[p], positionResults:[null, position]});
+    await e.click('[data-action="edit"]');
+    await e.click('.set-position');
+    assert.equal(e.document.querySelector('[data-rect="x"]').value, '10');
+    await e.click('.set-position');
+    assert.equal(e.document.querySelector('[data-rect="x"]').value, '-800');
+    assert.equal(e.stored().profiles[0].items[0].window.rect.x, 10);
+    e.input('[data-rect="width"]', '720');
+    await e.click('#save-workspace');
+    const saved = e.stored().profiles[0].items[0].window;
+    assert.equal(saved.rect.x, -800);
+    assert.equal(saved.workArea.x, -1920);
+    assert.equal(saved.rect.width, 720);
+    assert.equal(saved.maximizedHorizontal, false);
+});
+
+test("workspace monitor control selects a display while preserving the source placement", async () => {
+    const p = profile("monitor", "Work");
+    Object.assign(p.items[0].window, {monitor:2,monitorName:"old-display",rect:{x:2100,y:100,width:800,height:600},workArea:{x:1920,y:0,width:1920,height:1080}});
+    const e = await editor({profiles:[p], monitors:[{x:0,y:0,width:1920,height:1080},{x:1920,y:0,width:1920,height:1080}]});
+    await e.click('[data-action="edit"]');
+    const monitor = e.document.querySelector('.window-placement');
+    assert.equal(monitor.value,'2');
+    assert.deepEqual([...monitor.options].map(option=>option.textContent),['Monitor 1','Monitor 2']);
+    monitor.value = '1'; monitor.dispatchEvent(new e.window.Event('change'));
+    assert.equal(e.stored().profiles[0].items[0].window.monitor,2);
+    await e.click('#save-workspace');
+    const saved = e.stored().profiles[0].items[0].window;
+    assert.equal(saved.monitor,1);
+    assert.equal(saved.monitorName,'');
+    assert.deepEqual(saved.rect,p.items[0].window.rect);
+    assert.deepEqual(saved.workArea,p.items[0].window.workArea);
+});
+
+test("workspace monitor remains editable when display discovery is unavailable", async () => {
+    const e = await editor({profiles:[profile('monitor-fallback','Work')], monitors:null});
+    await e.click('[data-action="edit"]');
+    assert.equal(e.document.querySelector('.window-placement').hidden,true);
+    assert.equal(e.document.querySelector('.window-placement-fallback').hidden,false);
+    const number = e.document.querySelector('.monitor-number');
+    number.value='2'; number.dispatchEvent(new e.window.Event('change'));
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].items[0].window.monitor,2);
+});
+
+test("a selected display keeps its identity as the monitor layout changes", async () => {
+    const display=(index,id,sourceId,x) => ({index,id,sourceId,name:id,primary:id==="hardware-left",stable:true,geometry:{x,y:0,width:1920,height:1080}});
+    const left=display(1,"hardware-left","source-left",0), right=display(2,"hardware-right","source-right",1920);
+    const p=profile("monitor-layout","Work"); p.items[0].window.monitor=1; p.items[0].window.monitorName="source-left";
+    const e=await editor({profiles:[p],monitorOptions:[left,right],currentPlatform:"windows"});
+    await e.click('[data-action="edit"]');
+    const picker=e.document.querySelector('.window-placement');
+    picker.value='2'; picker.dispatchEvent(new e.window.Event('change'));
+    const added=display(1,"hardware-new","source-new",-1920);
+    const shiftedLeft={...left,index:2}, shiftedRight={...right,index:3,sourceId:"renumbered-source"};
+    e.setMonitors([added,shiftedLeft,shiftedRight]);
+    e.window.dispatchEvent(new e.window.Event("focus")); await tick(); await tick();
+    assert.deepEqual([...picker.options].map(option=>option.textContent),["Left monitor","Main monitor","Right monitor"]);
+    assert.equal(picker.value,'3');
+    e.setMonitors([shiftedLeft]); e.window.dispatchEvent(new e.window.Event("focus")); await tick(); await tick();
+    assert.equal(picker.value,'unavailable');
+    assert.match(picker.textContent,/Display unavailable/);
+    e.setMonitors([added,shiftedLeft,shiftedRight]); e.window.dispatchEvent(new e.window.Event("focus")); await tick(); await tick();
+    assert.equal(picker.value,'3');
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].items[0].window.monitorName,'hardware-right');
+    await e.click('[data-action="restore"]');
+    assert.equal(e.calls.some(call=>call.command==='restore_workspace'),true);
+});
+
+test("visual position selection retains the chosen display after rearrangement", async () => {
+    const area={x:1920,y:0,width:1920,height:1080};
+    const main={index:1,id:"main-id",sourceId:"main-source",name:"Main",primary:true,stable:true,geometry:{x:0,y:0,width:1920,height:1080}};
+    const right={index:2,id:"right-id",sourceId:"right-source",name:"Right",primary:false,stable:true,geometry:area};
+    const position={rect:{x:2100,y:50,width:700,height:600},workArea:area,monitor:2};
+    const e=await editor({profiles:[profile("position-layout","Work")],monitorOptions:[main,right],positionResults:[position],currentPlatform:"windows"});
+    await e.click('[data-action="edit"]'); await e.click('.set-position');
+    e.setMonitors([{...right,index:1,sourceId:"renumbered"},{...main,index:2}]);
+    e.window.dispatchEvent(new e.window.Event("focus")); await tick(); await tick();
+    assert.equal(e.document.querySelector('.window-placement').value,'1');
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].items[0].window.monitorName,'right-id');
+});
+
+test("expanded browser windows show URLs and keep launch details under Advanced", async () => {
+    const p = profile('visible-options','Work');
+    p.items[0].window.appId='chrome.exe';
+    p.items[0].browser={kind:'chromium',profilePath:'',profileName:'',tabs:[{url:'https://example.test',title:''}],activeTab:1};
+    const e = await editor({profiles:[p]});
+    await e.click('[data-action="edit"]');
+    await e.click('.workspace-item-toggle');
+    assert.equal(e.document.querySelector('.workspace-window-options').open,true);
+    assert.equal(e.document.querySelector('.browser-settings').hidden,false);
+    assert.ok(e.document.querySelector('.browser-settings [data-browser="tabs"]'));
+    assert.equal(e.document.querySelector('.workspace-advanced').hasAttribute('open'),false);
+    assert.ok(e.document.querySelector('.workspace-advanced [data-launch="program"]'));
+});
+
+test("workspace footer keeps Cancel next to Save and discards only the draft", async () => {
+    const e = await editor({profiles:[profile("a", "Original")]});
+    await e.click('[data-action="edit"]');
+    const footer = e.document.querySelector('#workspace-editor .editor-footer');
+    assert.equal(footer.querySelector('#discard-workspace').nextElementSibling.id, 'save-workspace');
+    e.input('#workspace-name', 'Unsaved');
+    await e.click('#discard-workspace');
+    assert.equal(e.document.querySelector('#workspace-editor').hidden, true);
+    assert.equal(e.stored().profiles[0].name, 'Original');
+    assert.equal(e.calls.some(call => call.command === 'save_workspaces'), false);
+});
+
+test("Firefox profile selection saves its name and path without changing captured tabs", async () => {
+    const p = profile("browser-picker", "Research");
+    p.items[0].browser = {profilePath:"/profiles/work", profileName:"Work", tabs:[{url:"https://example.test/", title:"Example"}], activeTab:1};
+    const e = await editor({profiles:[p], browserProfiles:[{name:"Work",path:"/profiles/work"},{name:"Personal",path:"/profiles/personal"}]});
+    await e.click('[data-action="edit"]');
+    const picker = e.document.querySelector('.browser-profile');
+    assert.equal(picker.value, "/profiles/work");
+    picker.value = "/profiles/personal";
+    picker.dispatchEvent(new e.window.Event("change"));
+    await e.click("#save-workspace");
+    const saved = e.stored().profiles[0].items[0].browser;
+    assert.equal(saved.profileName, "Personal");
+    assert.equal(saved.profilePath, "/profiles/personal");
+    assert.equal(saved.tabs[0].url, "https://example.test/");
+});
+
+test("ambiguous Firefox capture can be resolved by choosing a saved browser window", async () => {
+    const p = profile("browser-ambiguous", "Research");
+    p.items[0].browser = {profilePath:"/profiles/work",profileName:"Work",tabs:[],activeTab:1};
+    p.items[0].captureNote = "Firefox tabs could not be matched unambiguously.";
+    const sessions = [{profilePath:"/profiles/work",profileName:"Work",tabs:[{url:"https://one.test",title:"One"}],activeTab:1},{profilePath:"/profiles/work",profileName:"Work",tabs:[{url:"https://two.test",title:"Two"}],activeTab:1}];
+    const e = await editor({profiles:[p],browserSessions:sessions});
+    await e.click('[data-action="edit"]');
+    assert.match(e.document.querySelector('.capture-note').textContent, /No Firefox tabs are saved/);
+    await e.click('.find-browser-tabs');
+    assert.equal(e.document.querySelector('.browser-session-choice').hidden, false);
+    const picker = e.document.querySelector('.browser-session');
+    picker.value = '1';
+    await e.click('.use-browser-session');
+    assert.equal(e.document.querySelector('[data-browser="tabs"]').value, 'https://two.test');
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url, 'https://two.test');
+    assert.equal(e.stored().profiles[0].items[0].captureNote, '');
+});
+
+test("choosing a saved Firefox window protects manually edited URLs", async () => {
+    const p=profile('session-confirm','Research'); p.items[0].window.appId='firefox.exe';
+    p.items[0].browser={profilePath:'/profiles/work',profileName:'Work',tabs:[{url:'https://old.test',title:''}],activeTab:1};
+    const sessions=[{tabs:[{url:'https://session.test',title:'Session'}],activeTab:1}];
+    const e=await editor({profiles:[p],browserSessions:sessions});
+    await e.click('[data-action="edit"]');
+    e.input('[data-browser="tabs"]','https://manual.test');
+    await e.click('.find-browser-tabs');
+    e.document.querySelector('.browser-session').value='0';
+    await e.click('.use-browser-session');
+    assert.equal(e.document.querySelector('#workspace-tabs-confirm').hidden,false);
+    await e.click('#workspace-tabs-keep');
+    assert.equal(e.document.querySelector('[data-browser="tabs"]').value,'https://manual.test');
+    await e.click('.use-browser-session'); await e.click('#workspace-tabs-replace');
+    assert.equal(e.document.querySelector('[data-browser="tabs"]').value,'https://session.test');
+});
+
+test("Firefox tab recovery appears below URLs and reports errors beside the control", async () => {
+    const p = profile("missing-browser", "Research");
+    p.items[0].browser = {profilePath:"",profileName:"",tabs:[],activeTab:1};
+    const e = await editor({profiles:[p], browserSessionError:"Firefox session is unavailable."});
+    await e.click('[data-action="edit"]');
+    assert.ok(e.document.querySelector('.browser-settings [data-browser="tabs"]'));
+    assert.ok(e.document.querySelector('.browser-advanced .find-browser-tabs'));
+    await e.click('.find-browser-tabs');
+    assert.match(e.document.querySelector('.browser-session-status').textContent, /Choose a Firefox profile/);
+    assert.equal(e.document.querySelector('.browser-session-status').classList.contains('error'), true);
+    assert.doesNotMatch(e.document.querySelector('#message').textContent, /Choose a Firefox profile/);
+    e.input('[data-browser="profilePath"]', '/profiles/work');
+    await e.click('.find-browser-tabs');
+    assert.match(e.document.querySelector('.browser-session-status').textContent, /session is unavailable/);
+});
+
+test("profile picker shows matching names without exposing duplicate paths", async () => {
+    const p = profile("browser-names", "Research"); p.platform = "windows";
+    p.items[0].browser = {profilePath:"C:\\Profiles\\work",profileName:"old",tabs:[],activeTab:1};
+    const e = await editor({profiles:[p], browserProfiles:[{name:"Work",path:"c:/profiles/work"},{name:"Work",path:"C:/profiles/other"}]});
+    await e.click('[data-action="edit"]');
+    const picker = e.document.querySelector('.browser-profile');
+    assert.equal(picker.value, 'c:/profiles/work');
+    assert.deepEqual([...picker.querySelectorAll('option')].slice(1).map(option => option.textContent), ['Work (1)', 'Work (2)']);
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].items[0].browser.profileName, 'Work');
+    assert.equal(e.stored().profiles[0].items[0].browser.profilePath, 'C:\\Profiles\\work');
+});
+
+async function editor({profiles = [], savedBrowsers = null, failBrowserDeletes = [], failWorkspaceDelete = false, browserProfiles = [], browserSessions = [], browserSessionError = null, currentBrowserTabs = null, currentWorkspaceTabs = [], currentWorkspaceTabsByDesktop = {}, savedTabUpdates = [], savedTabUpdatesByDesktop = {}, savedTabGate = null, captureInitial = null, captureEnrichment = null, captureEnrichmentGate = null, pickedWindow = null, openWindows = [], openWindowsGate = null, openWindowsError = null, locationsByWorkspace = {}, openLocationsByWorkspace = {}, locationFailures = {}, tabFailure = "windowNotMatched", failSavedDesktop = null, bridgeStatus = {enabled:false}, desktopWorkspace = null, positionResults = [], monitors = [{x:0,y:0,width:1920,height:1080}], monitorOptions = [], displaySettings = {}, currentPlatform = "linux", failSave = false, failLoad = false, prepareImport = p => p, timers = {setTimeout:()=>1,clearTimeout:()=>{}}} = {}) {
     const {window,document} = parseHTML(html);
     Object.defineProperty(window.HTMLSelectElement.prototype,"value", {configurable:true,
         get(){return this.querySelector("option[selected]")?.value ?? this.querySelector("option")?.value;},
@@ -131,20 +1055,55 @@ async function editor({profiles = [], failSave = false, failLoad = false, prepar
     });
     const calls = [];
     let stored = {version:1, profiles:structuredClone(profiles)};
+    let storedBrowsers = {version:1, profiles:structuredClone(savedBrowsers || [])};
     window.__TAURI__ = {core:{invoke:async(command,args) => {
         calls.push({command,args:structuredClone(args)});
         if (command === "get_workspaces") {if(failLoad) throw "Unreadable workspace file"; return structuredClone(stored);}
-        if (command === "capture_workspace") return {profile:{id:"captured",name:args.name,platform:"linux",items:[item("First"),item("Second")]},suggestedId:profiles[0]?.id};
+        if (command === "get_status") return {platform:currentPlatform};
+        if (command === "get_config") return {settings:structuredClone(displaySettings)};
+        if (command === "get_monitors") return structuredClone(monitorOptions);
+        if (command === "get_saved_browsers") return structuredClone(storedBrowsers);
+        if (command === "delete_saved_browser") {
+            if (failBrowserDeletes.includes(args.id)) throw "Browser file is read-only";
+            storedBrowsers.profiles = storedBrowsers.profiles.filter(profile => profile.id !== args.id);
+            return structuredClone(storedBrowsers);
+        }
+        if (command === "get_import_monitors") return structuredClone(monitors);
+        if (command === "firefox_profiles") return structuredClone(browserProfiles);
+        if (command === "browser_profiles") return structuredClone(browserProfiles);
+        if (command === "bridge_status") return structuredClone(bridgeStatus);
+        if (command === "current_desktop_workspace") return desktopWorkspace;
+        if (command === "workspace_locations") return (args?.profile ? [args.profile] : stored.profiles).map(profile => ({workspaceId:profile.id,locations:structuredClone(locationsByWorkspace[profile.id] || (profile.id === desktopWorkspace ? [{id:"desktop-one",name:"Desktop 1",current:true,windowCount:profile.items.length,browserCount:0,browserTitles:[],ambiguous:false}] : [])),failure:args?.resolveBrowsers ? locationFailures[profile.id] || null : null}));
+        if (command === "workspace_open_locations") return structuredClone(openLocationsByWorkspace[args.workspaceId] || []);
+        if (command === "workspace_move_to_desktop") { openLocationsByWorkspace[args.workspaceId] = (openLocationsByWorkspace[args.workspaceId] || []).filter(location=>location.id!==args.desktopId); return; }
+        if (command === "workspace_go_to_desktop") return;
+        if (command === "current_browser_tabs") return structuredClone(currentBrowserTabs);
+        if (command === "current_workspace_tabs") {const updates=currentWorkspaceTabsByDesktop[args.desktopId] || currentWorkspaceTabs;return {updates:structuredClone(updates),failure:updates.length ? null : tabFailure};}
+        if (command === "update_saved_workspace_tabs") {
+            if (savedTabGate) await savedTabGate;
+            if (args.desktopId && args.desktopId === failSavedDesktop) throw "The browser is no longer open on that desktop. Choose a source again.";
+            const workspace = stored.profiles.find(profile => profile.id === args.workspaceId);
+            const updates = savedTabUpdatesByDesktop[args.desktopId] || savedTabUpdates;
+            for (const update of updates) workspace.items[update.index].browser = structuredClone(update.browser);
+            const count = workspace.items.filter(item => item.browser || /firefox|chrome/i.test(item.window.appId)).length;
+            return {store:structuredClone(stored),updated:updates.length,unmatched:count-updates.length,failure:updates.length ? null : tabFailure};
+        }
+        if (command === "firefox_sessions") { if (browserSessionError) throw browserSessionError; return structuredClone(browserSessions); }
+        if (command === "choose_position") return structuredClone(positionResults.shift() ?? null);
+        if (command === "capture_workspace" || command === "start_workspace_capture") return {profile:structuredClone(captureInitial || {id:"captured",name:args.name,platform:"linux",items:[item("First"),item("Second")]}),suggestedId:profiles[0]?.id};
+        if (command === "enrich_workspace_capture") {if(captureEnrichmentGate) await captureEnrichmentGate; return structuredClone(captureEnrichment || args.profile);}
+        if (command === "pick_workspace_window") return structuredClone(pickedWindow);
+        if (command === "workspace_open_windows") { if (openWindowsGate) await openWindowsGate; if (openWindowsError) throw openWindowsError; return structuredClone(openWindows); }
         if (command === "prepare_workspace_import") return prepareImport(structuredClone(args.profile));
-        if (command === "save_workspaces") {if(failSave) throw "Disk is read-only"; stored=structuredClone(args.store); return structuredClone(stored);}
+        if (command === "save_workspaces") {if(failSave || (failWorkspaceDelete && args.store.profiles.length < stored.profiles.length)) throw "Disk is read-only"; stored=structuredClone(args.store); return structuredClone(stored);}
         if (command === "restore_workspace") return [{label:"Fixture",restored:false,launched:false,error:"Missing app"}];
         if (command === "cancel_workspace_restore") return;
         throw new Error(command);
     }}};
-    vm.runInNewContext(source,{window,document});
-    const result = {window,document,calls,stored:()=>stored,
+    vm.runInNewContext(source + (savedBrowsers ? savedBrowserSource : ""),{window,document,...timers});
+    const result = {window,document,calls,stored:()=>stored,storedBrowsers:()=>storedBrowsers,replaceStored:value=>{stored=structuredClone(value);},replaceStoredBrowsers:value=>{storedBrowsers=structuredClone(value);},setBridgeStatus:value=>{bridgeStatus=value;},setDesktopWorkspace:value=>{desktopWorkspace=value;},setMonitors:value=>{monitorOptions=structuredClone(value);},
         async click(selector){document.querySelector(selector).click();await tick();},
-        input(selector,value){const input=document.querySelector(selector);input.value=value;input.dispatchEvent(new window.Event("input"));},
+        input(selector,value){const input=document.querySelector(selector);input.value=value;input.dispatchEvent(new window.Event("input",{bubbles:true}));},
         change(selector,checked){const input=document.querySelector(selector);input.checked=checked;input.dispatchEvent(new window.Event("change"));}
     };
     await result.click("#show-workspaces");
@@ -183,6 +1142,12 @@ test("update preserves workspace identity; rename and reordering persist",async(
     await e.click('[data-action="update"]');
     e.input("#workspace-name","Updated A");
     await e.click("#save-workspace");
+    assert.equal(e.document.querySelector('#workspace-replace-saved').hidden,false);
+    assert.equal(e.stored().profiles[0].name,"A");
+    await e.click('#workspace-replace-cancel');
+    assert.equal(e.document.querySelector('#workspace-editor').hidden,false);
+    await e.click('#save-workspace');
+    await e.click('#workspace-replace-confirm');
     assert.equal(e.stored().profiles[0].id,"a");
     assert.equal(e.stored().profiles[0].items.length,2);
     await e.click('[data-action="down"]');
@@ -199,6 +1164,7 @@ test("failed save keeps the draft and deletion requires a concrete confirmation"
     await e.click("#save-workspace");
     assert.equal(e.document.querySelector("#workspace-editor").hidden,false);
     assert.equal(e.document.querySelector("#workspace-name").value,"Unsaved");
+    assert.match(e.document.querySelector("#workspace-save-status").textContent,/Disk is read-only/);
     assert.equal(e.stored().profiles[0].name,"A");
     const calls=e.calls.length;
     await e.click('[data-action="delete"]');
@@ -207,31 +1173,599 @@ test("failed save keeps the draft and deletion requires a concrete confirmation"
     await e.click('[data-action="cancel-delete"]');
     assert.equal(e.document.querySelector(".workspace-delete-confirm").hidden,true);
 });
+test("a timed workspace save error clears without discarding the draft", async () => {
+    let next = 0; const pending = new Map();
+    const timers = {setTimeout:fn=>{const id=++next; pending.set(id,fn); return id;},clearTimeout:id=>pending.delete(id)};
+    const e=await editor({profiles:[profile("a","A")],failSave:true,timers});
+    await e.click('[data-action="edit"]');
+    e.input('#workspace-name',"Unsaved");
+    await e.click('#save-workspace');
+    const status=e.document.querySelector('#workspace-save-status');
+    assert.match(status.textContent,/Disk is read-only/);
+    assert.equal(status.classList.contains('timed-error'),true);
+    const [id, expire]=[...pending][0]; pending.delete(id); expire();
+    assert.equal(status.hidden,true);
+    assert.equal(e.document.querySelector('#workspace-editor').hidden,false);
+    assert.equal(e.document.querySelector('#workspace-name').value,"Unsaved");
+    assert.equal(e.stored().profiles[0].name,"A");
+});
 test("unreadable store prevents capture and restore failures are shown per app",async()=>{
     const bad=await editor({failLoad:true});
     assert.equal(bad.document.querySelector("#capture-workspace").disabled,true);
     const e=await editor({profiles:[profile("a","A")]});
     await e.click('[data-action="restore"]');
-    assert.match(e.document.querySelector("#workspace-results").textContent,/Missing app/);
-    assert.match(e.document.querySelector("#message").textContent,/Restored 0 of 1/);
+    assert.match(e.document.querySelector(".workspace-card-results .error").textContent,/Missing app/);
+    assert.match(e.document.querySelector(".workspace-card-status").textContent,/Opened 0 of 1/);
+    assert.equal(e.document.querySelector(".workspace-card-status").classList.contains("error"),true);
     assert.equal(e.document.querySelector("#cancel-restore").hidden,true);
 });
 
-test("workspace update hotkey selects the closest profile and preserves an existing draft", async () => {
+test("workspace hotkey prompts before replacing an existing draft", async () => {
     const e = await editor({profiles:[profile("a","Research")]});
     const request = {action:"update-workspace",capture:{profile:profile("new","New workspace"),suggestedId:"a"}};
     e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request",{detail:request}));
     await tick();
-    assert.equal(e.document.querySelector("#workspace-target").value, "a");
+    assert.equal(e.document.querySelector("#workspace-hotkey-choice").hidden, false);
+    assert.equal(e.document.querySelector("#workspace-hotkey-target").value, "a");
+    await e.click("#workspace-hotkey-update");
+    assert.equal(e.document.querySelector("#workspace-target"), null);
     assert.equal(e.document.querySelector("#workspace-name").value, "Research");
     assert.equal(e.calls.some(c => c.command === "save_workspaces"), false);
     e.input("#workspace-name", "Unsaved rename");
     e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request",{detail:request}));
     await tick();
     assert.equal(e.document.querySelector("#workspace-name").value, "Unsaved rename");
-    assert.match(e.document.querySelector("#message").textContent, /Save or cancel/);
+    assert.equal(e.document.querySelector("#workspace-recapture").hidden, false);
+    await e.click("#workspace-keep-draft");
     await e.click("#save-workspace");
+    await e.click("#workspace-replace-confirm");
     assert.equal(e.stored().profiles.length, 1);
     assert.equal(e.stored().profiles[0].id, "a");
     assert.equal(e.stored().profiles[0].name, "Unsaved rename");
+});
+
+test("workspace hotkey New makes a new review draft", async () => {
+    const e = await editor({profiles:[profile("a","Existing")]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request",{detail:{action:"update-workspace",capture:{profile:profile("new","New workspace"),suggestedId:"a"}}}));
+    await tick(); await e.click("#workspace-hotkey-new");
+    assert.equal(e.document.querySelector("#workspace-target"), null);
+    e.input("#workspace-name", "My new workspace");
+    await e.click("#save-workspace");
+    assert.equal(e.stored().profiles.length, 2);
+    assert.equal(e.stored().profiles[1].name, "My new workspace");
+});
+
+test("workspace shortcut shows the page during capture and prompts before recapturing a draft", async () => {
+    const e=await editor();
+    await e.click("#show-shortcuts");
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request",{detail:{action:"open-workspaces",capturing:true}}));
+    await tick();
+    assert.equal(e.document.querySelector("#workspaces-page").hidden,false);
+    assert.match(e.document.querySelector("#workspace-status").textContent,/Capturing/);
+    const send=profile=>e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request",{detail:{action:"update-workspace",capture:{profile,suggestedId:null}}}));
+    send(profile("first","New workspace")); await tick();
+    send(profile("second","New workspace")); await tick();
+    assert.equal(e.document.querySelector("#workspace-recapture").hidden,false);
+    await e.click('#workspace-recapture-confirm');
+    e.input("#workspace-name","Recaptured"); await e.click("#save-workspace");
+    assert.equal(e.stored().profiles[0].id,"second");
+    assert.equal(e.stored().profiles[0].name,"Recaptured");
+});
+
+test("a fast capture is not lost while the workspace list is still loading", async () => {
+    const {window,document}=parseHTML(html); let finishLoad;
+    window.__TAURI__={core:{invoke:command=>{
+        if (command==='get_workspaces') return new Promise(resolve=>{finishLoad=resolve;});
+        if (command==='browser_profiles') return Promise.resolve([]);
+        throw Error(command);
+    }}};
+    vm.runInNewContext(source,{window,document,setTimeout:()=>1,clearTimeout:()=>{}});
+    window.dispatchEvent(new window.CustomEvent('warp-workspace-request',{detail:{action:'open-workspaces',capturing:true}}));
+    window.dispatchEvent(new window.CustomEvent('warp-workspace-request',{detail:{action:'update-workspace',capture:{profile:profile('captured','New workspace'),suggestedId:null}}}));
+    assert.equal(document.querySelector('#workspaces-page').hidden,false);
+    finishLoad({version:1,profiles:[]});
+    await tick(); await tick();
+    assert.equal(document.querySelector('#workspace-editor').hidden,false);
+    assert.equal(document.querySelector('#workspace-name').value,'New workspace');
+});
+
+test("the workspace choice is available while browser capture finishes", async () => {
+    const e=await editor({profiles:[profile('saved','Saved')]});
+    const initial=profile('new','New workspace');
+    initial.items[0].window.appId='firefox.exe';
+    const send=detail=>e.window.dispatchEvent(new e.window.CustomEvent('warp-workspace-request',{detail}));
+    send({action:'update-workspace',captureId:1,capturing:true,capture:{profile:initial,suggestedId:'saved'}}); await tick();
+    assert.equal(e.document.querySelector('#workspace-hotkey-choice').hidden,false);
+    await e.click('#workspace-hotkey-new');
+    assert.equal(e.document.querySelector('#workspace-tabs-loading').hidden,false);
+    assert.equal(e.document.querySelector('#workspace-editor').hidden,false);
+    e.input('#workspace-name','Captured workspace');
+    await e.click('#save-workspace');
+    assert.match(e.document.querySelector('#workspace-save-status').textContent,/Saving when URLs/);
+    assert.equal(e.stored().profiles.length,1);
+    const complete=structuredClone(initial);
+    complete.items[0].browser={profilePath:'/profile',profileName:'Work',tabs:[{url:'https://example.test',title:'Example'}],activeTab:1};
+    send({action:'update-workspace',captureId:1,capturing:false,capture:{profile:complete,suggestedId:'saved'}}); await tick();
+    await tick();
+    assert.equal(e.document.querySelector('#workspace-tabs-loading').hidden,true);
+    assert.equal(e.stored().profiles[1].name,'Captured workspace');
+    assert.equal(e.stored().profiles[1].items[0].browser.tabs[0].url,'https://example.test');
+});
+
+test("manual capture stays editable and does not replace URLs entered while loading", async () => {
+    const initial=profile('new','New workspace'); initial.items[0].window.appId='firefox.exe';
+    const enriched=structuredClone(initial); enriched.items[0].browser={tabs:[{url:'https://captured.test/',title:'Captured'}],activeTab:1};
+    let release; const captureEnrichmentGate=new Promise(resolve=>{release=resolve;});
+    const e=await editor({captureInitial:initial,captureEnrichment:enriched,captureEnrichmentGate});
+    await e.click('#capture-workspace');
+    assert.equal(e.document.querySelector('#workspace-editor').hidden,false);
+    assert.equal(e.document.querySelector('#workspace-tabs-loading').hidden,false);
+    e.input('#workspace-name','My work');
+    e.input('[data-browser="tabs"]','https://manual.test/');
+    await e.click('#save-workspace');
+    release(); await tick(); await tick();
+    assert.equal(e.stored().profiles[0].name,'My work');
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url,'https://manual.test/');
+});
+
+test("failed background capture keeps the draft available for retry or save", async () => {
+    const initial=profile('new','New workspace'); initial.items[0].window.appId='firefox.exe';
+    let reject; const captureEnrichmentGate=new Promise((_,fail)=>{reject=fail;});
+    const e=await editor({captureInitial:initial,captureEnrichmentGate});
+    await e.click('#capture-workspace'); await e.click('#save-workspace');
+    reject(new Error('Unavailable')); await tick(); await tick();
+    assert.equal(e.document.querySelector('#workspace-editor').hidden,false);
+    assert.match(e.document.querySelector('#workspace-save-status').textContent,/Retry or save without/);
+    assert.match(e.document.querySelector('#workspace-tabs-status').textContent,/Unavailable.*Existing URLs were kept/);
+    assert.equal(e.stored().profiles.length,0);
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles.length,1);
+});
+
+test("adding an existing window preserves the draft and avoids duplicates", async () => {
+    const original=profile('saved','Research');
+    const added=item('Editor'); Object.assign(added.window,{id:'42',pid:10,appId:'editor.exe'});
+    const e=await editor({profiles:[original],pickedWindow:added,openWindows:[added]});
+    await e.click('[data-action="edit"]');
+    e.input('#workspace-name','Edited research');
+    await e.click('#add-workspace-window');
+    await e.click('#workspace-pick-on-screen');
+    assert.equal(e.document.querySelectorAll('.workspace-item').length,2);
+    assert.equal(e.document.querySelector('#workspace-name').value,'Edited research');
+    await e.click('#workspace-add-from-list');
+    assert.equal(e.document.querySelector('#workspace-add-from-list').getAttribute('aria-expanded'),'true');
+    const escape = new e.window.Event('keydown', {bubbles:true, cancelable:true}); escape.key = 'Escape';
+    e.document.querySelector('#workspace-add-window-list').dispatchEvent(escape);
+    assert.equal(e.document.querySelector('#workspace-add-window-list').hidden,true);
+    assert.equal(e.document.querySelector('#workspace-add-from-list').getAttribute('aria-expanded'),'false');
+    await e.click('#workspace-add-from-list');
+    const box=e.document.querySelector('#workspace-add-window-list input'); box.checked=true; box.dispatchEvent(new e.window.Event('change'));
+    await e.click('#workspace-add-window-list .add-selected-windows');
+    assert.equal(e.document.querySelectorAll('.workspace-item').length,2);
+    assert.match(e.document.querySelector('#workspace-editor-status').textContent,/already/);
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].items[1].window.id,'42');
+    assert.equal(e.stored().profiles[0].name,'Edited research');
+});
+
+test("an empty window list can be dismissed from its keyboard trigger", async () => {
+    const e = await editor({profiles:[profile('saved','Research')]});
+    await e.click('[data-action="edit"]');
+    await e.click('#workspace-add-from-list');
+    assert.match(e.document.querySelector('#workspace-add-window-list').textContent,/No open windows/);
+    const escape = new e.window.Event('keydown', {bubbles:true, cancelable:true}); escape.key = 'Escape';
+    e.document.querySelector('#workspace-add-from-list').dispatchEvent(escape);
+    assert.equal(e.document.querySelector('#workspace-add-window-list').hidden,true);
+    assert.equal(e.document.querySelector('#workspace-add-from-list').getAttribute('aria-expanded'),'false');
+});
+
+test("a newer hotkey replaces an unfinished capture and ignores its late result", async () => {
+    const e=await editor();
+    const send=detail=>e.window.dispatchEvent(new e.window.CustomEvent('warp-workspace-request',{detail}));
+    const first=profile('first','New workspace'), second=profile('second','New workspace');
+    send({action:'update-workspace',captureId:1,capturing:true,capture:{profile:first,suggestedId:null}}); await tick();
+    send({action:'update-workspace',captureId:2,capturing:true,capture:{profile:second,suggestedId:null}}); await tick();
+    assert.equal(e.document.querySelector('#workspace-recapture').hidden,false);
+    await e.click('#workspace-recapture-confirm');
+    send({action:'update-workspace',captureId:1,capturing:false,capture:{profile:first,suggestedId:null}}); await tick();
+    assert.equal(e.document.querySelector('#workspace-editor').hidden,false);
+    send({action:'update-workspace',captureId:2,capturing:false,capture:{profile:second,suggestedId:null}}); await tick();
+    e.input('#workspace-name','Latest draft');
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].id,'second');
+    assert.equal(e.stored().profiles[0].name,'Latest draft');
+});
+
+test("canceling a pending capture does not reopen its draft", async () => {
+    const e=await editor(), captured=profile('new','New workspace');
+    const send=capturing=>e.window.dispatchEvent(new e.window.CustomEvent('warp-workspace-request',{detail:{action:'update-workspace',captureId:1,capturing,capture:{profile:captured,suggestedId:null}}}));
+    send(true); await tick(); await e.click('#discard-workspace');
+    send(false); await tick();
+    assert.equal(e.document.querySelector('#workspace-editor').hidden,true);
+    assert.equal(e.stored().profiles.length,0);
+});
+
+test("Win+Y prompts to replace a draft while capture completes in the background", async () => {
+    const e=await editor();
+    await e.click('#capture-workspace');
+    e.input('#workspace-name','Keep this draft');
+    const send=(id,capturing)=>e.window.dispatchEvent(new e.window.CustomEvent('warp-workspace-request',{detail:{action:'update-workspace',captureId:id,capturing,capture:{profile:profile(`capture-${id}`,'New workspace'),suggestedId:null}}}));
+    send(1,true); await tick();
+    assert.equal(e.document.querySelector('#workspace-recapture').hidden,false);
+    assert.equal(e.document.querySelector('#workspace-name').value,'Keep this draft');
+    send(1,false); await tick();
+    assert.equal(e.document.querySelector('#workspace-name').value,'Keep this draft');
+    await e.click('#workspace-keep-draft');
+    assert.equal(e.document.querySelector('#workspace-name').value,'Keep this draft');
+    send(2,true); await tick();
+    await e.click('#workspace-recapture-confirm');
+    assert.equal(e.document.querySelector('#workspace-editor').hidden,false);
+    send(2,false); await tick();
+    assert.equal(e.document.querySelector('#workspace-name').value,'New workspace');
+    e.input('#workspace-name','Replacement'); await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].id,'capture-2');
+});
+
+test("keeping a draft after a browser update still protects the newer saved data", async () => {
+    const e=await editor({profiles:[profile('saved','Before')]});
+    await e.click('[data-action="edit"]');
+    e.replaceStored({version:1,profiles:[profile('saved','Updated by browser')]});
+    e.window.dispatchEvent(new e.window.Event('warp-browser-updated'));
+    e.window.dispatchEvent(new e.window.CustomEvent('warp-workspace-request',{detail:{action:'update-workspace',captureId:1,capturing:true,capture:{profile:profile('new','New workspace'),suggestedId:null}}}));
+    await tick(); await e.click('#workspace-keep-draft');
+    await e.click('#save-workspace');
+    assert.match(e.document.querySelector('#workspace-save-status').textContent,/Browser URLs changed/);
+    assert.equal(e.stored().profiles[0].name,'Updated by browser');
+});
+
+test("the hotkey replaces an edited draft after confirmation", async () => {
+    const e=await editor();
+    const send=profile=>e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request",{detail:{action:"update-workspace",capture:{profile,suggestedId:null}}}));
+    send(profile("first","New workspace")); await tick();
+    e.input("#workspace-name","Unsaved");
+    send(profile("second","New workspace")); await tick();
+    assert.equal(e.document.querySelector("#workspace-recapture").hidden,false);
+    assert.equal(e.document.querySelector("#workspace-name").value,"Unsaved");
+    await e.click("#workspace-recapture-confirm");
+    assert.equal(e.document.querySelector("#workspace-name").value,"New workspace");
+    e.input("#workspace-name","Replacement"); await e.click("#save-workspace");
+    assert.equal(e.stored().profiles[0].id,"second");
+    assert.equal(e.stored().profiles[0].name,"Replacement");
+});
+
+test("recapturing after a browser update preserves the newer saved workspace", async () => {
+    const e=await editor({profiles:[profile("saved","Before")]});
+    await e.click('[data-action="edit"]');
+    e.input('#workspace-name','Unsaved draft');
+    e.replaceStored({version:1,profiles:[profile("saved","Updated by browser")]});
+    e.window.dispatchEvent(new e.window.Event('warp-browser-updated'));
+    e.window.dispatchEvent(new e.window.CustomEvent('warp-workspace-request',{detail:{action:'update-workspace',capture:{profile:profile('new','New workspace'),suggestedId:null}}}));
+    await tick(); await e.click('#workspace-recapture-confirm');
+    e.input('#workspace-name','Fresh capture'); await e.click('#save-workspace');
+    assert.deepEqual(e.stored().profiles.map(p=>p.name),['Updated by browser','Fresh capture']);
+});
+
+test("workspace hotkey requires an update target when several exist and none is suggested", async () => {
+    const e = await editor({profiles:[profile("a","First"),profile("b","Second")]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request",{detail:{action:"update-workspace",capture:{profile:profile("new","New workspace"),suggestedId:null}}}));
+    await tick();
+    assert.equal(e.document.querySelector('#workspace-hotkey-target').value, '');
+    await e.click('#workspace-hotkey-update');
+    assert.match(e.document.querySelector('#workspace-hotkey-status').textContent, /Select a workspace/);
+    assert.equal(e.document.querySelector('#message').textContent, '');
+    assert.equal(e.document.querySelector('#workspace-editor').hidden, true);
+});
+
+test("workspace hotkey starts a new draft directly when no workspaces exist", async () => {
+    const e = await editor();
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request",{detail:{action:"update-workspace",capture:{profile:profile("new","New workspace"),suggestedId:null}}}));
+    await tick();
+    assert.equal(e.document.querySelector('#workspace-hotkey-choice').hidden, true);
+    assert.equal(e.document.querySelector('#workspace-editor').hidden, false);
+    assert.equal(e.document.querySelector('.browser-connection-dot').hidden, true);
+    assert.equal(e.stored().profiles.length, 0);
+});
+test("workspace hotkey selects the only saved workspace when no match is suggested", async () => {
+    const e=await editor({profiles:[profile('a','Only workspace')]});
+    e.window.dispatchEvent(new e.window.CustomEvent('warp-workspace-request',{detail:{action:'update-workspace',capture:{profile:profile('new','New workspace'),suggestedId:null}}}));
+    await tick();
+    assert.equal(e.document.querySelector('#workspace-hotkey-target').value,'a');
+    await e.click('#workspace-hotkey-update');
+    assert.equal(e.document.querySelector('#workspace-editor-title').textContent,'Edit “Only workspace”');
+    assert.equal(e.calls.some(c=>c.command==='save_workspaces'),false);
+});
+
+test("an empty capture explains why saving is unavailable", async () => {
+    const e=await editor();
+    const captured={id:'empty',name:'New workspace',platform:'windows',items:[]};
+    e.window.dispatchEvent(new e.window.CustomEvent('warp-workspace-request',{detail:{action:'update-workspace',capture:{profile:captured,suggestedId:null}}}));
+    await tick();
+    assert.equal(e.document.querySelector('#workspace-items-empty').hidden,false);
+    assert.equal(e.document.querySelector('#save-workspace').disabled,true);
+    assert.match(e.document.querySelector('#workspace-items-empty').textContent,/No windows were captured/);
+});
+
+test("manual capture and editing another workspace offer to replace the draft", async () => {
+    const e=await editor({profiles:[profile('a','First'),profile('b','Second')]});
+    await e.click('[data-action="edit"]');
+    e.input('#workspace-name','Unfinished work');
+    await e.click('#capture-workspace');
+    assert.equal(e.calls.some(call=>call.command==='capture_workspace'),false);
+    assert.equal(e.document.querySelector('#workspace-recapture').hidden,false);
+    await e.click('#workspace-keep-draft');
+    await e.click('#workspace-back-to-library');
+    e.document.querySelectorAll('[data-action="edit"]')[1].click(); await tick();
+    assert.match(e.document.querySelector('.workspace-draft-switch').textContent,/Unfinished work/);
+    await e.click('.workspace-draft-switch button');
+    assert.equal(e.document.querySelector('#workspace-name').value,'Unfinished work');
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].name,'Unfinished work');
+    assert.equal(e.stored().profiles[1].name,'Second');
+});
+
+test("extension settings are reachable from a workspace draft without losing edits", async () => {
+    const p=profile('a','Research'); p.items[0].window.appId='firefox.exe';
+    p.items[0].browser={profilePath:'',profileName:'',tabs:[],activeTab:1};
+    const e=await editor({profiles:[p],bridgeStatus:{enabled:false}});
+    await e.click('[data-action="edit"]');
+    e.input('#workspace-name','Unfinished work');
+    assert.equal(e.document.querySelector('.browser-connection-dot').hidden,false);
+    await e.click('.browser-connection-dot');
+    assert.equal(e.document.querySelector('#settings-page').hidden,false);
+    await e.click('#show-workspaces');
+    assert.equal(e.document.querySelector('#workspace-editor').hidden,false);
+    assert.equal(e.document.querySelector('#workspace-name').value,'Unfinished work');
+});
+
+test("workspace hotkey URLs changes only confidently matched Firefox tabs", async () => {
+    const saved = profile("a", "Research");
+    Object.assign(saved.items[0].window,{id:"42",pid:10});
+    saved.items[0].browser = {profilePath:"/profiles/work",profileName:"Work",tabs:[{url:"https://old.test",title:"Old"}],activeTab:1};
+    const captured = structuredClone(saved);
+    captured.items[0].window.rect.x = 900;
+    captured.items[0].browser.tabs = [{url:"https://new.test",title:"New"}];
+    const e = await editor({profiles:[saved],currentWorkspaceTabs:[{index:0,browser:captured.items[0].browser}]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request",{detail:{action:"update-workspace",capture:{profile:captured,suggestedId:"a"}}}));
+    await tick(); await e.click("#workspace-hotkey-urls");
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url, "https://old.test");
+    await e.click("#save-workspace");
+    await e.click("#workspace-replace-confirm");
+    const result = e.stored().profiles[0].items[0];
+    assert.equal(result.browser.tabs[0].url, "https://new.test");
+    assert.equal(result.window.rect.x, undefined);
+});
+
+test("workspace hotkey URLs opens a manual review when Firefox capture is uncertain", async () => {
+    const saved = profile("a", "Research");
+    saved.items[0].browser = {profilePath:"/profiles/work",profileName:"Work",tabs:[{url:"https://old.test",title:"Old"}],activeTab:1};
+    const captured = structuredClone(saved);
+    captured.items[0].captureNote = "Review the tab URLs.";
+    const e = await editor({profiles:[saved]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request",{detail:{action:"update-workspace",capture:{profile:captured,suggestedId:"a"}}}));
+    await tick(); await e.click("#workspace-hotkey-urls");
+    assert.match(e.document.querySelector("#workspace-tabs-status").textContent, /couldn't identify/);
+    assert.equal(e.document.querySelector("#message").textContent, "");
+    assert.equal(e.document.querySelector("#workspace-editor").hidden, false);
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url, "https://old.test");
+});
+
+test("workspace hotkey URLs selects a source desktop before changing the draft", async () => {
+    const saved = profile("a", "Research");
+    saved.items[0].window.appId = "firefox.exe";
+    saved.items[0].browser = {kind:"firefox",tabs:[{url:"https://old.test",title:"Old"}],activeTab:1};
+    const location = (id, name) => ({id,name,current:false,windowCount:1,browserCount:1,browserTitles:[name],ambiguous:false});
+    const updated = {kind:"firefox",tabs:[{url:"https://desktop-three.test",title:"Three"}],activeTab:1};
+    const e = await editor({profiles:[saved],locationsByWorkspace:{a:[location("one","Desktop 1"),location("three","Desktop 3")]},currentWorkspaceTabsByDesktop:{three:[{index:0,browser:updated}]}});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request",{detail:{action:"update-workspace",capture:{profile:structuredClone(saved),suggestedId:"a"}}}));
+    await tick(); await e.click("#workspace-hotkey-urls");
+    assert.equal(e.document.querySelector("#workspace-draft-sources").hidden,false);
+    assert.equal(e.calls.some(call=>call.command === "current_workspace_tabs"),false);
+    await e.click("#workspace-draft-sources button:nth-of-type(2)");
+    assert.equal(e.calls.find(call=>call.command === "current_workspace_tabs").args.desktopId,"three");
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url,"https://old.test");
+    await e.click("#save-workspace"); await e.click("#workspace-replace-confirm");
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url,"https://desktop-three.test");
+});
+
+test("workspace hotkey URLs can add Chromium tabs to an existing app entry", async () => {
+    const saved = profile("chrome", "Research");
+    Object.assign(saved.items[0].window,{id:"42",pid:10,appId:"chrome.exe"});
+    const captured = structuredClone(saved);
+    captured.items[0].browser = {kind:"chromium",profilePath:"C:/Chrome/Default",profileName:"Person",tabs:[{url:"https://example.test",title:"Example"}],activeTab:1};
+    const e = await editor({profiles:[saved],currentWorkspaceTabs:[{index:0,browser:captured.items[0].browser}]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request",{detail:{action:"update-workspace",capture:{profile:captured,suggestedId:"chrome"}}}));
+    await tick(); await e.click("#workspace-hotkey-urls"); await e.click("#save-workspace"); await e.click("#workspace-replace-confirm");
+    const browser = e.stored().profiles[0].items[0].browser;
+    assert.equal(browser.kind, "chromium");
+    assert.equal(browser.tabs[0].url, "https://example.test");
+});
+
+test("workspace URL update recognizes a KDE Chrome desktop ID", async () => {
+    const saved = profile("chrome", "Research");
+    saved.platform = "linux";
+    Object.assign(saved.items[0].window,{id:"42",pid:10,appId:"google-chrome.desktop"});
+    const captured = structuredClone(saved);
+    captured.items[0].browser = {kind:"chromium",profilePath:"/home/test/.config/google-chrome/Default",profileName:"Person",tabs:[{url:"https://example.test",title:"Example"}],activeTab:1};
+    const e = await editor({profiles:[saved],currentWorkspaceTabs:[{index:0,browser:captured.items[0].browser}]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-workspace-request",{detail:{action:"update-workspace",capture:{profile:captured,suggestedId:"chrome"}}}));
+    await tick(); await e.click("#workspace-hotkey-urls"); await e.click("#save-workspace"); await e.click("#workspace-replace-confirm");
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url,"https://example.test");
+});
+
+test("an extension update cannot be overwritten by an already open draft", async () => {
+    const saved = profile("a", "Research");
+    const e = await editor({profiles:[saved]});
+    await e.click('[data-action="edit"]');
+    const newer = {version:1,profiles:[{...saved,name:"Updated by extension"}]};
+    e.replaceStored(newer);
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-browser-updated",{detail:"a"}));
+    assert.match(e.document.querySelector('#workspace-save-status').textContent, /Browser URLs changed/);
+    await e.click('#save-workspace');
+    assert.match(e.document.querySelector('#workspace-save-status').textContent, /Cancel and reopen/);
+    assert.equal(e.stored().profiles[0].name,"Updated by extension");
+    await e.click('#discard-workspace'); await tick();
+    assert.match(e.document.querySelector('#workspace-list').textContent,/Updated by extension/);
+});
+
+test("a live update to another workspace does not block the current draft", async () => {
+    const work=profile("work","Work"), other=profile("other","Other");
+    const e=await editor({profiles:[work,other]});
+    await e.click('[data-workspace-id="work"] [data-action="edit"]');
+    e.input('#workspace-name','Edited work');
+    e.replaceStored({version:1,profiles:[work,{...other,name:"Other with new tabs"}]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-browser-updated",{detail:"other"}));
+    assert.doesNotMatch(e.document.querySelector('#workspace-save-status').textContent,/Browser URLs changed/);
+    await e.click('#save-workspace'); await tick();
+    assert.deepEqual(e.stored().profiles.map(p=>p.name),['Edited work','Other with new tabs']);
+});
+
+test("a new workspace draft preserves live updates to existing workspaces", async () => {
+    const existing=profile("existing","Before");
+    const e=await editor({profiles:[existing]});
+    await e.click('#capture-workspace'); await tick();
+    e.input('#workspace-name','New workspace');
+    e.replaceStored({version:1,profiles:[{...existing,name:"Updated tabs"}]});
+    e.window.dispatchEvent(new e.window.CustomEvent("warp-browser-updated",{detail:"existing"}));
+    await e.click('#save-workspace'); await tick();
+    assert.deepEqual(e.stored().profiles.map(p=>p.name),['Updated tabs','New workspace']);
+});
+
+test("selection stays available during an edit and deleting its saved source keeps the draft", async () => {
+    const e=await editor({profiles:[profile('a','Research'),profile('b','Planning')]});
+    await e.click('[data-workspace-id="a"] [data-action="edit"]');
+    e.input('#workspace-name','Research changes');
+    await e.click('#workspace-back-to-library');
+    assert.equal(e.document.querySelector('#select-workspace-items').disabled,false);
+    await e.click('#select-workspace-items');
+    e.change('[data-workspace-id="a"] .workspace-bulk-checkbox',true);
+    await e.click('#delete-selected-workspace-items');
+    assert.match(e.document.querySelector('#confirm-delete-workspace-text').textContent,/remain as a new workspace/);
+    await e.click('#confirm-delete-workspace-button');
+    assert.deepEqual(e.stored().profiles.map(value=>value.id),['b']);
+    await e.click('#workspace-resume-draft');
+    assert.equal(e.document.querySelector('#workspace-name').value,'Research changes');
+    await e.click('#save-workspace');
+    assert.deepEqual(e.stored().profiles.map(value=>value.name),['Planning','Research changes']);
+});
+
+test("switching workspaces saves named changes and retains a draft on save failure", async () => {
+    const profiles=[profile('a','Research'),profile('b','Planning')];
+    const e=await editor({profiles});
+    await e.click('[data-workspace-id="a"] [data-action="edit"]');
+    await e.click('#workspace-back-to-library');
+    await e.click('[data-workspace-id="b"] [data-action="edit"]');
+    assert.equal(e.document.querySelector('.workspace-draft-switch'),null,"an unchanged edit switches directly");
+    e.input('#workspace-name','Planning changes');
+    await e.click('#workspace-back-to-library');
+    await e.click('[data-workspace-id="a"] [data-action="edit"]');
+    assert.match(e.document.querySelector('.workspace-draft-switch').textContent,/Planning changes.*Research/);
+    await e.click('.workspace-draft-switch .primary');
+    assert.equal(e.stored().profiles.find(value=>value.id==='b').name,'Planning changes');
+    assert.equal(e.document.querySelector('#workspace-name').value,'Research');
+
+    const failed=await editor({profiles,failSave:true});
+    await failed.click('[data-workspace-id="a"] [data-action="edit"]');
+    failed.input('#workspace-name','Unsaved research');
+    await failed.click('#workspace-back-to-library');
+    await failed.click('[data-workspace-id="b"] [data-action="edit"]');
+    await failed.click('.workspace-draft-switch .primary');
+    assert.equal(failed.document.querySelector('#workspace-editor').hidden,false);
+    assert.equal(failed.document.querySelector('#workspace-name').value,'Unsaved research');
+    assert.match(failed.document.querySelector('#workspace-save-status').textContent,/read-only/);
+});
+
+test("window rows keep position and monitor controls visible and save presets against the work area", async () => {
+    const p=profile('position-row','Research');
+    p.items[0].window.rect={x:0,y:0,width:700,height:500};
+    p.items[0].window.workArea={x:-1920,y:40,width:1920,height:1040};
+    const e=await editor({profiles:[p]});
+    await e.click('[data-action="edit"]');
+    const row=e.document.querySelector('.workspace-item');
+    assert.equal(row.querySelector('.workspace-window-options').open,undefined);
+    assert.ok(row.querySelector('.workspace-item-head .window-position'));
+    assert.ok(row.querySelector('.workspace-item-head .window-placement'));
+    const position=row.querySelector('.window-position'); position.value='right'; position.dispatchEvent(new e.window.Event('change',{bubbles:true}));
+    assert.notEqual(row.querySelector('.workspace-window-options').open,true);
+    await e.click('#save-workspace');
+    assert.deepEqual(e.stored().profiles[0].items[0].window.rect,{x:-960,y:40,width:960,height:1040});
+    assert.deepEqual(e.stored().profiles[0].items[0].window.workArea,{x:-1920,y:40,width:1920,height:1040});
+});
+
+test("browser connection dot precedes tab count and settings return keeps the draft", async () => {
+    const p=profile('browser-dot','Research'); p.items[0].window.appId='firefox.exe';
+    p.items[0].browser={profilePath:'',profileName:'',tabs:[{url:'https://one.test',title:''}],activeTab:1};
+    const e=await editor({profiles:[p],bridgeStatus:{enabled:true,firefoxConnected:false}});
+    await e.click('[data-action="edit"]'); e.input('#workspace-name','Unsaved');
+    const dot=e.document.querySelector('.browser-connection-dot');
+    assert.equal(dot.nextElementSibling.className,'window-tabs-summary');
+    assert.equal(dot.dataset.status,'disconnected');
+    assert.match(dot.title,/Not connected/);
+    await e.click('.browser-connection-dot');
+    assert.equal(e.document.querySelector('#browser-extensions-settings').open,true);
+    e.setBridgeStatus({enabled:true,firefoxConnected:true});
+    await e.click('#show-workspaces');
+    assert.equal(dot.dataset.status,'connected');
+    assert.equal(e.document.querySelector('#workspace-name').value,'Unsaved');
+});
+
+test("the window picker shows loading and adds multiple chosen windows", async () => {
+    let finish; const gate=new Promise(resolve=>{finish=resolve;});
+    const first=item('A very long window title '.repeat(8)); first.window.id='1'; first.window.pid=1;
+    const second=item('Another window'); second.window.id='2'; second.window.pid=2;
+    const e=await editor({profiles:[profile('a','Research')],openWindows:[first,second],openWindowsGate:gate});
+    await e.click('[data-action="edit"]');
+    await e.click('#add-workspace-window');
+    assert.equal(e.document.querySelector('#add-workspace-window').textContent,'Add window');
+    await e.click('#workspace-add-from-list');
+    assert.match(e.document.querySelector('#workspace-add-window-list').textContent,/Finding open windows/);
+    finish(); await tick(); await tick();
+    const boxes=[...e.document.querySelectorAll('#workspace-add-window-list input')];
+    assert.equal(boxes.length,2);
+    boxes.forEach(box=>{box.checked=true;box.dispatchEvent(new e.window.Event('change'));});
+    await e.click('#workspace-add-window-list .add-selected-windows');
+    assert.equal(e.document.querySelectorAll('.workspace-item').length,3);
+    const failed=await editor({profiles:[profile('b','Other')],openWindowsError:'Cannot enumerate windows'});
+    await failed.click('[data-action="edit"]'); await failed.click('#add-workspace-window'); await failed.click('#workspace-add-from-list');
+    assert.match(failed.document.querySelector('#workspace-editor-status').textContent,/Cannot enumerate windows/);
+});
+
+test("focused browser tab follows URL edits and asks when the chosen URL disappears", async () => {
+    const p=profile('focus-url','Research'); p.items[0].window.appId='firefox.exe';
+    p.items[0].browser={profilePath:'',profileName:'',tabs:['one','two','three'].map(url=>({url:`https://${url}.test`,title:''})),activeTab:2};
+    const e=await editor({profiles:[p]}); await e.click('[data-action="edit"]');
+    const focus=e.document.querySelector('[data-browser="activeTab"]'); assert.equal(focus.value,'2');
+    e.input('[data-browser="tabs"]','https://three.test\nhttps://one.test\nhttps://two.test');
+    assert.equal(focus.value,'3');
+    e.input('[data-browser="tabs"]','https://three.test\nhttps://one.test');
+    assert.equal(focus.value,'');
+    await e.click('#save-workspace'); assert.match(e.document.querySelector('#workspace-save-status').textContent,/Choose a focused/);
+    focus.value='2'; focus.dispatchEvent(new e.window.Event('change',{bubbles:true}));
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].items[0].browser.activeTab,2);
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[1].url,'https://one.test');
+});
+
+test("one remaining URL becomes focused after an unresolved selection", async () => {
+    const p=profile('one-url','Research'); p.items[0].window.appId='firefox.exe';
+    p.items[0].browser={profilePath:'',profileName:'',tabs:['one','two','three'].map(url=>({url:'https://' + url + '.test',title:''})),activeTab:2};
+    const e=await editor({profiles:[p]}); await e.click('[data-action="edit"]');
+    e.input('[data-browser="tabs"]','https://one.test\nhttps://three.test');
+    assert.equal(e.document.querySelector('[data-browser="activeTab"]').value,'');
+    e.input('[data-browser="tabs"]','https://one.test');
+    assert.equal(e.document.querySelector('[data-browser="activeTab"]').value,'1');
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].items[0].browser.activeTab,1);
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url,'https://one.test');
+});
+
+test("updating browser tabs asks before replacing manually edited URLs", async () => {
+    const p=profile('url-confirm','Research'); p.items[0].window.appId='chrome.exe';
+    p.items[0].browser={kind:'chromium',profilePath:'',profileName:'',tabs:[{url:'https://old.test',title:''}],activeTab:1};
+    const fresh={kind:'chromium',profilePath:'',profileName:'',tabs:[{url:'https://new.test',title:''}],activeTab:1};
+    const e=await editor({profiles:[p],currentWorkspaceTabs:[{index:0,browser:fresh}]});
+    await e.click('[data-action="edit"]'); e.input('[data-browser="tabs"]','https://manual.test');
+    await e.click('#refresh-workspace-tabs'); assert.equal(e.document.querySelector('#workspace-tabs-confirm').hidden,false);
+    await e.click('#workspace-tabs-keep'); assert.equal(e.calls.some(call=>call.command==='current_workspace_tabs'),false);
+    await e.click('#refresh-workspace-tabs'); await e.click('#workspace-tabs-replace');
+    assert.equal(e.document.querySelector('[data-browser="tabs"]').value,'https://new.test');
 });

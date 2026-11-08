@@ -158,8 +158,8 @@ test("file review appends to an existing unsaved draft and never saves until Sav
         if(command==="save_config")return args.config;
         throw Error(command);
     }}};
-    const context=vm.createContext({window,document,TextDecoder,Uint8Array,crypto:webcrypto});
-    for(const file of ["shortcut-picker.js","app.js","legacy-import.js","import-ui.js"])vm.runInContext(fs.readFileSync(new URL("../ui/"+file,import.meta.url),"utf8"),context);
+    const context=vm.createContext({window,document,TextDecoder,Uint8Array,crypto:webcrypto,setTimeout:()=>1,clearTimeout:()=>{}});
+    for(const file of ["error-timer.js","shortcut-picker.js","app.js","legacy-import.js","import-ui.js"])vm.runInContext(fs.readFileSync(new URL("../ui/"+file,import.meta.url),"utf8"),context);
     const tick=()=>new Promise(r=>setImmediate(r)); await tick();
     document.querySelector("#add").click();
     const label=document.querySelector('[data-field="label"]');label.value="Unsaved app";label.dispatchEvent(new window.Event("input"));

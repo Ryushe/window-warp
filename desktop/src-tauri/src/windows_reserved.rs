@@ -88,23 +88,15 @@ fn session() -> std::sync::MutexGuard<'static, Option<Session>> {
 }
 
 pub(super) fn set_active(app: AppHandle, armed: Vec<Armed>) -> Result<(), String> {
-    let start = {
+    {
         let mut current = session();
         let slot = current.get_or_insert_with(Session::default);
         slot.app = Some(app);
-        slot.job = if armed.is_empty() {
-            Job::Idle
-        } else {
-            Job::Active(armed)
-        };
-        !matches!(slot.job, Job::Idle)
-    };
-    if start {
-        ensure_thread()
-    } else {
-        stop_if_idle();
-        Ok(())
+        // Registered non-Super app holds and plain retile keys also depend on
+        // this hook, even when there are no hook-owned bindings.
+        slot.job = Job::Active(armed);
     }
+    ensure_thread()
 }
 
 /// Pausing keeps the pause chord and lets every other Windows hotkey through.
@@ -486,6 +478,12 @@ unsafe extern "system" fn keyboard(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
             slot.swallowed.insert(vk);
             return 1;
         }
+    }
+    // The Windows radial picker does not take foreground focus, so its
+    // WebView cannot reliably receive Escape. Cancel it from this same hook.
+    if vk == u32::from(VK_ESCAPE) && crate::radial::cancel_from_hook() {
+        slot.swallowed.insert(vk);
+        return 1;
     }
     if let Some(name) = key_name(vk) {
         let consumed = if mods == Mods::none() {

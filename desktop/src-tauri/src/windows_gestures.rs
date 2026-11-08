@@ -17,13 +17,17 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter};
-use windows_sys::Win32::{Foundation::POINT, UI::WindowsAndMessaging::GetCursorPos};
+use windows_sys::Win32::{
+    Foundation::POINT,
+    UI::{Input::KeyboardAndMouse::GetAsyncKeyState, WindowsAndMessaging::GetCursorPos},
+};
 
 struct Track {
     shortcut: String,
     released: Arc<AtomicBool>,
     cancelled: Arc<AtomicBool>,
     hook_press: bool,
+    registered_os_state: bool,
 }
 
 /// One physical key press, captured by the shared hook before dispatch can be
@@ -263,7 +267,11 @@ pub fn cancel() -> Result<(), String> {
 }
 
 struct Chord {
-    keys: Vec<i32>,
+    key: u32,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    super_key: bool,
 }
 impl Chord {
     fn parse(shortcut: &str) -> Result<Self, String> {
@@ -306,15 +314,39 @@ impl Chord {
                 .map(|n| 0x70 + n - 1)
                 .ok_or_else(|| format!("Cannot observe shortcut key {key}."))?,
         };
-        Ok(Self { keys: vec![vk] })
+        Ok(Self {
+            key: vk as u32,
+            ctrl: parts.contains(&"Ctrl"),
+            alt: parts.contains(&"Alt"),
+            shift: parts.contains(&"Shift"),
+            super_key: parts.contains(&"Super"),
+        })
     }
 
-    /// The letter (or function key) only. Win can flicker after Windows sees
-    /// it; the letter the user is still holding is what keeps a radial open.
-    fn letter_down(&self) -> bool {
-        self.keys
-            .iter()
-            .all(|key| super::reserved::vk_down(*key as u32))
+    /// Registered non-Super shortcuts must finish when any required key is
+    /// released, just like presses tracked directly by the shared hook.
+    fn down(&self) -> bool {
+        self.down_with(super::reserved::vk_down, super::reserved::super_down)
+    }
+
+    fn down_with(&self, key_down: impl Fn(u32) -> bool, super_down: impl Fn() -> bool) -> bool {
+        key_down(self.key)
+            && (!self.ctrl || key_down(0x11))
+            && (!self.alt || key_down(0x12))
+            && (!self.shift || key_down(0x10))
+            && (!self.super_key || super_down())
+    }
+
+    /// RegisterHotKey owns this non-Super chord without swallowing it. Some
+    /// desktop hooks intercept its events before our hook, even though Windows
+    /// still dispatches the registered hotkey. Only in that case may Windows'
+    /// asynchronous state supplement the shared hook. Never use it for Win.
+    fn registered_down(&self) -> bool {
+        self.registered_down_with(|key| unsafe { GetAsyncKeyState(key as i32) < 0 })
+    }
+
+    fn registered_down_with(&self, key_down: impl Fn(u32) -> bool) -> bool {
+        !self.super_key && self.down_with(key_down, || false)
     }
 }
 
@@ -328,21 +360,21 @@ fn blocks_press(
     current: &Track,
     same_chord: bool,
     incoming: Option<&HookPress>,
-    legacy_letter_down: impl FnOnce() -> bool,
+    legacy_chord_down: impl FnOnce() -> bool,
 ) -> bool {
     let still = !current.released.load(Ordering::SeqCst);
     if let Some(incoming) = incoming {
         current.hook_press && Arc::ptr_eq(&current.released, &incoming.released) && still
     } else {
-        blocks_repeat(same_chord, still && legacy_letter_down())
+        blocks_repeat(same_chord, still && legacy_chord_down())
     }
 }
 
 fn released_before_dispatch(
     incoming: Option<&HookPress>,
-    legacy_letter_down: impl FnOnce() -> bool,
+    legacy_chord_down: impl FnOnce() -> bool,
 ) -> bool {
-    incoming.map_or_else(|| !legacy_letter_down(), HookPress::is_released)
+    incoming.map_or_else(|| !legacy_chord_down(), HookPress::is_released)
 }
 
 fn run_unless_cancelled<T>(cancelled: &AtomicBool, action: impl FnOnce() -> T) -> Option<T> {
@@ -376,6 +408,18 @@ pub(super) fn press_with_hook(
         return Ok(());
     }
     let chord = Chord::parse(&binding.shortcut)?;
+    let registered_os_state = hook_press.is_none()
+        && !chord.super_key
+        && !super::reserved::super_down()
+        && !chord.down()
+        && chord.registered_down();
+    let legacy_down = || {
+        if registered_os_state {
+            chord.registered_down()
+        } else {
+            chord.down()
+        }
+    };
     let point = if let Some(point) = hook_press.and_then(|press| press.point) {
         point
     } else {
@@ -393,13 +437,13 @@ pub(super) fn press_with_hook(
     }
     for current in sessions.current.values() {
         let same = current.shortcut == binding.shortcut;
-        if blocks_press(current, same, hook_press, || chord.letter_down()) {
+        if blocks_press(current, same, hook_press, legacy_down) {
             return Ok(());
         }
     }
-    // The letter was already released before this reached the worker.
+    // A required key was already released before this reached the worker.
     // That is a tap. Do not arm a hold.
-    if released_before_dispatch(hook_press, || chord.letter_down()) {
+    if released_before_dispatch(hook_press, legacy_down) {
         drop(sessions);
         if let Some(dispatch) = hook_dispatch {
             let (app, binding, settings) = (app.clone(), binding.clone(), settings.clone());
@@ -442,6 +486,7 @@ pub(super) fn press_with_hook(
             released: released.clone(),
             cancelled: cancelled.clone(),
             hook_press: tracked_by_hook,
+            registered_os_state,
         },
     );
     let (app, binding, settings) = (app.clone(), binding.clone(), settings.clone());
@@ -457,7 +502,12 @@ pub(super) fn press_with_hook(
                     let _ = picker.take();
                     break;
                 }
-                if released.load(Ordering::SeqCst) || (!tracked_by_hook && !chord.letter_down()) {
+                let down = if registered_os_state {
+                    chord.registered_down()
+                } else {
+                    chord.down()
+                };
+                if released.load(Ordering::SeqCst) || (!tracked_by_hook && !down) {
                     if !released.load(Ordering::SeqCst) {
                         released.store(true, Ordering::SeqCst);
                     }
@@ -602,13 +652,25 @@ pub(super) fn note_release() {
             .current
             .values()
             .filter(|track| !track.hook_press)
-            .map(|track| (track.shortcut.clone(), track.released.clone()))
+            .map(|track| {
+                (
+                    track.shortcut.clone(),
+                    track.registered_os_state,
+                    track.released.clone(),
+                )
+            })
             .collect::<Vec<_>>()
     }) else {
         return;
     };
-    for (shortcut, released) in tracks {
-        if Chord::parse(&shortcut).is_ok_and(|chord| !chord.letter_down()) {
+    for (shortcut, registered_os_state, released) in tracks {
+        if Chord::parse(&shortcut).is_ok_and(|chord| {
+            if registered_os_state {
+                !chord.registered_down()
+            } else {
+                !chord.down()
+            }
+        }) {
             released.store(true, Ordering::SeqCst);
         }
     }
@@ -621,10 +683,25 @@ mod tests {
     #[test]
     fn chord_observes_required_modifiers_and_supported_key_codes() {
         let chord = Chord::parse("Ctrl+Alt+Shift+Super+Semicolon").unwrap();
-        assert_eq!(chord.keys, [0xBA]);
-        assert_eq!(Chord::parse("Ctrl+F24").unwrap().keys, [0x87]);
-        assert_eq!(Chord::parse("Super+J").unwrap().keys, [0x4A]);
+        assert_eq!(chord.key, 0xBA);
+        assert_eq!(Chord::parse("Ctrl+F24").unwrap().key, 0x87);
+        assert_eq!(Chord::parse("Super+J").unwrap().key, 0x4A);
         assert!(Chord::parse("Ctrl+F25").is_err());
+        let all = [0xBA, 0x11, 0x12, 0x10];
+        assert!(chord.down_with(|key| all.contains(&key), || true));
+        for released in all {
+            assert!(!chord.down_with(|key| all.contains(&key) && key != released, || true));
+        }
+        assert!(!chord.down_with(|key| all.contains(&key), || false));
+        let checked = std::cell::Cell::new(false);
+        assert!(!chord.registered_down_with(|_| {
+            checked.set(true);
+            true
+        }));
+        assert!(
+            !checked.get(),
+            "Win chords must never consult asynchronous key state"
+        );
     }
 
     #[test]
@@ -642,6 +719,7 @@ mod tests {
             released: first.released.clone(),
             cancelled: first.cancelled.clone(),
             hook_press: true,
+            registered_os_state: false,
         };
         assert!(!blocks_press(&previous, true, Some(&second), || true));
         second.release();
@@ -658,6 +736,7 @@ mod tests {
             released: press.released.clone(),
             cancelled: press.cancelled.clone(),
             hook_press: true,
+            registered_os_state: false,
         };
         assert!(blocks_press(&current, true, Some(&press), || false));
         assert!(!blocks_press(&current, true, Some(&other), || true));

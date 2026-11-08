@@ -26,6 +26,8 @@ if "--firefox-tiles" in sys.argv and "--firefox" not in sys.argv:
     raise ValueError("Firefox tile acceptance requires --firefox")
 if "--firefox-no-profile-args" in sys.argv and "--firefox" not in sys.argv:
     raise ValueError("Firefox profile-lock acceptance requires --firefox")
+if "--browser-bridge-live" in sys.argv and "--firefox" not in sys.argv:
+    raise ValueError("Browser bridge acceptance requires --firefox")
 if "--overlap" in sys.argv and "--firefox-tiles" not in sys.argv:
     raise ValueError("Overlapping shortcut acceptance requires --firefox-tiles")
 if "--terminal-concurrent" in sys.argv and "--terminal" not in sys.argv:
@@ -34,6 +36,16 @@ if "--terminal-concurrent" in sys.argv and "--terminal" not in sys.argv:
 
 def kwin_loaded(name="window-warp-session"):
     return subprocess.check_output(["qdbus", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.isScriptLoaded", name], text=True).strip() == "true"
+
+
+def wait_for_script_state(main, pause, timeout=5):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = (kwin_loaded(), kwin_loaded("window-warp-pause-session"))
+        if state == (main, pause):
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"KWin scripts did not settle: expected {(main, pause)}, got {state}")
 
 
 if any(kwin_loaded(name) for name in ["window-warp-session", "window-warp-pause-session", "window-warp-control-session", "window-warp-retile-session"]) or subprocess.run(["pgrep", "-x", "window-warp"], stdout=subprocess.DEVNULL).returncode == 0:
@@ -105,6 +117,10 @@ def wait_for_reloaded(source, timeout=15):
 
 
 def click(selector):
+    # Keep controls clear of the editor's sticky footer before WebDriver
+    # performs the actual click. WebKit's default scroll may place the
+    # element underneath that footer.
+    evaluate(f"const element=document.querySelector({json.dumps(selector)}); if (element) element.scrollIntoView({{block:'center',inline:'nearest'}}); return true;")
     element = request("POST", f"/session/{session}/element", {"using": "css selector", "value": selector})
     element_id = element["element-6066-11e4-a52e-4f735466cecf"]
     request("POST", f"/session/{session}/element/{element_id}/click", {})
@@ -732,7 +748,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         wait_for("return document.querySelectorAll('.binding').length === 21 && !document.querySelector('#toggle').disabled")
         # Exercise the actual input listeners, save command, native registration,
         # and pause command. Test-only settings are isolated from user settings.
-        evaluate("const keys=['F13','F14','F15','F16','F17','F18','F19','F20','F21','F22','F23','F24','A','B','D','E','G','H','I','J','K']; document.querySelectorAll('[data-field=shortcut]').forEach((input,i) => {input.value='Ctrl+Alt+Shift+'+keys[i]; input.dispatchEvent(new Event('input', {bubbles:true}));}); return true;")
+        evaluate("const keys=['F13','F14','F15','F16','F17','F18','F19','F20','F21','F22','F23','F24','A','B','D','E','G','H','I','M','N']; document.querySelectorAll('[data-field=shortcut]').forEach((input,i) => {input.value='Ctrl+Alt+Shift+'+keys[i]; input.dispatchEvent(new Event('input', {bubbles:true}));}); return true;")
         click("#save")
         wait_for("return document.querySelector('#message').textContent.startsWith('Saved.')")
         assert kwin_loaded("window-warp-pause-session"), "Pause hook must be installed while paused"
@@ -819,6 +835,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         invoke("set_enabled", {"enabled": True})
         main_handle = request("GET", f"/session/{session}/window")
         old_bindings = invoke("get_config")["bindings"]
+        original_count = len(old_bindings)
         invoke_shortcut("open-editor")
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline and not invoke("quick_is_open"):
@@ -826,39 +843,37 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         assert invoke("quick_is_open"), "The current-app shortcut did not open its quick popup"
         expected_app = next(item["window"]["appId"] for item in captured["items"] if item["window"]["active"])
         quick_handle = None
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline and quick_handle is None:
+        deadline_quick = time.monotonic() + 25
+        while time.monotonic() < deadline_quick and not quick_handle:
             for handle in request("GET", f"/session/{session}/window/handles"):
                 request("POST", f"/session/{session}/window", {"handle": handle})
                 if "quick.html" in request("GET", f"/session/{session}/url"):
                     quick_handle = handle
                     break
-            if quick_handle is None:
-                time.sleep(0.1)
-        assert quick_handle is not None, "The current-app shortcut did not open its quick popup"
-        wait_for("return Boolean(document.querySelector('#quick-app')?.textContent)")
+            if not quick_handle: time.sleep(.15)
+        assert quick_handle, "Current-app popup did not open"
+        wait_for("return !!document.querySelector('#quick-app')?.textContent && !document.querySelector('#quick-apply').disabled")
         assert expected_app.casefold() in evaluate("return document.querySelector('#quick-app').textContent").casefold()
-        for modifier in ["Ctrl", "Alt", "Shift", "Super"]:
-            selected = evaluate(f"return document.querySelector('#quick-mods [data-mod={modifier}]').getAttribute('aria-pressed') === 'true'")
-            if selected != (modifier != "Super"):
-                click(f"#quick-mods [data-mod={modifier}]")
-        click("#quick-entry")
         from wayland_input import Input
         with Input() as keys:
-            keys.key(88, True); keys.key(88, False)  # F12
-            wait_for("return document.querySelector('#quick-entry').value === 'Ctrl+Alt+Shift+F12'")
-            keys.key(28, True); keys.key(28, False)  # Enter
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            new_bindings = invoke("get_config")["bindings"]
-            if len(new_bindings) == len(old_bindings) + 1:
-                break
-            time.sleep(0.1)
-        assert len(new_bindings) == len(old_bindings) + 1, f"Quick popup save did not add a binding: before={len(old_bindings)} after={len(new_bindings)}"
-        assert new_bindings[-1]["appMatch"].casefold() == expected_app.casefold()
-        assert new_bindings[-1]["shortcut"] == "Ctrl+Alt+Shift+F12"
-        assert invoke("get_status")["enabled"], "The quick popup should preserve active shortcuts"
+            keys.key(45, True); keys.key(45, False)  # X
+        wait_for("return document.querySelector('#quick-entry').value.endsWith('+X')")
+        click("#quick-apply")
         request("POST", f"/session/{session}/window", {"handle": main_handle})
+        for _ in range(80):
+            if len(invoke("get_config")["bindings"]) == original_count + 1: break
+            time.sleep(.1)
+        new_bindings = invoke("get_config")["bindings"]
+        assert len(new_bindings) == original_count + 1
+        assert new_bindings[-1]["appMatch"].casefold() == expected_app.casefold()
+        assert new_bindings[-1]["shortcut"].endswith("+X")
+        assert invoke("get_status")["enabled"], "The quick popup should preserve active shortcuts"
+        evaluate("location.reload(); return true;")
+        wait_for(f"return document.querySelectorAll('.binding').length === {original_count + 1}")
+        assert evaluate("return document.querySelector('.binding:last-child [data-field=appMatch]').value") == expected_app
+        evaluate("const input=document.querySelector('.binding:last-child [data-field=shortcut]'); input.value='Ctrl+Alt+Shift+L'; input.dispatchEvent(new Event('input',{bubbles:true})); return true;")
+        click("#save")
+        wait_for("return document.querySelector('#message').textContent.startsWith('Saved.')")
         screenshot = request("GET", f"/session/{session}/screenshot")
         (output / "window-warp-current-app-kde.png").write_bytes(base64.b64decode(screenshot))
         expected = {}
@@ -922,6 +937,36 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         screenshot = request("GET", f"/session/{session}/screenshot")
         (output / "window-warp-workspaces-kde.png").write_bytes(base64.b64decode(screenshot))
         report = {"passed": True, "checks": ["native editor renders", "shortcut conflict review, cancel, reassignment and explicit save", "save persists settings", "enable loads KWin script", "pause unloads KWin script", "startup creates and removes isolated autostart entry", "native workspace capture", "workspace persistence", "native workspace reuse and separate placements", "workspace launch creates a new window without consuming existing ones", "per-axis maximization and fullscreen workspace restoration", "workspace browser renders saved profiles"], "screenshot": str(output / "window-warp-workspaces-kde.png")}
+        before_workspace_review = invoke("get_workspaces")
+        click("#workspace-list article:first-child .workspace-preview-toggle")
+        assert evaluate("return !document.querySelector('#workspace-list article:first-child .workspace-preview').hidden")
+        assert evaluate("return document.querySelector('#workspace-list article:first-child .workspace-preview-content').textContent.length > 0")
+        display_options = invoke("get_monitors")
+        assert display_options and all("geometry" in display and "sourceId" in display for display in display_options)
+        wait_for("return /(?:Main|Left|Right|Top|Bottom) monitor/.test(document.querySelector('#workspace-list article:first-child .workspace-preview-content').textContent)")
+        click("#workspace-list article:first-child [data-action=delete]")
+        assert evaluate("return !document.querySelector('#workspace-list article:first-child .workspace-delete-confirm').hidden")
+        click("#workspace-list article:first-child [data-action=cancel-delete]")
+        click("#select-workspace-items")
+        click("#workspace-list article:first-child .workspace-preview-toggle")
+        assert evaluate("return document.querySelector('#workspace-list article:first-child .workspace-bulk-checkbox').checked")
+        click("#delete-selected-workspace-items")
+        assert evaluate("return !document.querySelector('#confirm-delete-workspace-items').hidden")
+        click("#cancel-delete-workspace-items")
+        click("#select-workspace-items")
+        assert invoke("get_workspaces") == before_workspace_review
+        click("#workspace-list article:first-child [data-action=edit]")
+        wait_for("return !document.querySelector('#workspace-editor').hidden && document.querySelector('#workspace-library').hidden")
+        click("#workspace-items .workspace-item:first-child .remove-workspace-window")
+        assert evaluate("return !document.querySelector('#workspace-removed').hidden")
+        click("#workspace-removed-items .workspace-removed-row:first-child button")
+        click("#workspace-back-to-library")
+        assert evaluate("return !document.querySelector('#workspace-draft-banner').hidden && document.querySelector('#workspace-editor').hidden")
+        click("#workspace-resume-draft")
+        wait_for("return !document.querySelector('#workspace-editor').hidden")
+        click("#discard-workspace")
+        assert invoke("get_workspaces") == before_workspace_review
+        report["checks"].append("workspace previews, bulk selection confirmation, reversible removal and draft navigation work in native KDE")
         if "--desktop-entry" in sys.argv:
             assert all(i["launch"]["kind"] == "desktop-entry" and i["launch"]["program"] == "com.windowwarp.other-smoke" for i in captured["items"]), captured
             desktop_item = json.loads(json.dumps(captured["items"][0]))
@@ -964,8 +1009,10 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         wait_for("return !document.querySelector('#workspaces-page').hidden")
         before_update = invoke("get_workspaces")
         invoke_shortcut("update-workspace")
+        wait_for("return !document.querySelector('#workspace-hotkey-choice').hidden")
+        click("#workspace-hotkey-update")
         wait_for("return !document.querySelector('#workspace-editor').hidden")
-        assert evaluate("return document.querySelector('#workspace-target').value") == captured["id"]
+        assert evaluate("return document.querySelector('#workspace-name').value") == captured["name"]
         assert invoke("get_workspaces") == before_update, "Update hotkey must open a review draft"
         screenshot = request("GET", f"/session/{session}/screenshot")
         (output / "window-warp-update-kde.png").write_bytes(base64.b64decode(screenshot))
@@ -1076,7 +1123,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                         (output / "pointer-failure.json").write_text(json.dumps(diagnostic, indent=2))
                         raise AssertionError(f"{label}: {diagnostic}")
                 if "--pointer-denied" in sys.argv:
-                    wait_for("return document.querySelector('#message').textContent.includes('pointer access')")
+                    wait_for("return !document.querySelector('#app-alert').hidden && document.querySelector('#app-alert-text').textContent.includes('pointer access')")
                     assert read_pointer() == {"x":100,"y":100}
                     report["checks"].append("KDE rejects undeclared pointer access, leaves cursor unchanged and shows the failure")
                 if "--pointer" in sys.argv:
@@ -1241,7 +1288,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                         while time.monotonic()<deadline and not any(json.loads(line)["text"].lower()=="c" for line in hold_input.read_text().splitlines()):
                             time.sleep(0.02)
                         assert any(json.loads(line)["text"].lower()=="c" for line in hold_input.read_text().splitlines()), "ordinary typing must resume while window I/O is still waiting"
-                        wait_for("return document.querySelector('#message').textContent.includes('KWin did not complete')",timeout=8)
+                        wait_for("return !document.querySelector('#app-alert').hidden && document.querySelector('#app-alert-text').textContent.includes('KWin did not complete')",timeout=8)
                         report["checks"].append("native KDE releases consumed retile keys before a stalled window reply and ordinary typing resumes during the wait")
                     finally:
                         replace_control(control_source)
@@ -1377,9 +1424,10 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                     assert len(choices) == 9, "Radial fixture must map nine owned windows"
                     config["settings"].update({"holdMode":"radial", "holdTileEnabled":True})
                     old_match = config["bindings"][hold_index]["appMatch"]
+                    old_other = (config["bindings"][1]["action"], config["bindings"][1]["appMatch"])
                     radial_match = choices[0]["appId"]
                     config["bindings"][hold_index]["appMatch"] = radial_match
-                    config["bindings"][1]["appMatch"] = radial_match
+                    config["bindings"][1].update({"action":"focus-app", "appMatch":radial_match})
                     invoke("save_config", {"config":config})
                     invoke("set_enabled", {"enabled":True})
                     def radial_wait(predicate, description):
@@ -1464,7 +1512,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                     invoke("set_enabled", {"enabled":False})
                     config["settings"]["holdMode"] = "tile"
                     config["bindings"][hold_index]["appMatch"] = old_match
-                    config["bindings"][1]["appMatch"] = old_match
+                    config["bindings"][1]["action"], config["bindings"][1]["appMatch"] = old_other
                     invoke("save_config", {"config":config})
                     radial_fixture.terminate(); radial_fixture.wait(timeout=5)
 
@@ -1507,9 +1555,22 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             evaluate("location.reload(); return true;")
             wait_for_reloaded(f"return document.querySelectorAll('.binding').length === {len(config['bindings'])} && !document.querySelector('#toggle').disabled")
             click("#show-settings")
+            click("#monitor-settings > summary")
+            wait_for("return !document.querySelector('#main-monitor').disabled")
+            detected = invoke("get_monitors")
+            assert detected and all(monitor["id"] and monitor["name"] for monitor in detected)
+            assert evaluate("return document.querySelector('#main-monitor').textContent").find(detected[0]["name"]) >= 0
+            original = invoke("get_config")
+            evaluate(f"const field=document.querySelector('#main-monitor'); field.value={json.dumps(str(detected[0]['index']))}; field.dispatchEvent(new Event('input',{{bubbles:true}})); return true;")
+            wait_for("return !document.querySelector('#discard-settings').disabled")
+            click("#discard-settings")
+            assert invoke("get_config") == original
+            report["checks"].append("KDE settings show detected monitor names and preserve discarded choices")
+            click("#monitor-settings > summary")
             evaluate("document.querySelector('#hold-enabled').scrollIntoView({block:'center'}); return true;")
             screenshot = request("GET", f"/session/{session}/screenshot")
             (output / "window-warp-hold-kde.png").write_bytes(base64.b64decode(screenshot))
+            click("#show-shortcuts")
         if "--firefox" in sys.argv:
             # Run this option only in nested.sh's isolated compositor/session bus.
             assert os.environ.get("WAYLAND_DISPLAY") == "warp-test", "Firefox test requires the isolated compositor"
@@ -1598,6 +1659,96 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             invoke("save_workspaces", {"store": {"version": 1, "profiles": [browser_capture]}})
             result = invoke("restore_workspace", {"id": browser_capture["id"]})
             assert result[0]["restored"] and not result[0]["launched"], result
+            if "--browser-bridge-live" in sys.argv:
+                # Use the real Firefox window and native KWin inventory, with a
+                # synthetic extension client so the test owns every tab URL.
+                duplicate = json.loads(json.dumps(browser_capture))
+                duplicate["id"] += "-other"
+                duplicate["name"] = "Other saved workspace"
+                invoke("save_workspaces", {"store":{"version":1,"profiles":[browser_capture,duplicate]}})
+                bridge = invoke("set_bridge_enabled", {"enabled":True})
+                bridge_port, token = bridge["pairingCode"].split(":", 1)
+
+                def bridge_request(action, **options):
+                    body = {"token":token, "action":action, "browser":"firefox", "clientId":"kde-owned-live", **options}
+                    req = urllib.request.Request(f"http://127.0.0.1:{bridge_port}/bridge", data=json.dumps(body).encode(),
+                        headers={"Content-Type":"text/plain", "Origin":"moz-extension://warp-fixture"}, method="POST")
+                    with urllib.request.urlopen(req, timeout=15) as response:
+                        return json.load(response)
+
+                try:
+                    was_enabled = invoke("get_status")["enabled"]
+                    try:
+                        invoke("set_enabled", {"enabled":False})
+                        click("#show-settings")
+                        assert bridge_request("open-workspaces").get("opened") is True
+                        wait_for("return !document.querySelector('#workspaces-page').hidden")
+                        report["checks"].append("browser bridge opens Workspaces while shortcuts are paused")
+                    finally:
+                        if was_enabled:
+                            invoke("set_enabled", {"enabled":True})
+                    assert bridge_request("set-live", live=True).get("live") is True
+                    native_window = next(w for w in invoke("get_windows") if w["id"] == browser_capture["items"][0]["window"]["id"])
+                    rect = native_window["rect"]
+                    tabs = list(browser["tabs"]) + [{"url":"https://live.example.test/", "title":"Owned live tab"}]
+                    shared = {"id":1, "title":browser["tabs"][browser["activeTab"]-1]["title"],
+                        "x":rect["x"], "y":rect["y"], "width":rect["width"], "height":rect["height"],
+                        "activeTab":browser["activeTab"], "tabs":tabs}
+                    result = bridge_request("snapshot", live=True, profilePath=str(browser_profile), windows=[shared])
+                    assert result.get("received") is True, result
+                    updated = invoke("get_workspaces")["profiles"]
+                    assert len(updated[0]["items"][0]["browser"]["tabs"]) == 3
+                    assert len(updated[1]["items"][0]["browser"]["tabs"]) == 2, "Another workspace must not change"
+                    assert bridge_request("snapshot", live=True, profilePath=str(browser_profile), windows=[]).get("received") is True
+                    assert len(invoke("get_workspaces")["profiles"][0]["items"][0]["browser"]["tabs"]) == 3, "Closing a browser must keep its last saved tabs"
+                    assert bridge_request("set-live", live=False).get("live") is False
+                    assert bridge_request("snapshot", live=True, profilePath=str(browser_profile), windows=[shared]).get("error")
+                    report["checks"].append("KDE live bridge saves only the owning Firefox workspace and preserves tabs on close (synthetic extension snapshots)")
+                    saved_browser = bridge_request("save-browser", name="Owned Firefox tabs", windowId=1,
+                        profilePath=str(browser_profile), windows=[shared])
+                    assert saved_browser.get("saved") is True, saved_browser
+                    click("#show-workspaces")
+                    wait_for("return document.querySelector('.saved-browser-card h3')?.textContent === 'Owned Firefox tabs'")
+                    click(".saved-browser-card [data-action=add]")
+                    wait_for("return !document.querySelector('.saved-browser-popover').hidden && document.querySelectorAll('.saved-browser-popover button').length === 2")
+                    click(".saved-browser-popover button:nth-of-type(2)")
+                    wait_for("return document.querySelector('#saved-browser-destination').open && !document.querySelector('#saved-browser-new').disabled")
+                    click("#saved-browser-new")
+                    deadline = time.monotonic() + 15
+                    while time.monotonic() < deadline:
+                        profiles = invoke("get_workspaces")["profiles"]
+                        if len(profiles[1]["items"]) == 2:
+                            break
+                        time.sleep(0.2)
+                    else:
+                        raise AssertionError("The chosen workspace did not receive the saved browser")
+                    assert len(profiles[0]["items"]) == 1, "The other workspace must stay unchanged"
+                    report["checks"].append("saved browser chooser adds to the selected KDE workspace")
+                    def reopen_browser_chooser():
+                        wait_for("return !document.querySelector('#saved-browser-destination').open")
+                        click(".saved-browser-card [data-action=add]")
+                        wait_for("return !document.querySelector('.saved-browser-popover').hidden && document.querySelectorAll('.saved-browser-popover button').length === 2")
+                        click(".saved-browser-popover button:nth-of-type(2)")
+                        wait_for("return document.querySelector('#saved-browser-destination').open && document.querySelectorAll('#saved-browser-targets input').length > 0")
+
+                    reopen_browser_chooser()
+                    click("#saved-browser-targets .saved-browser-target:first-child li")
+                    click("#saved-browser-replace")
+                    wait_for("return !document.querySelector('#saved-browser-destination').open")
+                    profiles = invoke("get_workspaces")["profiles"]
+                    assert len(profiles[1]["items"][0]["browser"]["tabs"]) == 3
+                    reopen_browser_chooser()
+                    click("#saved-browser-targets .saved-browser-target:nth-child(2) input")
+                    click("#saved-browser-append")
+                    wait_for("return !document.querySelector('#saved-browser-destination').open")
+                    profiles = invoke("get_workspaces")["profiles"]
+                    appended_urls = [tab["url"] for tab in profiles[1]["items"][1]["browser"]["tabs"]]
+                    assert len(appended_urls) == 3 and len(set(appended_urls)) == 3
+                    assert len(profiles[0]["items"]) == 1
+                    report["checks"].append("saved browser chooser replaces or appends tabs only in the selected KDE browser")
+                finally:
+                    invoke("set_bridge_enabled", {"enabled":False})
+                invoke("save_workspaces", {"store":{"version":1,"profiles":[browser_capture]}})
             browser_capture["items"][0]["launch"]["newWindow"] = True
             invoke("save_workspaces", {"store": {"version": 1, "profiles": [browser_capture]}})
             result = invoke("restore_workspace", {"id": browser_capture["id"]})
@@ -1909,8 +2060,8 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             wait_for(f"return document.querySelectorAll('.binding').length === {len(firefox_config['bindings'])} && !document.querySelector('#toggle').disabled")
             click("#show-workspaces")
             wait_for("return document.querySelectorAll('#workspace-list article').length === 1")
-            click('[data-action="edit"]')
-            evaluate("const panel=document.querySelector('.browser-settings'); panel.open=true; panel.scrollIntoView(); return true;")
+            click('#workspace-list article [data-action="edit"]')
+            evaluate("document.querySelector('.workspace-window-options').open=true; document.querySelector('.browser-settings').scrollIntoView(); return true;")
             assert evaluate("return document.querySelector('[data-browser=profilePath]').value") == str(browser_profile)
             screenshot = request("GET", f"/session/{session}/screenshot")
             (output / "window-warp-firefox-kde.png").write_bytes(base64.b64decode(screenshot))
@@ -1926,14 +2077,18 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             profile_file.write_text("[General]\nName=Warp Fixture\nCommand=/bin/bash\nParent=FALLBACK/\n")
             terminal_fixture = subprocess.Popen(["konsole", "--separate", "--profile", str(profile_file), "--workdir", str(terminal_dir), "-e", "/bin/bash", "--noprofile", "--norc"], env=fixture_env, stdout=log, stderr=log, start_new_session=True)
             captured_terminal = None
+            terminal_observations = []
             for _ in range(50):
                 capture = invoke("capture_workspace", {"name": "Owned Konsole fixture"})["profile"]
+                terminal_observations = [{"pid":i["window"]["pid"], "appId":i["window"]["appId"], "terminal":i.get("terminal"), "note":i.get("captureNote", "")} for i in capture["items"] if i["window"]["pid"] == terminal_fixture.pid or "konsole" in i["window"]["appId"].lower()]
                 capture["items"] = [i for i in capture["items"] if i["window"]["pid"] == terminal_fixture.pid]
                 if len(capture["items"]) == 1 and capture["items"][0].get("terminal", {}).get("shell"):
                     captured_terminal = capture
                     break
                 time.sleep(0.2)
-            assert captured_terminal, "Could not capture the owned Konsole shell"
+            if not captured_terminal:
+                (output / "konsole-capture-observation.json").write_text(json.dumps({"fixturePid":terminal_fixture.pid, "exit":terminal_fixture.poll(), "windows":terminal_observations}, indent=2))
+            assert captured_terminal, "Could not capture the owned Konsole shell; see konsole-capture-observation.json"
             terminal = captured_terminal["items"][0]["terminal"]
             assert terminal["kind"] == "konsole" and Path(terminal["shell"]).name == "bash", terminal
             assert terminal["workingDirectory"] == str(terminal_dir), terminal
@@ -1966,8 +2121,8 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             wait_for(f"return document.querySelectorAll('.binding').length === {len(terminal_config['bindings'])} && !document.querySelector('#toggle').disabled")
             click("#show-workspaces")
             wait_for("return document.querySelectorAll('#workspace-list article').length === 1")
-            click('[data-action="edit"]')
-            evaluate("const panel=document.querySelector('.terminal-settings'); panel.open=true; panel.scrollIntoView(); return true;")
+            click('#workspace-list article [data-action="edit"]')
+            evaluate("document.querySelector('.workspace-window-options').open=true; const panel=document.querySelector('.terminal-settings'); panel.open=true; panel.scrollIntoView(); return true;")
             assert evaluate("return document.querySelector('[data-terminal=workingDirectory]').value") == str(terminal_dir)
             screenshot = request("GET", f"/session/{session}/screenshot")
             (output / "window-warp-terminal-kde.png").write_bytes(base64.b64decode(screenshot))
@@ -2013,7 +2168,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             screenshot = request("GET", f"/session/{session}/screenshot")
             (output / "window-warp-import-kde.png").write_bytes(base64.b64decode(screenshot))
             click("#save-workspace")
-            wait_for("return document.querySelector('#message').textContent==='Workspace saved.'")
+            wait_for("return [...document.querySelectorAll('.workspace-card-status')].some(status => !status.hidden && status.textContent === 'Saved.')")
             saved = invoke("get_workspaces")["profiles"][-1]
             assert saved["platform"] == "windows" and saved["id"] != "legacy-id"
             assert saved["items"][0]["terminal"]["wslDistro"] == "Ubuntu"

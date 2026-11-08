@@ -1,7 +1,7 @@
 //! Application-level shortcuts, separate from per-platform window operations.
 use serde_json::json;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Mutex,
 };
 use tauri::{AppHandle, Emitter, Manager};
@@ -88,6 +88,66 @@ static CONTROL_QUEUE: Mutex<ControlQueue> = Mutex::new(ControlQueue {
     editor_active: false,
     pending_editor: 0,
 });
+static WORKSPACE_CAPTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static WORKSPACE_ENRICHMENT: Mutex<()> = Mutex::new(());
+
+fn publish_workspace(
+    app: &AppHandle,
+    sequence: u64,
+    request: serde_json::Value,
+    show: bool,
+) -> Result<(), String> {
+    let runtime = app.state::<crate::Runtime>();
+    let mut pending = runtime.control_request.lock().map_err(|e| e.to_string())?;
+    if WORKSPACE_CAPTURE_SEQUENCE.load(Ordering::SeqCst) != sequence {
+        return Ok(());
+    }
+    *pending = Some(request);
+    drop(pending);
+    if show {
+        crate::show(app);
+    }
+    app.emit("warp-control", ()).map_err(|e| e.to_string())
+}
+
+fn capture_workspace(app: &AppHandle, sequence: u64) -> Result<(), String> {
+    if !*app
+        .state::<crate::Runtime>()
+        .enabled
+        .lock()
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(());
+    }
+    // Preserve the current desktop's windows before bringing Warp forward.
+    let windows = crate::platform::snapshot(app)?;
+    if WORKSPACE_CAPTURE_SEQUENCE.load(Ordering::SeqCst) != sequence {
+        return Ok(());
+    }
+    let store = crate::workspaces::load(app)?;
+    let suggested = crate::workspaces::best_match(&store.profiles, &windows);
+    let mut profile = crate::workspaces::capture(windows, "New workspace".into());
+    crate::terminal::enrich(&mut profile.items);
+    publish_workspace(
+        app,
+        sequence,
+        json!({"action":"update-workspace", "captureId":sequence, "capturing":true, "capture":{"profile":&profile,"suggestedId":&suggested}}),
+        true,
+    )?;
+    // A later shortcut can show its own draft immediately, while only the
+    // newest request is allowed to finish the slower browser enrichment.
+    let _guard = WORKSPACE_ENRICHMENT.lock().map_err(|e| e.to_string())?;
+    if WORKSPACE_CAPTURE_SEQUENCE.load(Ordering::SeqCst) != sequence {
+        return Ok(());
+    }
+    crate::workspaces::enrich_capture(app, &mut profile)?;
+    publish_workspace(
+        app,
+        sequence,
+        json!({"action":"update-workspace", "captureId":sequence, "capturing":false, "capture":{"profile":profile,"suggestedId":suggested}}),
+        false,
+    )
+}
 
 struct ControlGuard<'a> {
     busy: &'a AtomicBool,
@@ -105,8 +165,38 @@ impl Drop for ControlGuard<'_> {
     }
 }
 
+// A browser button is an explicit UI action and must also work while global
+// shortcuts are paused. Keep any already-pending control request intact.
+pub fn show_workspaces(app: &AppHandle) -> Result<(), String> {
+    let runtime = app.state::<crate::Runtime>();
+    let mut pending = runtime.control_request.lock().map_err(|e| e.to_string())?;
+    if pending.is_some() {
+        return Err("Window Warp is handling another request. Try again.".into());
+    }
+    *pending = Some(json!({"action":"open-workspaces"}));
+    drop(pending);
+    crate::show(app);
+    app.emit("warp-control", ()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn dispatch(app: &AppHandle, action: &str) {
     if !is_control(action) {
+        return;
+    }
+    if action == "update-workspace" {
+        let sequence = WORKSPACE_CAPTURE_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            if let Err(error) = capture_workspace(&app, sequence) {
+                let _ = publish_workspace(
+                    &app,
+                    sequence,
+                    json!({"action":"workspace-capture-failed", "captureId":sequence, "error":error}),
+                    true,
+                );
+            }
+        });
         return;
     }
     let runtime = app.state::<crate::Runtime>();
@@ -227,15 +317,6 @@ fn run(app: &AppHandle, action: &str) -> Result<(), String> {
             return Ok(());
         }
         "open-workspaces" => json!({"action":action}),
-        "update-workspace" => {
-            let windows = crate::platform::snapshot(app)?;
-            let store = crate::workspaces::load(app)?;
-            let suggested = crate::workspaces::best_match(&store.profiles, &windows);
-            let mut profile = crate::workspaces::capture(windows, "New workspace".into());
-            crate::firefox::enrich(&mut profile.items);
-            crate::terminal::enrich(&mut profile.items);
-            json!({"action":action, "capture":{"profile":profile,"suggestedId":suggested}})
-        }
         _ => return Err("Unknown application shortcut.".into()),
     };
     *app.state::<crate::Runtime>()

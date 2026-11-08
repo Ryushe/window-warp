@@ -22,6 +22,18 @@ pub struct View {
     cancelled: bool,
 }
 static VIEW: Mutex<Option<View>> = Mutex::new(None);
+#[cfg(target_os = "linux")]
+static FOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_os = "linux")]
+pub fn focus_changed(focused: bool) {
+    use std::sync::atomic::Ordering;
+    if focused {
+        FOCUSED.store(true, Ordering::SeqCst);
+    } else if FOCUSED.swap(false, Ordering::SeqCst) {
+        cancel_visible();
+    }
+}
 
 #[tauri::command]
 pub fn radial_view() -> Result<Option<View>, String> {
@@ -42,6 +54,17 @@ pub fn cancel_visible() {
             view.cancelled = true;
         }
     }
+}
+
+#[cfg(windows)]
+pub fn cancel_from_hook() -> bool {
+    if let Ok(mut view) = VIEW.lock() {
+        if let Some(view) = view.as_mut() {
+            view.cancelled = true;
+            return true;
+        }
+    }
+    false
 }
 
 fn candidates(mut windows: Vec<WindowInfo>, binding: &Binding) -> Vec<WindowInfo> {
@@ -165,6 +188,8 @@ impl Picker {
         window
             .emit("radial-view", &view)
             .map_err(|e| e.to_string())?;
+        #[cfg(target_os = "linux")]
+        FOCUSED.store(false, std::sync::atomic::Ordering::SeqCst);
         crate::platform::show_radial(app, bounds)?;
         Ok(Some(picker))
     }

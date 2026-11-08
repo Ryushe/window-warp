@@ -1,0 +1,23 @@
+.timed-error:not(.app-alert) { position: relative; }
+.timed-error { overflow: hidden; }
+.app-alert #app-alert-text { min-width: 0; overflow-wrap: anywhere; }
+#quick-message.timed-error, #quick-conflict-error.timed-error,
+#browser-bridge-status.timed-error, #error.timed-error { padding-bottom: 6px; }
+.timed-error::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 3px;
+  background: var(--danger, #e7a097);
+  transform-origin: left;
+  animation: error-countdown var(--error-duration, 6s) linear forwards;
+  pointer-events: none;
+}
+.timed-error.timer-paused::after { animation-play-state: paused; }
+.timed-error:focus-visible { outline: 2px solid var(--chord, #e7a097); outline-offset: 2px; }
+@keyframes error-countdown { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .timed-error::after { animation-timing-function: steps(1, end); }
+}

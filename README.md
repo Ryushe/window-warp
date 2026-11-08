@@ -9,11 +9,11 @@ Put every window in its place. Window Warp is a Windows and KDE Plasma app for m
 
 ## Install
 
-- **Windows:** install [Window Warp from the Microsoft Store](https://apps.microsoft.com/detail/9NVBS6W8RV54?hl=en-us&gl=US&ocid=pdpshare).
+- **Windows:** install [Window Warp from the Microsoft Store](https://apps.microsoft.com/detail/9NVBS6W8RV54?hl=en-us&gl=US&ocid=pdpshare), or download the installer from the [latest GitHub release](https://github.com/Ryushe/window-warp/releases/latest). Store availability may lag a GitHub release.
 - **KDE Plasma:** download the Debian package from the [latest GitHub release](https://github.com/Ryushe/window-warp/releases/latest). It targets Ubuntu/Kubuntu 24.04 amd64 with Plasma 5.27.11 on Wayland:
 
 ```sh
-sudo apt install ./window-warp_0.1.1_kubuntu24.04_amd64.deb
+sudo apt install ./WindowWarp_0.1.7_kubuntu24.04_amd64.deb
 ```
 
 Run the command from the download directory, using the downloaded filename if a newer release is available. `apt` installs the package and resolves its dependencies; `sudo dpkg -i` also works if the dependencies are already installed. This package requires `kwin-common` version `4:5.27.11-0ubuntu3`. Other KWin versions, including Plasma 6, need a matching companion and package build. See the [KDE setup notes](desktop/README.md#kde-setup) for details.

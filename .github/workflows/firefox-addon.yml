@@ -1,0 +1,65 @@
+name: Publish Firefox add-on
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firefox-addon-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-24.04
+    env:
+      NO_UPDATE_NOTIFIER: '1'
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install locked development dependencies
+        run: npm ci --ignore-scripts
+      - name: Check and test
+        run: |
+          npm run check
+          npm test
+      - name: Prepare Firefox extension
+        run: node scripts/firefox-release.mjs prepare "$RUNNER_TEMP/window-warp-firefox"
+      - name: Validate Firefox extension
+        run: npx --no-install web-ext lint --source-dir "$RUNNER_TEMP/window-warp-firefox/extension" --no-config-discovery
+      - name: Check existing Mozilla version
+        id: version
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: node scripts/firefox-release.mjs plan "$RUNNER_TEMP/window-warp-firefox"
+      - name: Submit to Firefox Add-ons
+        if: steps.version.outputs.submit == 'true'
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
+          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: >-
+          npx --no-install web-ext sign
+          --source-dir "$RUNNER_TEMP/window-warp-firefox/extension"
+          --channel listed
+          --amo-metadata "$RUNNER_TEMP/window-warp-firefox/amo-metadata.json"
+          --approval-timeout 0
+          --no-config-discovery
+      - name: Add the privacy policy if missing
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: node scripts/firefox-release.mjs policy "$RUNNER_TEMP/window-warp-firefox"

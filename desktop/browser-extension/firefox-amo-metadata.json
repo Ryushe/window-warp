@@ -1,0 +1,16 @@
+{
+  "summary": {
+    "en-US": "Save and restore Firefox tabs with Window Warp."
+  },
+  "description": {
+    "en-US": "Connect Firefox to the Window Warp desktop app to save and restore tabs with your workspaces.\n\nFind the main application this pairs with here: https://github.com/Ryushe/window-warp\n\nFeatures:\n• Save browser tabs on their own or add them to a workspace.\n• Capture and update tabs when you choose.\n• Turn on live tab sharing to keep a connected workspace or saved browser up to date.\n• Restore saved tabs when you reopen a browser or workspace.\n\nThe extension shares tab information with the desktop app through a local connection. Live sharing is optional and off by default. Private browsing windows are excluded.\n\nRequires the Window Warp desktop app for Windows or KDE Plasma."
+  },
+  "categories": ["tabs"],
+  "homepage": {
+    "en-US": "https://github.com/Ryushe/window-warp"
+  },
+  "version": {
+    "license": "MIT",
+    "approval_notes": "The extension requires the Window Warp desktop app. Open Settings in the app to prepare the Firefox connection, then enter its pairing code in the extension. Browser tab information is shared with the desktop app over localhost when requested, or continuously when the user enables live tab sharing. Private browsing windows are excluded."
+  }
+}

@@ -13,6 +13,8 @@ use windows_sys::core::BOOL;
 use windows_sys::Win32::{
     Foundation::*, Graphics::Gdi::*, System::Threading::*, UI::WindowsAndMessaging::*,
 };
+#[path = "windows_desktops.rs"]
+mod desktops;
 #[path = "windows_gestures.rs"]
 mod gestures;
 #[path = "windows_reserved.rs"]
@@ -119,6 +121,122 @@ unsafe fn monitors() -> Result<Vec<(usize, Rect)>, String> {
         return Err("No monitors available.".into());
     }
     Ok(result)
+}
+
+#[derive(Default)]
+struct DisplayTarget {
+    id: String,
+    label: String,
+}
+
+fn utf16_text(value: &[u16]) -> String {
+    let length = value.iter().position(|c| *c == 0).unwrap_or(value.len());
+    String::from_utf16_lossy(&value[..length])
+}
+
+// Match the desktop source name used by EnumDisplayMonitors to the physical
+// display's friendly name and device path. A missing EDID leaves a usable
+// Display N fallback rather than preventing monitor selection.
+fn display_targets() -> HashMap<String, DisplayTarget> {
+    use windows_sys::Win32::Devices::Display::*;
+    let mut result = HashMap::new();
+    unsafe {
+        for _ in 0..3 {
+            let (mut path_count, mut mode_count) = (0, 0);
+            if GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut path_count, &mut mode_count)
+                != 0
+            {
+                break;
+            }
+            let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); path_count as usize];
+            let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); mode_count as usize];
+            let status = QueryDisplayConfig(
+                QDC_ONLY_ACTIVE_PATHS,
+                &mut path_count,
+                paths.as_mut_ptr(),
+                &mut mode_count,
+                modes.as_mut_ptr(),
+                std::ptr::null_mut(),
+            );
+            if status == ERROR_INSUFFICIENT_BUFFER {
+                continue;
+            }
+            if status != 0 {
+                break;
+            }
+            paths.truncate(path_count as usize);
+            for path in paths {
+                let mut source = DISPLAYCONFIG_SOURCE_DEVICE_NAME::default();
+                source.header = DISPLAYCONFIG_DEVICE_INFO_HEADER {
+                    r#type: DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
+                    size: std::mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32,
+                    adapterId: path.sourceInfo.adapterId,
+                    id: path.sourceInfo.id,
+                };
+                let mut target = DISPLAYCONFIG_TARGET_DEVICE_NAME::default();
+                target.header = DISPLAYCONFIG_DEVICE_INFO_HEADER {
+                    r#type: DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+                    size: std::mem::size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32,
+                    adapterId: path.targetInfo.adapterId,
+                    id: path.targetInfo.id,
+                };
+                if DisplayConfigGetDeviceInfo(&mut source.header) == 0
+                    && DisplayConfigGetDeviceInfo(&mut target.header) == 0
+                {
+                    result.insert(
+                        utf16_text(&source.viewGdiDeviceName),
+                        DisplayTarget {
+                            id: utf16_text(&target.monitorDevicePath),
+                            label: utf16_text(&target.monitorFriendlyDeviceName),
+                        },
+                    );
+                }
+            }
+            break;
+        }
+    }
+    result
+}
+
+unsafe fn monitor_identifier(handle: usize, targets: &HashMap<String, DisplayTarget>) -> String {
+    let source = monitor_name(handle);
+    targets
+        .get(&source)
+        .filter(|target| !target.id.is_empty())
+        .map(|target| target.id.clone())
+        .unwrap_or(source)
+}
+
+pub fn monitor_options(_: &AppHandle) -> Result<Vec<crate::MonitorOption>, String> {
+    unsafe {
+        let all = monitors()?;
+        let targets = display_targets();
+        let primary = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) as usize;
+        Ok(all
+            .iter()
+            .enumerate()
+            .map(|(index, (handle, area))| {
+                let source = monitor_name(*handle);
+                let label = targets
+                    .get(&source)
+                    .map(|target| target.label.trim())
+                    .filter(|label| !label.is_empty());
+                crate::MonitorOption {
+                    id: monitor_identifier(*handle, &targets),
+                    name: label
+                        .map(|name| format!("{name} · Display {}", index + 1))
+                        .unwrap_or_else(|| format!("Display {}", index + 1)),
+                    index: index + 1,
+                    primary: *handle == primary,
+                    stable: targets
+                        .get(&source)
+                        .is_some_and(|target| !target.id.is_empty()),
+                    source_id: source,
+                    geometry: *area,
+                }
+            })
+            .collect())
+    }
 }
 unsafe fn place(hwnd: HWND, target: Rect, maximized: bool) -> Result<(), String> {
     if IsIconic(hwnd) != 0 || IsZoomed(hwnd) != 0 {
@@ -261,6 +379,457 @@ unsafe fn monitor_name(handle: usize) -> String {
 pub fn snapshot(_: &AppHandle) -> Result<Vec<crate::workspaces::WindowInfo>, String> {
     unsafe { snapshot_native(true) }
 }
+fn choose_current_desktop_id(
+    foreground: Option<windows::core::GUID>,
+    candidates: impl IntoIterator<Item = windows::core::GUID>,
+) -> Option<windows::core::GUID> {
+    let valid = |id: &windows::core::GUID| *id != windows::core::GUID::zeroed();
+    if let Some(id) = foreground.filter(valid) {
+        return Some(id);
+    }
+    let mut selected = None;
+    for id in candidates.into_iter().filter(valid) {
+        if selected.is_some_and(|previous| previous != id) {
+            return None;
+        }
+        selected = Some(id);
+    }
+    selected
+}
+
+pub fn switch_to_desktop(_: &AppHandle, desktop: &str) -> Result<(), String> {
+    desktops::switch(desktop)
+}
+
+pub fn move_to_desktop(
+    _: &AppHandle,
+    window: &crate::workspaces::WindowInfo,
+    desktop: &str,
+) -> Result<(), String> {
+    let handle = window
+        .id
+        .parse::<usize>()
+        .map_err(|_| "Invalid window identity.")?;
+    unsafe {
+        let hwnd = handle as HWND;
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if IsWindow(hwnd) == 0 || pid != window.pid {
+            return Err("A workspace window closed or changed identity.".into());
+        }
+    }
+    desktops::move_window(handle, desktop)
+}
+
+/// Resolve the desktop without switching it. On an empty desktop, an owned,
+/// non-activating probe window gives the documented desktop manager a view to
+/// identify without relying on a pinned shell window's home desktop.
+fn current_desktop_id() -> Result<windows::core::GUID, String> {
+    use windows::Win32::{
+        Foundation::RPC_E_CHANGED_MODE,
+        System::Com::{
+            CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+        },
+        UI::Shell::{IVirtualDesktopManager, VirtualDesktopManager},
+    };
+    struct Apartment(bool);
+    impl Drop for Apartment {
+        fn drop(&mut self) {
+            if self.0 {
+                unsafe {
+                    CoUninitialize();
+                }
+            }
+        }
+    }
+    if desktops::supported() {
+        match desktops::current_id() {
+            Ok(id) => return Ok(id),
+            Err(error) => eprintln!("Live Windows desktop query failed: {error}"),
+        }
+    }
+    unsafe {
+        let initialized = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let _apartment = if initialized.is_ok() {
+            Apartment(true)
+        } else if initialized == RPC_E_CHANGED_MODE {
+            Apartment(false)
+        } else {
+            return Err("Cannot determine the current virtual desktop.".into());
+        };
+        let manager: IVirtualDesktopManager =
+            CoCreateInstance(&VirtualDesktopManager, None, CLSCTX_ALL)
+                .map_err(|_| "Cannot determine the current virtual desktop.")?;
+        let known_desktops = virtual_desktop_names();
+        let known = |id: &windows::core::GUID| {
+            known_desktops.is_empty() || known_desktops.contains_key(&format!("{id:?}"))
+        };
+        let current_id = |hwnd: HWND| {
+            let window = windows::Win32::Foundation::HWND(hwnd as _);
+            if !manager
+                .IsWindowOnCurrentVirtualDesktop(window)
+                .ok()?
+                .as_bool()
+            {
+                return None;
+            }
+            manager.GetWindowDesktopId(window).ok()
+        };
+        let foreground = GetForegroundWindow();
+        let mut class = [0u16; 80];
+        let class_len = if foreground.is_null() {
+            0
+        } else {
+            GetClassNameW(foreground, class.as_mut_ptr(), class.len() as i32).max(0) as usize
+        };
+        let shell = [
+            "Progman",
+            "WorkerW",
+            "Shell_TrayWnd",
+            "Shell_SecondaryTrayWnd",
+        ]
+        .iter()
+        .any(|name| class[..class_len].iter().copied().eq(name.encode_utf16()));
+        let foreground_id = if foreground.is_null()
+            || foreground == GetShellWindow()
+            || foreground == GetDesktopWindow()
+            || shell
+        {
+            None
+        } else {
+            current_id(foreground).filter(known)
+        };
+        if let Some(id) = choose_current_desktop_id(foreground_id, []) {
+            return Ok(id);
+        }
+        let mut handles: Vec<usize> = Vec::new();
+        EnumWindows(Some(collect_window), &mut handles as *mut _ as LPARAM);
+        let candidates = handles.into_iter().filter_map(|handle| {
+            let hwnd = handle as HWND;
+            if hwnd == GetShellWindow()
+                || hwnd == GetDesktopWindow()
+                || !GetWindow(hwnd, GW_OWNER).is_null()
+                || GetWindowTextLengthW(hwnd) == 0
+                || GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW as isize != 0
+            {
+                return None;
+            }
+            let mut cloaked = 0u32;
+            if windows_sys::Win32::Graphics::Dwm::DwmGetWindowAttribute(
+                hwnd,
+                windows_sys::Win32::Graphics::Dwm::DWMWA_CLOAKED as u32,
+                &mut cloaked as *mut _ as *mut _,
+                4,
+            ) != 0
+                || cloaked != 0
+            {
+                return None;
+            }
+            current_id(hwnd).filter(known)
+        });
+        if let Some(id) = choose_current_desktop_id(None, candidates) {
+            return Ok(id);
+        }
+        let registry_desktop = {
+            use winreg::{enums::HKEY_CURRENT_USER, RegKey};
+            RegKey::predef(HKEY_CURRENT_USER)
+                .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Explorer\VirtualDesktops")
+                .ok()
+                .and_then(|key| key.get_raw_value("CurrentVirtualDesktop").ok())
+                .and_then(|value| <[u8; 16]>::try_from(value.bytes.as_ref()).ok())
+                .map(uuid::Uuid::from_bytes_le)
+                .map(|id| windows::core::GUID::from_u128(id.as_u128()))
+                .filter(|id| *id != windows::core::GUID::zeroed())
+        };
+        let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+        let probe = CreateWindowExW(
+            WS_EX_APPWINDOW | WS_EX_NOACTIVATE,
+            class.as_ptr(),
+            std::ptr::null(),
+            WS_OVERLAPPEDWINDOW,
+            -32000,
+            -32000,
+            1,
+            1,
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            std::ptr::null(),
+        );
+        if !probe.is_null() {
+            struct Probe(HWND);
+            impl Drop for Probe {
+                fn drop(&mut self) {
+                    unsafe {
+                        DestroyWindow(self.0);
+                    }
+                }
+            }
+            let _probe = Probe(probe);
+            ShowWindow(probe, SW_SHOWNOACTIVATE);
+            let window = windows::Win32::Foundation::HWND(probe as _);
+            let mut tried_registry = false;
+            for _ in 0..12 {
+                if let Some(id) =
+                    current_id(probe).filter(|id| *id != windows::core::GUID::zeroed())
+                {
+                    return Ok(id);
+                }
+                // Explorer's registry entry is only a hint. Move our own
+                // temporary view there, then verify it is on the active
+                // desktop before trusting the ID.
+                if !tried_registry && manager.GetWindowDesktopId(window).is_ok() {
+                    if let Some(id) = registry_desktop {
+                        let _ = manager.MoveWindowToDesktop(window, &id);
+                    }
+                    tried_registry = true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+        }
+        Err("Cannot determine the current virtual desktop. Focus a window and try again.".into())
+    }
+}
+pub fn current_desktop_key(_: &AppHandle) -> Result<String, String> {
+    current_desktop_id().map(|id| format!("{id:?}"))
+}
+
+fn virtual_desktop_names() -> HashMap<String, String> {
+    if let Some(names) = desktops::names() {
+        return names;
+    }
+    use winreg::{enums::HKEY_CURRENT_USER, RegKey};
+    let path = r"Software\Microsoft\Windows\CurrentVersion\Explorer\VirtualDesktops";
+    let Ok(root) = RegKey::predef(HKEY_CURRENT_USER).open_subkey(path) else {
+        return HashMap::new();
+    };
+    let Ok(ids) = root.get_raw_value("VirtualDesktopIDs") else {
+        return HashMap::new();
+    };
+    if ids.bytes.len() % 16 != 0 {
+        return HashMap::new();
+    }
+    ids.bytes
+        .chunks_exact(16)
+        .enumerate()
+        .filter_map(|(index, bytes)| {
+            let id = uuid::Uuid::from_bytes_le(bytes.try_into().ok()?)
+                .to_string()
+                .to_uppercase();
+            let name = root
+                .open_subkey(format!(r"Desktops\{{{id}}}"))
+                .ok()
+                .and_then(|desktop| desktop.get_value::<String, _>("Name").ok())
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| format!("Desktop {}", index + 1));
+            Some((id, name))
+        })
+        .collect()
+}
+
+pub fn desktop_snapshot(app: &AppHandle) -> Result<crate::workspaces::DesktopSnapshot, String> {
+    use crate::workspaces::{DesktopSnapshot, LocatedWindow, VirtualDesktop};
+    use windows::Win32::{
+        Foundation::RPC_E_CHANGED_MODE,
+        System::Com::{
+            CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+        },
+        UI::Shell::{IVirtualDesktopManager, VirtualDesktopManager},
+    };
+    struct Apartment(bool);
+    impl Drop for Apartment {
+        fn drop(&mut self) {
+            if self.0 {
+                unsafe {
+                    CoUninitialize();
+                }
+            }
+        }
+    }
+    let current = current_desktop_id().ok();
+    let names = virtual_desktop_names();
+    let desktop = |id: windows::core::GUID| {
+        let id = format!("{id:?}");
+        VirtualDesktop {
+            name: names.get(&id).cloned().unwrap_or_default(),
+            id,
+        }
+    };
+    let windows = snapshot_for_restore(app)?;
+    unsafe {
+        let initialized = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let _apartment = if initialized.is_ok() {
+            Apartment(true)
+        } else if initialized == RPC_E_CHANGED_MODE {
+            Apartment(false)
+        } else {
+            return Err("Cannot identify browser desktops.".into());
+        };
+        let manager: IVirtualDesktopManager =
+            CoCreateInstance(&VirtualDesktopManager, None, CLSCTX_ALL)
+                .map_err(|e| format!("Cannot identify browser desktops: {e}"))?;
+        let windows = windows
+            .into_iter()
+            .filter_map(|window| {
+                let hwnd = window.id.parse::<usize>().ok()? as HWND;
+                let mut pid = 0;
+                GetWindowThreadProcessId(hwnd, &mut pid);
+                if IsWindow(hwnd) == 0 || pid != window.pid {
+                    return None;
+                }
+                let id = manager
+                    .GetWindowDesktopId(windows::Win32::Foundation::HWND(hwnd as _))
+                    .ok()?;
+                Some(LocatedWindow {
+                    window,
+                    desktops: vec![desktop(id)],
+                })
+            })
+            .collect();
+        Ok(DesktopSnapshot {
+            current: current.map(desktop),
+            windows,
+        })
+    }
+}
+pub fn snapshot_current(app: &AppHandle) -> Result<Vec<crate::workspaces::WindowInfo>, String> {
+    snapshot(app)
+}
+
+/// Move only a Window Warp-owned window before showing or focusing it.
+pub fn move_own_window_to_current_desktop(hwnd: isize) -> Result<(), String> {
+    use windows::Win32::{
+        Foundation::RPC_E_CHANGED_MODE,
+        System::Com::{
+            CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+        },
+        UI::Shell::{IVirtualDesktopManager, VirtualDesktopManager},
+    };
+    struct Apartment(bool);
+    impl Drop for Apartment {
+        fn drop(&mut self) {
+            if self.0 {
+                unsafe {
+                    CoUninitialize();
+                }
+            }
+        }
+    }
+    let desktop = current_desktop_id()?;
+    unsafe {
+        let hwnd = hwnd as HWND;
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if IsWindow(hwnd) == 0 || pid != std::process::id() {
+            return Err("Window Warp could not identify its own window.".into());
+        }
+        let initialized = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let _apartment = if initialized.is_ok() {
+            Apartment(true)
+        } else if initialized == RPC_E_CHANGED_MODE {
+            Apartment(false)
+        } else {
+            return Err("Window Warp could not access the current desktop.".into());
+        };
+        let manager: IVirtualDesktopManager =
+            CoCreateInstance(&VirtualDesktopManager, None, CLSCTX_ALL)
+                .map_err(|e| format!("Window Warp could not access the current desktop: {e}"))?;
+        let window = windows::Win32::Foundation::HWND(hwnd as _);
+        let registered = manager.GetWindowDesktopId(window).is_ok();
+        if !registered
+            || !manager
+                .IsWindowOnCurrentVirtualDesktop(window)
+                .is_ok_and(|on_current| on_current.as_bool())
+        {
+            // Windows can discard a hidden window's desktop assignment while
+            // reporting a successful move. Show without activation, move the
+            // registered view, and leave it visible for the caller to focus.
+            let was_hidden = IsWindowVisible(hwnd) == 0;
+            if was_hidden {
+                ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            }
+            let result = (|| {
+                let mut registered = false;
+                for _ in 0..20 {
+                    if manager.GetWindowDesktopId(window).is_ok() {
+                        registered = true;
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                if !registered {
+                    return Err(
+                        "Windows could not identify the Window Warp window. Try again.".into(),
+                    );
+                }
+                if manager
+                    .IsWindowOnCurrentVirtualDesktop(window)
+                    .is_ok_and(|on_current| on_current.as_bool())
+                {
+                    return Ok(());
+                }
+                manager
+                    .MoveWindowToDesktop(window, &desktop)
+                    .map_err(|e| format!("Window Warp could not move to this desktop: {e}"))?;
+                for _ in 0..20 {
+                    if manager
+                        .GetWindowDesktopId(window)
+                        .is_ok_and(|id| id == desktop)
+                    {
+                        return Ok(());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                Err(
+                    "Windows did not finish moving Window Warp to this desktop. Try again."
+                        .to_string(),
+                )
+            })();
+            if was_hidden && result.is_err() {
+                ShowWindow(hwnd, SW_HIDE);
+            }
+            result?;
+        }
+        Ok(())
+    }
+}
+/// Restore must also see ordinary windows on other virtual desktops so it
+/// does not launch a second copy of an already running application.
+pub fn snapshot_for_restore(_: &AppHandle) -> Result<Vec<crate::workspaces::WindowInfo>, String> {
+    use windows::Win32::{
+        Foundation::RPC_E_CHANGED_MODE,
+        System::Com::{
+            CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+        },
+        UI::Shell::{IVirtualDesktopManager, VirtualDesktopManager},
+    };
+    struct Apartment(bool);
+    impl Drop for Apartment {
+        fn drop(&mut self) {
+            if self.0 {
+                unsafe {
+                    CoUninitialize();
+                }
+            }
+        }
+    }
+    unsafe {
+        let initialized = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let _apartment = if initialized.is_ok() {
+            Apartment(true)
+        } else if initialized == RPC_E_CHANGED_MODE {
+            Apartment(false)
+        } else {
+            return Err(format!(
+                "Cannot check open windows on other desktops: {initialized:?}"
+            ));
+        };
+        let manager: IVirtualDesktopManager =
+            CoCreateInstance(&VirtualDesktopManager, None, CLSCTX_ALL)
+                .map_err(|e| format!("Cannot check open windows on other desktops: {e}"))?;
+        snapshot_native_with_desktops(true, false, Some(&manager))
+    }
+}
 pub fn snapshot_for_binding(
     _: &AppHandle,
     binding: &Binding,
@@ -274,6 +843,13 @@ unsafe fn snapshot_native(exclude_own: bool) -> Result<Vec<crate::workspaces::Wi
 unsafe fn snapshot_native_matching(
     exclude_own: bool,
     explicit_match: bool,
+) -> Result<Vec<crate::workspaces::WindowInfo>, String> {
+    snapshot_native_with_desktops(exclude_own, explicit_match, None)
+}
+unsafe fn snapshot_native_with_desktops(
+    exclude_own: bool,
+    explicit_match: bool,
+    desktops: Option<&windows::Win32::UI::Shell::IVirtualDesktopManager>,
 ) -> Result<Vec<crate::workspaces::WindowInfo>, String> {
     use crate::workspaces::WindowInfo;
     unsafe {
@@ -303,7 +879,25 @@ unsafe fn snapshot_native_matching(
                 4,
             );
             if !explicit_match && cloaked != 0 {
-                continue;
+                let other_desktop = if cloaked
+                    == windows_sys::Win32::Graphics::Dwm::DWM_CLOAKED_SHELL
+                {
+                    if let Some(manager) = desktops {
+                        !manager
+                            .IsWindowOnCurrentVirtualDesktop(windows::Win32::Foundation::HWND(
+                                hwnd as _,
+                            ))
+                            .map_err(|e| format!("Cannot check a window's virtual desktop: {e}"))?
+                            .as_bool()
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if !other_desktop {
+                    continue;
+                }
             }
             let path = match executable_path(hwnd) {
                 Some(path) => path,
@@ -440,10 +1034,13 @@ unsafe fn restore_native(
             return Err("The selected window has closed or changed identity.".into());
         }
         let all = monitors()?;
+        let targets = display_targets();
         let target = all
             .iter()
             .find(|(id, _)| {
-                !saved.monitor_name.is_empty() && monitor_name(*id) == saved.monitor_name
+                !saved.monitor_name.is_empty()
+                    && (monitor_identifier(*id, &targets).eq_ignore_ascii_case(&saved.monitor_name)
+                        || monitor_name(*id).eq_ignore_ascii_case(&saved.monitor_name))
             })
             .unwrap_or(&all[saved.monitor.saturating_sub(1).min(all.len() - 1)])
             .1;
@@ -607,8 +1204,22 @@ unsafe fn pull_app_target(
     }
     let all = monitors()?;
     let primary = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) as usize;
-    let main = if settings.main_monitor == 0 {
-        all.iter().position(|(id, _)| *id == primary).unwrap_or(0)
+    let primary_index = all.iter().position(|(id, _)| *id == primary).unwrap_or(0);
+    let targets = if settings.main_monitor_id.is_empty() && settings.burner_monitor_id.is_empty() {
+        HashMap::new()
+    } else {
+        display_targets()
+    };
+    let named = |wanted: &str| {
+        all.iter().position(|(handle, _)| {
+            monitor_identifier(*handle, &targets).eq_ignore_ascii_case(wanted)
+                || monitor_name(*handle).eq_ignore_ascii_case(wanted)
+        })
+    };
+    let main = if !settings.main_monitor_id.is_empty() {
+        named(&settings.main_monitor_id).unwrap_or(primary_index)
+    } else if settings.main_monitor == 0 {
+        primary_index
     } else {
         (settings.main_monitor - 1).min(all.len() - 1)
     };
@@ -638,7 +1249,11 @@ unsafe fn pull_app_target(
                 }
             }
         } else if was_active && all.len() > 1 {
-            let burner = (settings.burner_monitor - 1).min(all.len() - 1);
+            let burner = if settings.burner_monitor_id.is_empty() {
+                (settings.burner_monitor - 1).min(all.len() - 1)
+            } else {
+                named(&settings.burner_monitor_id).unwrap_or((main + 1) % all.len())
+            };
             let burner = if burner == main {
                 (main + 1) % all.len()
             } else {
@@ -1027,6 +1642,7 @@ pub fn enable(app: &AppHandle, config: &Config) -> Result<(), String> {
     }
     gestures::enable()
 }
+
 pub fn disable(app: &AppHandle) -> Result<(), String> {
     gestures::cancel()?;
     // The pause chord stays installed so Super+pause can turn shortcuts back on.
@@ -1064,6 +1680,299 @@ pub fn shutdown(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn moves_only_its_own_window_back_to_the_current_virtual_desktop() {
+        use super::*;
+        use windows::Win32::{
+            Foundation::RPC_E_CHANGED_MODE,
+            System::Com::{
+                CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+            },
+            UI::Shell::{IVirtualDesktopManager, VirtualDesktopManager},
+        };
+        struct Apartment(bool);
+        impl Drop for Apartment {
+            fn drop(&mut self) {
+                if self.0 {
+                    unsafe {
+                        CoUninitialize();
+                    }
+                }
+            }
+        }
+        struct TestWindow(HWND);
+        impl Drop for TestWindow {
+            fn drop(&mut self) {
+                unsafe {
+                    DestroyWindow(self.0);
+                }
+            }
+        }
+        unsafe {
+            let initialized = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let _apartment = if initialized.is_ok() {
+                Apartment(true)
+            } else if initialized == RPC_E_CHANGED_MODE {
+                Apartment(false)
+            } else {
+                panic!("COM initialization failed: {initialized:?}");
+            };
+            let manager: IVirtualDesktopManager =
+                CoCreateInstance(&VirtualDesktopManager, None, CLSCTX_ALL).unwrap();
+            let current = current_desktop_id().unwrap();
+            let known = virtual_desktop_names();
+            assert!(
+                known.is_empty() || known.contains_key(&format!("{current:?}")),
+                "Current desktop must not be a stale window assignment"
+            );
+            let mut handles = Vec::<usize>::new();
+            EnumWindows(Some(collect_window), &mut handles as *mut _ as LPARAM);
+            let other = handles.into_iter().find_map(|raw| {
+                let window = windows::Win32::Foundation::HWND(raw as _);
+                if manager
+                    .IsWindowOnCurrentVirtualDesktop(window)
+                    .ok()?
+                    .as_bool()
+                {
+                    return None;
+                }
+                manager
+                    .GetWindowDesktopId(window)
+                    .ok()
+                    .filter(|id| *id != current && *id != windows::core::GUID::zeroed())
+            });
+            let Some(other) = other else {
+                eprintln!("Skipped: no other virtual desktop with a window is available.");
+                return;
+            };
+            let class = [
+                b'S' as u16,
+                b'T' as u16,
+                b'A' as u16,
+                b'T' as u16,
+                b'I' as u16,
+                b'C' as u16,
+                0,
+            ];
+            {
+                let hwnd = CreateWindowExW(
+                    WS_EX_APPWINDOW | WS_EX_NOACTIVATE,
+                    class.as_ptr(),
+                    std::ptr::null(),
+                    WS_OVERLAPPEDWINDOW,
+                    -32000,
+                    -32000,
+                    1,
+                    1,
+                    null_mut(),
+                    null_mut(),
+                    null_mut(),
+                    std::ptr::null(),
+                );
+                assert!(!hwnd.is_null());
+                let _window = TestWindow(hwnd);
+                ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                let target = windows::Win32::Foundation::HWND(hwnd as _);
+                // Explorer may register a new top-level view asynchronously.
+                for _ in 0..20 {
+                    if manager.GetWindowDesktopId(target).is_ok() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                if manager.GetWindowDesktopId(target).unwrap() != current {
+                    manager.MoveWindowToDesktop(target, &current).unwrap();
+                    for _ in 0..20 {
+                        if manager
+                            .GetWindowDesktopId(target)
+                            .is_ok_and(|id| id == current)
+                        {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(25));
+                    }
+                }
+                assert_eq!(manager.GetWindowDesktopId(target).unwrap(), current);
+                manager.MoveWindowToDesktop(target, &other).unwrap();
+                for _ in 0..20 {
+                    if manager
+                        .GetWindowDesktopId(target)
+                        .is_ok_and(|id| id == other)
+                    {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                assert_eq!(manager.GetWindowDesktopId(target).unwrap(), other);
+                ShowWindow(hwnd, SW_HIDE);
+                move_own_window_to_current_desktop(hwnd as isize).unwrap();
+                ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                for _ in 0..20 {
+                    if manager
+                        .GetWindowDesktopId(target)
+                        .is_ok_and(|id| id == current)
+                    {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                assert_eq!(manager.GetWindowDesktopId(target).unwrap(), current);
+                assert!(manager
+                    .IsWindowOnCurrentVirtualDesktop(target)
+                    .unwrap()
+                    .as_bool());
+            }
+        }
+    }
+    #[test]
+    fn current_desktop_ignores_empty_ids_and_rejects_ambiguous_fallbacks() {
+        use super::choose_current_desktop_id;
+        use windows::core::GUID;
+        let empty = GUID::zeroed();
+        let first = GUID::from_u128(1);
+        let second = GUID::from_u128(2);
+        assert_eq!(
+            choose_current_desktop_id(Some(first), [second]),
+            Some(first)
+        );
+        assert_eq!(
+            choose_current_desktop_id(Some(empty), [empty, first, first]),
+            Some(first)
+        );
+        assert_eq!(choose_current_desktop_id(None, [empty]), None);
+        assert_eq!(choose_current_desktop_id(None, [first, second]), None);
+    }
+
+    #[test]
+    #[ignore = "reads the interactive Windows virtual-desktop session"]
+    fn native_current_desktop_uses_the_live_desktop_manager() {
+        let current = super::desktops::current_id()
+            .expect("No supported desktop interface on this Windows release");
+        assert_eq!(super::current_desktop_id().unwrap(), current);
+        assert!(super::virtual_desktop_names().contains_key(&format!("{current:?}")));
+    }
+
+    #[test]
+    #[ignore = "reads the interactive Windows virtual-desktop session on an STA thread"]
+    fn native_current_desktop_works_on_sta_thread() {
+        use windows::Win32::System::Com::{
+            CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED,
+        };
+        unsafe {
+            CoInitializeEx(None, COINIT_APARTMENTTHREADED).unwrap();
+            let result = winvd::get_current_desktop().and_then(|desktop| desktop.get_id());
+            let current = super::current_desktop_id();
+            CoUninitialize();
+            assert!(result.is_ok(), "STA desktop manager: {result:?}");
+            assert!(current.is_ok(), "STA current desktop: {current:?}");
+        }
+    }
+
+    #[test]
+    #[ignore = "moves only an owned fixture window to an existing other Windows virtual desktop"]
+    fn native_restore_snapshot_sees_an_owned_window_on_another_desktop() {
+        use super::*;
+        use windows::Win32::{
+            Foundation::RPC_E_CHANGED_MODE,
+            System::Com::{
+                CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+            },
+            UI::Shell::{IVirtualDesktopManager, VirtualDesktopManager},
+        };
+        struct Apartment(bool);
+        impl Drop for Apartment {
+            fn drop(&mut self) {
+                if self.0 {
+                    unsafe {
+                        CoUninitialize();
+                    }
+                }
+            }
+        }
+        struct Owned(HWND);
+        impl Drop for Owned {
+            fn drop(&mut self) {
+                unsafe {
+                    DestroyWindow(self.0);
+                }
+            }
+        }
+        unsafe {
+            let init = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let _apartment = if init.is_ok() {
+                Apartment(true)
+            } else if init == RPC_E_CHANGED_MODE {
+                Apartment(false)
+            } else {
+                panic!("COM initialization failed: {init:?}");
+            };
+            let manager: IVirtualDesktopManager =
+                CoCreateInstance(&VirtualDesktopManager, None, CLSCTX_ALL).unwrap();
+            let mut handles: Vec<usize> = Vec::new();
+            EnumWindows(Some(collect_window), &mut handles as *mut _ as LPARAM);
+            let other = handles
+                .into_iter()
+                .find_map(|id| {
+                    let hwnd = windows::Win32::Foundation::HWND(id as _);
+                    if manager
+                        .IsWindowOnCurrentVirtualDesktop(hwnd)
+                        .ok()?
+                        .as_bool()
+                    {
+                        return None;
+                    }
+                    manager.GetWindowDesktopId(hwnd).ok()
+                })
+                .expect(
+                    "This test needs an existing second virtual desktop with a visible app window",
+                );
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let title: Vec<u16> = "Window Warp other desktop fixture\0"
+                .encode_utf16()
+                .collect();
+            let hwnd = CreateWindowExW(
+                0,
+                class.as_ptr(),
+                title.as_ptr(),
+                WS_OVERLAPPEDWINDOW,
+                100,
+                100,
+                400,
+                300,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                std::ptr::null(),
+            );
+            assert!(!hwnd.is_null(), "{}", error("Create fixture"));
+            let _owned = Owned(hwnd);
+            ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            let h = windows::Win32::Foundation::HWND(hwnd as _);
+            manager
+                .MoveWindowToDesktop(h, &other)
+                .expect("Move only the fixture window");
+            let id = (hwnd as usize).to_string();
+            for _ in 0..40 {
+                if !manager
+                    .IsWindowOnCurrentVirtualDesktop(h)
+                    .unwrap()
+                    .as_bool()
+                {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            assert!(!manager
+                .IsWindowOnCurrentVirtualDesktop(h)
+                .unwrap()
+                .as_bool());
+            let all = snapshot_native_with_desktops(false, false, Some(&manager)).unwrap();
+            assert!(
+                all.iter().any(|w| w.id == id),
+                "Restore enumeration must include the existing window on another desktop"
+            );
+        }
+    }
     use super::*;
 
     #[test]

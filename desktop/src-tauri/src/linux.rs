@@ -28,6 +28,64 @@ use tauri::{AppHandle, Manager};
 
 const SCRIPT_NAME: &str = "window-warp-session";
 
+#[derive(serde::Deserialize)]
+struct KWinMonitor {
+    id: String,
+    geometry: crate::geometry::Rect,
+    primary: bool,
+    stable: bool,
+}
+
+pub fn monitor_options(app: &AppHandle) -> Result<Vec<crate::MonitorOption>, String> {
+    let value = crate::linux_control::request(app, serde_json::json!({"kind":"monitors"}))?;
+    let outputs: Vec<KWinMonitor> = serde_json::from_value(value)
+        .map_err(|error| format!("Could not read KDE monitor information: {error}"))?;
+    if outputs.is_empty() {
+        return Err("No connected monitors were found.".into());
+    }
+    let monitors = app.available_monitors().unwrap_or_default();
+    Ok(outputs
+        .into_iter()
+        .enumerate()
+        .map(|(index, output)| {
+            let model = monitors
+                .iter()
+                .find(|monitor| {
+                    let scale = monitor.scale_factor();
+                    let position = monitor.position();
+                    let size = monitor.size();
+                    let near = |a: f64, b: i32| (a.round() as i32 - b).abs() <= 2;
+                    scale > 0.0
+                        && near(position.x as f64 / scale, output.geometry.x)
+                        && near(position.y as f64 / scale, output.geometry.y)
+                        && near(size.width as f64 / scale, output.geometry.width)
+                        && near(size.height as f64 / scale, output.geometry.height)
+                })
+                .and_then(|monitor| monitor.name())
+                .map(|name| name.trim())
+                .filter(|name| !name.is_empty());
+            let label = model
+                .map(|name| format!("{name} · Display {}", index + 1))
+                .unwrap_or_else(|| {
+                    if output.id.chars().all(|c| c.is_ascii_digit()) {
+                        format!("Display {}", index + 1)
+                    } else {
+                        output.id.clone()
+                    }
+                });
+            crate::MonitorOption {
+                source_id: output.id.clone(),
+                geometry: output.geometry,
+                id: output.id,
+                name: label,
+                index: index + 1,
+                primary: output.primary,
+                stable: output.stable,
+            }
+        })
+        .collect())
+}
+
 pub fn focus_editor(app: &AppHandle) -> Result<(), String> {
     // Mapping a previously hidden GTK window is asynchronous. Let KWin focus
     // our own window; a background Wayland client cannot self-activate reliably.
@@ -45,6 +103,62 @@ pub fn focus_editor(app: &AppHandle) -> Result<(), String> {
 pub fn editor_foreground() -> Option<String> {
     None
 }
+pub fn current_desktop_key(app: &AppHandle) -> Result<String, String> {
+    let value = crate::linux_control::request(app, serde_json::json!({"kind":"desktop-context"}))?;
+    value["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .ok_or("KWin could not identify the current virtual desktop.".into())
+}
+pub fn switch_to_desktop(app: &AppHandle, desktop: &str) -> Result<(), String> {
+    crate::linux_control::request(
+        app,
+        serde_json::json!({"kind":"switch-desktop", "desktop":desktop}),
+    )?;
+    Ok(())
+}
+pub fn move_to_desktop(
+    app: &AppHandle,
+    window: &crate::workspaces::WindowInfo,
+    desktop: &str,
+) -> Result<(), String> {
+    crate::linux_control::request(
+        app,
+        serde_json::json!({"kind":"move-desktop", "desktop":desktop, "window":{"id":window.id,"pid":window.pid}}),
+    )?;
+    Ok(())
+}
+pub fn desktop_snapshot(app: &AppHandle) -> Result<crate::workspaces::DesktopSnapshot, String> {
+    let value = crate::linux_control::request(app, serde_json::json!({"kind":"desktop-snapshot"}))?;
+    let mut snapshot: crate::workspaces::DesktopSnapshot =
+        serde_json::from_value(value).map_err(|e| format!("Invalid KWin desktop metadata: {e}"))?;
+    for entry in &mut snapshot.windows {
+        if entry.window.pid != 0 {
+            if let Ok(path) = fs::read_link(format!("/proc/{}/exe", entry.window.pid)) {
+                entry.window.path = path.to_string_lossy().to_string();
+            }
+        }
+    }
+    Ok(snapshot)
+}
+pub fn snapshot_current(app: &AppHandle) -> Result<Vec<crate::workspaces::WindowInfo>, String> {
+    let snapshot = desktop_snapshot(app)?;
+    let current = snapshot
+        .current
+        .ok_or("KWin could not identify the current virtual desktop.")?;
+    Ok(snapshot
+        .windows
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .desktops
+                .iter()
+                .any(|desktop| desktop.id == current.id)
+        })
+        .map(|entry| entry.window)
+        .collect())
+}
 pub fn snapshot(app: &AppHandle) -> Result<Vec<crate::workspaces::WindowInfo>, String> {
     let value = crate::linux_control::request(app, serde_json::json!({"kind": "snapshot"}))?;
     let mut windows: Vec<crate::workspaces::WindowInfo> =
@@ -57,6 +171,10 @@ pub fn snapshot(app: &AppHandle) -> Result<Vec<crate::workspaces::WindowInfo>, S
         }
     }
     Ok(windows)
+}
+pub fn snapshot_for_restore(app: &AppHandle) -> Result<Vec<crate::workspaces::WindowInfo>, String> {
+    // KWin's stacking order includes windows on other virtual desktops.
+    snapshot(app)
 }
 pub fn snapshot_for_binding(
     app: &AppHandle,

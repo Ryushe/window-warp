@@ -36,6 +36,10 @@ fn floating() -> String {
 pub struct Settings {
     pub main_monitor: usize,
     pub burner_monitor: usize,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub main_monitor_id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub burner_monitor_id: String,
     pub hold_delay_ms: u64,
     pub hold_tile_enabled: bool,
     pub hold_mode: String,
@@ -47,6 +51,8 @@ impl Default for Settings {
         Self {
             main_monitor: 0,
             burner_monitor: 2,
+            main_monitor_id: String::new(),
+            burner_monitor_id: String::new(),
             hold_delay_ms: 400,
             hold_tile_enabled: true,
             hold_mode: "tile".into(),
@@ -634,6 +640,18 @@ mod tests {
         assert_eq!(config.settings.hold_delay_ms, 400);
         assert_eq!(config.settings.hold_mode, "tile");
         assert!(config.settings.hold_tile_enabled);
+    }
+    #[test]
+    fn legacy_monitor_settings_do_not_add_unknown_identity_fields() {
+        let mut settings = Settings::default();
+        let value = serde_json::to_value(&settings).unwrap();
+        assert!(value.get("mainMonitorId").is_none());
+        assert!(value.get("burnerMonitorId").is_none());
+        settings.main_monitor_id = "display-id".into();
+        assert_eq!(
+            serde_json::to_value(&settings).unwrap()["mainMonitorId"],
+            "display-id"
+        );
     }
     #[test]
     fn hold_settings_validate_and_round_trip() {

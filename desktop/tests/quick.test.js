@@ -5,7 +5,7 @@ import vm from "node:vm";
 import { parseHTML } from "linkedom";
 
 const html = fs.readFileSync(new URL("../ui/quick.html", import.meta.url), "utf8");
-const source = fs.readFileSync(new URL("../ui/shortcut-picker.js", import.meta.url), "utf8") + "\n" + fs.readFileSync(new URL("../ui/quick.js", import.meta.url), "utf8");
+const source = ["error-timer.js", "shortcut-picker.js", "quick.js"].map(file => fs.readFileSync(new URL(`../ui/${file}`, import.meta.url), "utf8")).join("\n");
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 async function popup(bindings, settings = {}, options = {}) {
@@ -63,7 +63,7 @@ async function popup(bindings, settings = {}, options = {}) {
             throw new Error(command);
         } }
     };
-    vm.runInNewContext(source, { window, document });
+    vm.runInNewContext(source, { window, document, ...(options.timers || {setTimeout:()=>1, clearTimeout:()=>{}}) });
     await tick();
     return { window, document, calls, listeners, setOpen(value) { quickOpen = value; } };
 }
@@ -77,6 +77,22 @@ const discord = {
     mainMonitorAction: "burner",
     burnerLayout: "tile-left"
 };
+
+test("quick editor hides unused second-monitor placement without losing it", async () => {
+    const page=await popup([{...discord,mainMonitorAction:"focus-last",burnerLayout:"tile-right"}]);
+    await page.listeners.get("quick-edit")({payload:{window:{appId:"discord.exe"},label:"Discord",shortcut:"Super+D",bindingIndex:0}});
+    const behavior=page.document.querySelector("#quick-behavior"), layout=page.document.querySelector("#quick-layout");
+    assert.equal(layout.closest("label").hidden,true);
+    behavior.value="burner"; behavior.dispatchEvent(new page.window.Event("change"));
+    assert.equal(layout.closest("label").hidden,false);
+    assert.equal(layout.value,"tile-right");
+    behavior.value="focus-last"; behavior.dispatchEvent(new page.window.Event("change"));
+    assert.equal(layout.closest("label").hidden,true);
+    page.document.querySelector("#quick-apply").click(); await tick();
+    const saved=page.calls.find(call=>call.command==="save_config").args.config.bindings[0];
+    assert.equal(saved.mainMonitorAction,"focus-last");
+    assert.equal(saved.burnerLayout,"tile-right");
+});
 
 test("popup prefills the Discord shortcut from the same binding the list shows", async () => {
     const page = await popup([discord]);
@@ -261,6 +277,24 @@ test("a failed replacement stays in the dialog and shows the error", async () =>
     assert.equal(page.document.querySelector("#quick-conflict").hidden,false);
     assert.match(page.document.querySelector("#quick-conflict-error").textContent,/Could not save/);
     assert.equal(page.document.querySelector("#quick-app").textContent,"Editor");
+});
+
+test("a timed popup error clears without closing the conflict dialog", async () => {
+    let next = 0; const pending = new Map();
+    const timers = {setTimeout:fn=>{const id=++next; pending.set(id,fn); return id;},clearTimeout:id=>pending.delete(id)};
+    const page = await popup([discord],{}, {saveError:"Could not save",timers});
+    await page.listeners.get("quick-edit")({payload:{window:{appId:"editor.exe"},label:"Editor"}});
+    const key = new page.window.Event("keydown",{bubbles:true,cancelable:true});
+    Object.assign(key,{key:"d",code:"KeyD"});
+    page.document.querySelector("#quick-entry").dispatchEvent(key);
+    page.document.querySelector("#quick-apply").click(); await tick();
+    page.document.querySelector("#quick-replace-edit").click(); await tick();
+    const error = page.document.querySelector("#quick-conflict-error");
+    assert.equal(error.classList.contains("timed-error"),true);
+    const [id, expire]=[...pending][0]; pending.delete(id); expire();
+    assert.equal(error.textContent,"");
+    assert.equal(page.document.querySelector("#quick-conflict").hidden,false);
+    assert.equal(page.calls.some(call=>call.command === "hide_quick"),false);
 });
 
 test("a stale conflict preview cannot replace a key chosen while the preview was pending", async () => {
