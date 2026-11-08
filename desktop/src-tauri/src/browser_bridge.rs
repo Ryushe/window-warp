@@ -152,6 +152,8 @@ struct Request {
     operation_id: String,
     #[serde(default)]
     make_current: Option<bool>,
+    #[serde(default)]
+    expected_destination_id: Option<String>,
 }
 #[derive(Clone)]
 struct Snapshot {
@@ -234,7 +236,7 @@ impl Bridge {
                 })
                 .collect(),
         };
-        remember_opened(&mut state.config, active.clone());
+        remember_opened_for_state(&mut state, active.clone());
         state.config.active.insert(desktop, active);
         write_config(app, &state.config)
     }
@@ -251,7 +253,7 @@ impl Bridge {
             saved: workspace.items.iter().map(saved_window_key).collect(),
         };
         let mut state = self.state.lock().map_err(|error| error.to_string())?;
-        remember_opened(&mut state.config, active);
+        remember_opened_for_state(&mut state, active);
         write_config(app, &state.config)
     }
 
@@ -293,8 +295,8 @@ impl Bridge {
                 })
                 .collect();
             if targets.iter().any(Option::is_some) {
-                remember_opened(
-                    &mut state.config,
+                remember_opened_for_state(
+                    &mut state,
                     Active {
                         id: profile.id.clone(),
                         targets,
@@ -439,6 +441,19 @@ fn remember_opened(config: &mut Config, active: Active) {
         }
     }
     config.opened.insert(active.id.clone(), active);
+}
+
+// A browser window may have been reused by another destination. Cached
+// extension window IDs do not carry enough native identity to update just one
+// safely, so forget the labels until a fresh match is available.
+fn remember_opened_for_state(state: &mut State, active: Active) {
+    remember_opened(&mut state.config, active);
+    state.live_destinations.clear();
+}
+
+fn commit_opened_config(state: &mut State, config: Config) {
+    state.config = config;
+    state.live_destinations.clear();
 }
 
 fn snapshot_wait(state: &State, discover: bool) -> Duration {
@@ -2133,7 +2148,7 @@ fn save_browser_from_extension(
     let mut warning = None;
     if let Some(config) = link_config {
         if write_config(app, &config).is_ok() {
-            state.config = config;
+            commit_opened_config(&mut state, config);
             destination = Some((profile_id, profile_name));
         } else {
             warning = Some("Saved the browser, but could not link it as the current sync destination. Choose it again from the destination menu.");
@@ -2205,7 +2220,7 @@ fn save_workspace_from_extension(
                 },
             );
             write_config(app, &config)?;
-            state.config = config;
+            commit_opened_config(&mut state, config);
             if let Some(window_id) = request.window_id {
                 state
                     .live_destinations
@@ -2422,7 +2437,7 @@ fn link_current_from_extension(
         },
     );
     write_config(app, &config)?;
-    state.config = config;
+    commit_opened_config(&mut state, config);
     state
         .live_destinations
         .entry(client_id.to_string())
@@ -2559,6 +2574,10 @@ fn handle(
         || request.windows.len() > 100
         || request.expected_revision.len() > 100
         || request.operation_id.len() > 100
+        || request
+            .expected_destination_id
+            .as_ref()
+            .is_some_and(|id| id.len() > 200)
     {
         return Err("Browser snapshot is too large.".into());
     }
@@ -2804,8 +2823,11 @@ fn handle(
                     .flat_map(|store| store.profiles.iter()),
             )
             .find(|profile| profile.id == id)
-            .map(|profile| profile.name.clone())
+            .map(|profile| (profile.id.clone(), profile.name.clone()))
     });
+    let (destination_id, destination_name) = destination
+        .map(|(id, name)| (Some(id), Some(name)))
+        .unwrap_or((None, None));
     let workspace = active
         .as_ref()
         .and_then(|active| store.profiles.iter().find(|p| p.id == active.id));
@@ -2987,7 +3009,7 @@ fn handle(
         })
         .collect();
     Ok(
-        serde_json::json!({"workspace":workspace.map(|p| &p.name), "destination":destination, "hasOwners":has_owners, "profiles":profiles(request.browser), "workspaces":choices, "savedBrowsers":saved_choices, "live":live, "extensionVersion":extension_version, "storageError":storage_error, "windowsAvailable":windows_available}),
+        serde_json::json!({"libraryVersion":1, "workspace":workspace.map(|p| &p.name), "destination":destination_name, "destinationId":destination_id, "hasOwners":has_owners, "profiles":profiles(request.browser), "workspaces":choices, "savedBrowsers":saved_choices, "live":live, "extensionVersion":extension_version, "storageError":storage_error, "windowsAvailable":windows_available}),
     )
 }
 
@@ -3218,6 +3240,7 @@ fn assign_browser(
         expected_revision: String::new(),
         operation_id: String::new(),
         make_current: None,
+        expected_destination_id: None,
     };
     let mut browser = browser_from(&request, window, item.browser.as_ref());
     if snapshot.browser == BrowserKind::Firefox {
@@ -3457,6 +3480,13 @@ fn sync_current_from_extension(
         .get(&window.id)
         .cloned()
         .ok_or("This window has no unique saved destination. Choose a current sync destination above, or use Sync elsewhere for a one-time update.")?;
+    confirm_sync_destination(
+        &mut state,
+        client_id,
+        window.id,
+        request.expected_destination_id.as_deref(),
+        &destination,
+    )?;
     if !changed_workspaces.is_empty() {
         crate::workspaces::save(app, &workspaces)?;
         for id in changed_workspaces {
@@ -3473,6 +3503,24 @@ fn sync_current_from_extension(
         .or_default()
         .insert(window.id, destination.clone());
     Ok(serde_json::json!({"updated":1,"destination":destination.1}))
+}
+
+fn confirm_sync_destination(
+    state: &mut State,
+    client_id: &str,
+    window_id: i64,
+    expected: Option<&str>,
+    destination: &(String, String),
+) -> Result<(), String> {
+    if expected.is_some_and(|expected| expected != destination.0) {
+        state
+            .live_destinations
+            .entry(client_id.to_string())
+            .or_default()
+            .insert(window_id, destination.clone());
+        return Err("The current sync destination changed. Review it and try again.".into());
+    }
+    Ok(())
 }
 
 fn save_live_snapshot(
@@ -3806,6 +3854,37 @@ mod tests {
         assert_eq!(serde_json::to_value(&target).unwrap(), changed);
         request.expected_revision.clear();
         assert!(replace_target_tabs(&mut target, &request, &window).is_err());
+    }
+
+    #[test]
+    fn a_changed_owner_invalidates_old_labels_and_rejects_a_stale_sync() {
+        let saved = item("saved", "Example", 10);
+        let active = |id: &str| Active {
+            id: id.into(),
+            targets: vec![Some(("open".into(), 1))],
+            saved: vec![saved_window_key(&saved)],
+        };
+        let mut state = State::default();
+        remember_opened_for_state(&mut state, active("workspace-a"));
+        state
+            .live_destinations
+            .entry("client".into())
+            .or_default()
+            .insert(7, ("workspace-a".into(), "Workspace A".into()));
+
+        remember_opened_for_state(&mut state, active("workspace-b"));
+        assert!(state.live_destinations.is_empty());
+        assert!(state.config.opened["workspace-a"].targets[0].is_none());
+        let current = ("workspace-b".into(), "Workspace B".into());
+        assert!(
+            confirm_sync_destination(&mut state, "client", 7, Some("workspace-a"), &current)
+                .is_err()
+        );
+        assert_eq!(state.live_destinations["client"][&7], current);
+        assert!(
+            confirm_sync_destination(&mut state, "client", 7, Some("workspace-b"), &current)
+                .is_ok()
+        );
     }
 
     #[test]
