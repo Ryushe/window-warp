@@ -21,6 +21,6 @@ placement when the selected behavior does not use it.
 
 Workspaces remain specific to the platform on which they were captured.
 Transferring them between Windows and KDE is planned for later. The Debian
-package targets Ubuntu/Kubuntu 24.04 amd64 with Plasma 5.27.11 on Wayland and
-its matching KWin companion; it is not a universal Linux package. The Windows
+package targets Linux Mint 22.2 amd64 with KDE Plasma 5 on Wayland and KWin
+`4:5.27.11-0ubuntu3`; it is not a universal Linux package. The Windows
 installer is unsigned. Microsoft Store availability follows certification.
