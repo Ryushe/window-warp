@@ -103,6 +103,10 @@ class Input:
         self.lib.wl_proxy_marshal_flags(self.proxy, 9, None, 4, 0, c.c_int32(round(x * 256)), c.c_int32(round(y * 256)))
         self.roundtrip()
 
+    def button(self, code, down):
+        self.lib.wl_proxy_marshal_flags(self.proxy, 2, None, 4, 0, c.c_uint32(code), c.c_uint32(int(down)))
+        self.roundtrip()
+
     def close(self):
         if self.display:
             try:

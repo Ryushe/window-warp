@@ -31,11 +31,28 @@ Node 22 or newer, Python 3, Rust, the project's dependencies and WebView2 instal
 node desktop/tests/windows/native.mjs
 # Focus on the separate quick popup and app identifier discovery:
 node desktop/tests/windows/native.mjs --quick-only
+# Check bulk shortcut editing, workspace feedback and monitor selection:
+node desktop/tests/windows/native.mjs --ux-only
+# Test the saved-browser chooser's replacement shortcut with sample data:
+node desktop/tests/windows/native.mjs --chooser-only
+# Test moving an open workspace or switching to it on another desktop:
+node desktop/tests/windows/native.mjs --desktop-only
 # Include real Firefox capture and restore with two temporary profiles:
 node desktop/tests/windows/native.mjs --firefox
 # Run only the browser acceptance checks while iterating:
 node desktop/tests/windows/native.mjs --firefox-only
+# Check Win+Y response while an isolated browser connection is slow:
+$env:WARP_CHROME_BINARY = 'C:\path\to\chrome-for-testing\chrome.exe'
+node desktop/tests/windows/native.mjs --workspace-slow
 ```
+
+Run `--desktop-only` on each supported Windows release when validating a
+release. The desktop backend uses different shell interfaces for Windows 10
+1809 through 22H2, Windows 11 22H2 and 23H2, and Windows 11 24H2 and 25H2.
+Support also depends on the installed update revision; unknown revisions fall
+back to Windows Task View. The Rust unit tests check version routing and the
+Windows 10 COM method layout, but do not replace an interactive test on each
+Windows release.
 
 This opt-in fixture builds the production app with a unique application identity
 and a Tauri `appDirectoriesOverride` pointing into
@@ -67,17 +84,19 @@ The test covers:
 - Startup registration/removal, only when no existing `WindowWarp` Run entry exists.
 - Closing the editor hides it; a second instance reopens the same HWND/PID and preserves settings.
 - Native tray Open/Pause/Quit handlers, successful graceful process exit, shortcut release and saved-file preservation before fallback cleanup.
-- Push then X/C or Super+X/C retiling, including changed focus, one-use consumption,
-  expiry, deadline renewal and pause/resume cancellation. A single-monitor run
-  verifies wrap-in-place; cross-monitor geometry is explicitly skipped without
-  another connected display.
+- With two displays, push then X/C or Super+X/C retiling, including changed focus,
+  one-use consumption, expiry, deadline renewal and pause/resume cancellation.
+  A single-monitor run verifies that pushes tile left and right without arming a
+  follow-up retile; cross-monitor geometry and history require another display.
 - With two displays, all four burner layouts and return pulls preserve their
   expected relative geometry and maximize state; return pulls center the pointer
   on the main display. Single-display runs verify all four fallback layouts.
 
 `result.json` records checks, skips and errors. Screenshots, the isolated build
 configuration and build/app logs stay in the run directory. Existing startup
-configuration is preserved and reported as skipped. The fixture closes its own
+configuration is preserved and reported as skipped. Set `WARP_TEST_OUTPUT_DIR`
+to a short temporary directory when Windows path length limits prevent a
+disposable browser profile from starting. The fixture closes its own
 process tree and helper; standalone fixture windows also have a bounded lifetime.
 It does not change unrelated windows or terminate unrelated processes.
 The helper uses per-monitor DPI awareness, releases only its own injected held
@@ -109,6 +128,25 @@ newly restored window to select that same URL. It does not inject a tab-selectio
 shortcut to assist restoration. `--firefox-only` explicitly skips the general
 shortcut/workspace suite and retains app isolation and cleanup checks.
 
+## Browser extension acceptance
+
+These tests use disposable browser profiles and local test pages. They do not
+open or modify a personal browser profile. Run from the repository root:
+
+```powershell
+npm install --prefix desktop/src-tauri/target/windows-validation/web-ext-tool web-ext@10.8.0
+node desktop/tests/windows/native.mjs --firefox-extension-only
+$env:WARP_CHROME_BINARY = 'C:\path\to\chrome-for-testing\chrome.exe'
+node desktop/tests/windows/native.mjs --chromium-only
+```
+
+Firefox is found at its standard installation path, or via `WARP_FIREFOX_BINARY`.
+For Chromium, use [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/)
+or another browser that supports `--load-extension`: regular Chrome 137 and later
+no longer support that flag. The Chromium fixture enables Developer mode only in
+its disposable profile. Windows' browser sandbox needs read access to the test
+browser files; do not disable the sandbox to run the test.
+
 
 Current receipt: all 22 checks pass with no skips in
 `src-tauri/target/windows-validation/WARP-NATIVE-42666202-5045-4fed-9580-d4fe8bcd9dcf/`.
@@ -128,8 +166,9 @@ workspace. The latest import run has 23 passing checks and one explicit skip:
 Rapid Escape and native focus-loss cancellation now pass, including five immediate
 Escape taps. The diagnostic skip option was removed. The current full run
 `WARP-NATIVE-6c823d34-8ae8-4c2b-b715-295a376939a3` passes 30 checks; its only skip
-is physical multi-monitor geometry. It verifies one-monitor wrapping and the
-complete push-to-retile lifecycle. The ordinary debug build was restored.
+is physical multi-monitor geometry. That historical run predates the current
+single-monitor behavior, which tiles in place without arming a retile. The
+ordinary debug build was restored.
 
 The focused native hook test can also be run with `WARP_TEST_RETILE=1`:
 `cargo test --manifest-path desktop/src-tauri/Cargo.toml native_windows_retile_capture_and_release -- --ignored`.

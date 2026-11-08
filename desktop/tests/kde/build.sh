@@ -29,7 +29,7 @@ if len(modules) != 1 or not modules[0].is_file():
 files = {"/" + p.relative_to(stage).as_posix(): str(p)
          for p in sorted(stage.rglob("*")) if p.is_file()}
 config = {"bundle": {"linux": {"deb": {
-    "depends": ["qdbus-qt6 | qdbus-qt5 | qdbus", f"kwin-common (= {version})"],
+    "depends": ["qdbus-qt6 | qdbus-qt5 | qdbus", "libsqlite3-0", f"kwin-common (= {version})"],
     "files": files,
 }}}}
 Path(sys.argv[1]).write_text(json.dumps(config))

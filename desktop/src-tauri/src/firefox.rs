@@ -10,25 +10,40 @@ use std::{
 };
 
 const MAX_SESSION: usize = 128 * 1024 * 1024;
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[path = "firefox_profiles_sqlite.rs"]
+mod selectable_profiles;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BrowserKind {
+    #[default]
+    Firefox,
+    Chromium,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct Browser {
+    #[serde(skip_serializing_if = "is_firefox_kind")]
+    pub kind: BrowserKind,
     pub profile_path: String,
     pub profile_name: String,
     pub tabs: Vec<Tab>,
     /// One-based, as in Firefox's session store and the original application.
     pub active_tab: usize,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+fn is_firefox_kind(kind: &BrowserKind) -> bool {
+    *kind == BrowserKind::Firefox
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Tab {
     pub url: String,
     pub title: String,
 }
-#[derive(Clone, Debug)]
-struct Profile {
-    path: PathBuf,
-    name: String,
+#[derive(Clone, Debug, Serialize)]
+pub struct Profile {
+    pub path: PathBuf,
+    pub name: String,
 }
 
 pub fn is_firefox(window: &WindowInfo) -> bool {
@@ -41,8 +56,11 @@ pub fn is_firefox(window: &WindowInfo) -> bool {
     ["firefox", "firefox.exe", "firefox-bin"].contains(&name.as_str())
         || [
             "firefox",
+            "firefox.exe",
+            "firefox.desktop",
             "firefox-esr",
             "org.mozilla.firefox",
+            "org.mozilla.firefox.desktop",
             "firefoxdeveloperedition",
             "navigator",
         ]
@@ -105,6 +123,7 @@ fn session_windows(session: &Value, profile: &Profile) -> Vec<Browser> {
                 return None;
             }
             Some(Browser {
+                kind: BrowserKind::Firefox,
                 profile_path: profile.path.to_string_lossy().into_owned(),
                 profile_name: profile.name.clone(),
                 tabs,
@@ -132,6 +151,21 @@ fn read_session(profile: &Profile) -> Result<Vec<Browser>, String> {
     Err(errors.into_iter().next().unwrap_or_else(|| {
         "Firefox has not written a readable session yet. Tabs can be entered manually.".into()
     }))
+}
+
+/// Let the user select a saved window when automatic title matching is ambiguous.
+pub fn sessions_for_profile(path: &str) -> Result<Vec<Browser>, String> {
+    if path.trim().is_empty() || !Path::new(path).is_dir() {
+        return Err("Choose an existing Firefox profile first.".into());
+    }
+    let profile = profiles()
+        .into_iter()
+        .find(|profile| same_path(&profile.path, Path::new(path)))
+        .unwrap_or_else(|| Profile {
+            path: PathBuf::from(path),
+            name: String::new(),
+        });
+    read_session(&profile)
 }
 fn parse_profiles(text: &str, root: &Path) -> Vec<Profile> {
     let mut sections = Vec::<HashMap<String, String>>::new();
@@ -191,12 +225,37 @@ fn roots() -> Vec<PathBuf> {
             .unwrap_or_default()
     }
 }
-fn profiles() -> Vec<Profile> {
+fn add_selectable_profiles(root: &Path, result: &mut Vec<Profile>) {
+    if let Ok(groups) = fs::read_dir(root.join("Profile Groups")) {
+        for database in groups
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "sqlite"))
+        {
+            for (path, name) in selectable_profiles::names(&database) {
+                if name.trim().is_empty() {
+                    continue;
+                }
+                let path = root.join(path);
+                if let Some(profile) = result
+                    .iter_mut()
+                    .find(|profile| same_path(&profile.path, &path))
+                {
+                    profile.name = name;
+                } else if path.is_dir() {
+                    result.push(Profile { path, name });
+                }
+            }
+        }
+    }
+}
+pub fn profiles() -> Vec<Profile> {
     let mut result = Vec::new();
     for root in roots() {
         if let Ok(text) = fs::read_to_string(root.join("profiles.ini")) {
             result.extend(parse_profiles(&text, &root));
         }
+        add_selectable_profiles(&root, &mut result);
         let directory = if cfg!(windows) {
             root.join("Profiles")
         } else {
@@ -208,11 +267,7 @@ fn profiles() -> Vec<Profile> {
                     && !result.iter().any(|p| same_path(&p.path, &path))
                 {
                     result.push(Profile {
-                        name: path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into_owned(),
+                        name: String::new(),
                         path,
                     });
                 }
@@ -232,6 +287,14 @@ fn same_path(a: &Path, b: &Path) -> bool {
         a == b
     }
 }
+fn legacy_profile(name: &str) -> Option<Profile> {
+    roots().into_iter().find_map(|root| {
+        let text = fs::read_to_string(root.join("profiles.ini")).ok()?;
+        parse_profiles(&text, &root)
+            .into_iter()
+            .find(|profile| profile.name == name)
+    })
+}
 fn profile_from_args(args: &[String], profiles: &[Profile]) -> Option<Profile> {
     for pair in args.windows(2) {
         if ["-profile", "--profile"].contains(&pair[0].as_str()) {
@@ -248,7 +311,14 @@ fn profile_from_args(args: &[String], profiles: &[Profile]) -> Option<Profile> {
             );
         }
         if pair[0].eq_ignore_ascii_case("-p") {
-            return profiles.iter().find(|p| p.name == pair[1]).cloned();
+            return legacy_profile(&pair[1])
+                .and_then(|legacy| {
+                    profiles
+                        .iter()
+                        .find(|p| same_path(&p.path, &legacy.path))
+                        .cloned()
+                })
+                .or_else(|| profiles.iter().find(|p| p.name == pair[1]).cloned());
         }
     }
     None
@@ -263,6 +333,66 @@ fn process_profile(pid: u32, profiles: &[Profile]) -> Option<Profile> {
                 crate::firefox_profile_lock::owned_by(path, pid)
             })
         })
+}
+
+// For deciding whether an already-tracked window belongs to a different
+// profile, a -P name is not sufficient: different Firefox installations can
+// register the same name. Only an absolute path or an owned profile lock is
+// strong enough to discard that association.
+#[cfg(any(not(target_os = "linux"), test))]
+fn explicit_profile_path(args: &[String]) -> Option<PathBuf> {
+    args.windows(2).find_map(|pair| {
+        if !["-profile", "--profile"].contains(&pair[0].as_str()) {
+            return None;
+        }
+        let path = PathBuf::from(&pair[1]);
+        path.is_absolute().then_some(path)
+    })
+}
+
+pub(crate) fn tracked_profile_path(pid: u32) -> Option<PathBuf> {
+    if pid == 0 {
+        return None;
+    }
+    // On Linux even an absolute argument can resolve differently in a
+    // confined browser's filesystem; require the host-visible owned lock.
+    #[cfg(not(target_os = "linux"))]
+    if let Some(path) = crate::process_info::arguments(pid)
+        .ok()
+        .and_then(|args| explicit_profile_path(&args))
+    {
+        if path.is_dir() {
+            return Some(path);
+        }
+    }
+    locked_profile(&profiles(), |path| {
+        crate::firefox_profile_lock::owned_by(path, pid)
+    })
+    .map(|profile| profile.path)
+}
+
+pub(crate) fn same_tracked_profile(path: &Path, saved: &str) -> Option<bool> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let left = fs::metadata(path).ok()?;
+        let right = fs::metadata(saved).ok()?;
+        Some((left.dev(), left.ino()) == (right.dev(), right.ino()))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let left = fs::canonicalize(path).ok()?;
+        let right = fs::canonicalize(saved).ok()?;
+        Some(same_path(&left, &right))
+    }
+}
+
+pub(crate) fn profile_for_pid(pid: u32) -> Option<(String, String)> {
+    if pid == 0 {
+        return None;
+    }
+    let profile = process_profile(pid, &profiles())?;
+    Some((profile.path.to_string_lossy().into_owned(), profile.name))
 }
 
 fn locked_profile(profiles: &[Profile], mut owns: impl FnMut(&Path) -> bool) -> Option<Profile> {
@@ -459,7 +589,7 @@ impl Browser {
                     || t.url.len() > 100_000
             })
         {
-            return Err("Check the Firefox profile, tab URLs, and selected tab number.".into());
+            return Err("Check the browser profile, tab URLs, and selected tab number.".into());
         }
         Ok(())
     }
@@ -475,39 +605,71 @@ impl Browser {
             Ok(Vec::new())
         }
     }
-    /// Same selected-tab-last convention as the original app.
-    pub fn launch_commands(&self, base: &LaunchSpec) -> Result<Vec<LaunchSpec>, String> {
+    /// Preserve tab order when an extension can select the active tab later.
+    pub fn launch_commands(
+        &self,
+        base: &LaunchSpec,
+        preserve_order: bool,
+    ) -> Result<Vec<LaunchSpec>, String> {
         self.validate()?;
+        let mut urls: Vec<_> = self.tabs.iter().map(|tab| tab.url.clone()).collect();
+        if !preserve_order && !urls.is_empty() {
+            let active = urls.remove(self.active_tab.saturating_sub(1));
+            urls.insert(0, active);
+        }
+        if self.kind == BrowserKind::Chromium {
+            if base.kind != crate::workspaces::LaunchKind::Executable {
+                return Err("Browser tab restoration requires an executable launch.".into());
+            }
+            let mut command = base.clone();
+            if !self.profile_path.is_empty() {
+                let profile = Path::new(&self.profile_path);
+                if !profile.is_dir() {
+                    return Err(
+                        "The saved browser profile folder is missing. Choose its profile again."
+                            .into(),
+                    );
+                }
+                let root = profile
+                    .parent()
+                    .ok_or("The saved browser profile has no parent folder.")?;
+                let directory = profile
+                    .file_name()
+                    .ok_or("The saved browser profile has no directory name.")?;
+                command
+                    .args
+                    .push(format!("--user-data-dir={}", root.to_string_lossy()));
+                command.args.push(format!(
+                    "--profile-directory={}",
+                    directory.to_string_lossy()
+                ));
+            }
+            command.args.push("--new-window".into());
+            if self.tabs.is_empty() {
+                command.args.push("about:blank".into());
+            } else {
+                command.args.extend(urls);
+            }
+            return Ok(vec![command]);
+        }
         let profile_args = self.profile_args()?;
         if base.kind != crate::workspaces::LaunchKind::Executable {
             return Err("Firefox tab restoration requires an executable launch. Select Executable or turn off Restore Firefox tabs.".into());
         }
-        let mut urls: Vec<_> = self
-            .tabs
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i + 1 != self.active_tab)
-            .map(|(_, t)| t.url.clone())
-            .collect();
-        if let Some(active) = self.tabs.get(self.active_tab.saturating_sub(1)) {
-            urls.push(active.url.clone());
+        // Firefox opens two or more positional URLs together in one new
+        // window, even when this profile is already running. Supplying
+        // --new-tab separately targets whichever window has focus instead.
+        let mut command = base.clone();
+        command.args.extend(profile_args);
+        if urls.len() <= 1 {
+            command.args.push("--new-window".into());
+            command
+                .args
+                .push(urls.pop().unwrap_or_else(|| "about:blank".into()));
+        } else {
+            command.args.extend(urls);
         }
-        if urls.is_empty() {
-            urls.push("about:blank".into());
-        }
-        let mut first = base.clone();
-        first.args.extend(profile_args.clone());
-        first.args.extend(["--new-window".into(), urls.remove(0)]);
-        let mut result = vec![first];
-        if !urls.is_empty() {
-            let mut tabs = base.clone();
-            tabs.args.extend(profile_args);
-            for url in urls {
-                tabs.args.extend(["--new-tab".into(), url]);
-            }
-            result.push(tabs);
-        }
-        Ok(result)
+        Ok(vec![command])
     }
 }
 
@@ -519,7 +681,7 @@ pub struct Matcher {
     processes: HashMap<u32, Option<Profile>>,
 }
 impl Matcher {
-    fn profile_match(&mut self, window: &WindowInfo, saved: &Browser) -> Option<bool> {
+    pub(crate) fn profile_match(&mut self, window: &WindowInfo, saved: &Browser) -> Option<bool> {
         if saved.profile_path.is_empty() && saved.profile_name.is_empty() {
             return Some(true);
         }
@@ -533,6 +695,9 @@ impl Matcher {
             self.processes.insert(window.pid, Some(profile.clone()));
             if !saved.profile_path.is_empty() {
                 return Some(same_path(&profile.path, Path::new(&saved.profile_path)));
+            }
+            if let Some(legacy) = legacy_profile(&saved.profile_name) {
+                return Some(same_path(&profile.path, &legacy.path));
             }
             return (!profile.name.is_empty()).then_some(profile.name == saved.profile_name);
         }
@@ -796,6 +961,48 @@ mod tests {
         );
     }
     #[test]
+    fn tracked_profile_requires_a_path_not_an_ambiguous_profile_name() {
+        let path = std::env::current_dir().unwrap().join("fixture-profile");
+        assert_eq!(
+            explicit_profile_path(&[
+                "firefox".into(),
+                "--profile".into(),
+                path.to_string_lossy().into_owned()
+            ]),
+            Some(path)
+        );
+        assert_eq!(
+            explicit_profile_path(&["firefox".into(), "-P".into(), "Work".into()]),
+            None
+        );
+        assert_eq!(
+            explicit_profile_path(&[
+                "firefox".into(),
+                "--profile".into(),
+                "relative-profile".into()
+            ]),
+            None
+        );
+        let current = std::env::current_dir().unwrap();
+        assert_eq!(
+            same_tracked_profile(&current, &current.to_string_lossy()),
+            Some(true)
+        );
+        if let Some(parent) = current.parent() {
+            assert_eq!(
+                same_tracked_profile(&current, &parent.to_string_lossy()),
+                Some(false)
+            );
+        }
+        assert_eq!(
+            same_tracked_profile(
+                &current,
+                &current.join("no-such-profile-directory").to_string_lossy()
+            ),
+            None
+        );
+    }
+    #[test]
     fn corrupt_recovery_falls_back_without_modifying_profile() {
         let directory = std::env::temp_dir().join(format!("warp-firefox-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(directory.join("sessionstore-backups")).unwrap();
@@ -816,8 +1023,76 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
     #[test]
-    fn launch_uses_argument_boundaries_and_selected_tab_last() {
+    fn manual_session_choice_reads_saved_windows_without_private_tabs() {
+        let directory =
+            std::env::temp_dir().join(format!("warp-firefox-choice-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(directory.join("sessionstore-backups")).unwrap();
+        fs::write(
+            directory.join("sessionstore-backups/recovery.jsonlz4"),
+            encoded(&session()),
+        )
+        .unwrap();
+        let windows = sessions_for_profile(&directory.to_string_lossy()).unwrap();
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].tabs.len(), 2);
+        assert_eq!(windows[0].active_tab, 2);
+        fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn chromium_launch_keeps_profile_and_url_argument_boundaries() {
+        let root =
+            std::env::temp_dir().join(format!("warp-chrome-profile-{}", uuid::Uuid::new_v4()));
+        let profile = root.join("Profile With Spaces");
+        fs::create_dir_all(&profile).unwrap();
         let browser = Browser {
+            kind: BrowserKind::Chromium,
+            profile_path: profile.to_string_lossy().into_owned(),
+            tabs: vec![
+                Tab {
+                    url: "https://one.test/?q=two%20words".into(),
+                    title: "One".into(),
+                },
+                Tab {
+                    url: "https://two.test/".into(),
+                    title: "Two".into(),
+                },
+            ],
+            active_tab: 2,
+            ..Default::default()
+        };
+        let commands = browser
+            .launch_commands(
+                &LaunchSpec {
+                    program: "chrome".into(),
+                    ..Default::default()
+                },
+                true,
+            )
+            .unwrap();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(
+            commands[0].args,
+            vec![
+                format!("--user-data-dir={}", root.to_string_lossy()),
+                "--profile-directory=Profile With Spaces".into(),
+                "--new-window".into(),
+                "https://one.test/?q=two%20words".into(),
+                "https://two.test/".into()
+            ]
+        );
+        let fallback = browser
+            .launch_commands(&LaunchSpec::default(), false)
+            .unwrap();
+        assert_eq!(
+            &fallback[0].args[fallback[0].args.len() - 2..],
+            ["https://two.test/", "https://one.test/?q=two%20words"]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn launch_uses_argument_boundaries_and_selected_tab_first() {
+        let browser = Browser {
+            kind: BrowserKind::Firefox,
             profile_name: "A profile with spaces".into(),
             profile_path: String::new(),
             tabs: vec![
@@ -837,32 +1112,62 @@ mod tests {
             active_tab: 1,
         };
         let commands = browser
-            .launch_commands(&LaunchSpec {
-                program: "firefox".into(),
-                ..Default::default()
-            })
+            .launch_commands(
+                &LaunchSpec {
+                    program: "firefox".into(),
+                    ..Default::default()
+                },
+                false,
+            )
             .unwrap();
+        assert_eq!(commands.len(), 1);
         assert_eq!(
             commands[0].args,
             [
                 "-P",
                 "A profile with spaces",
-                "--new-window",
-                "https://b.test/$literal"
-            ]
-        );
-        assert_eq!(
-            commands[1].args,
-            [
-                "-P",
-                "A profile with spaces",
-                "--new-tab",
-                "https://c.test/",
-                "--new-tab",
-                "https://a.test/?q=one two"
+                "https://a.test/?q=one two",
+                "https://b.test/$literal",
+                "https://c.test/"
             ]
         );
         assert!(!commands[0].args.contains(&"--no-remote".into()));
+        let mut other_selection = browser.clone();
+        other_selection.active_tab = 2;
+        let command = other_selection
+            .launch_commands(&LaunchSpec::default(), false)
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            command.args[2..],
+            [
+                "https://b.test/$literal",
+                "https://a.test/?q=one two",
+                "https://c.test/"
+            ]
+        );
+        let preserved = other_selection
+            .launch_commands(&LaunchSpec::default(), true)
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            preserved.args[2..],
+            [
+                "https://a.test/?q=one two",
+                "https://b.test/$literal",
+                "https://c.test/"
+            ]
+        );
+        other_selection.tabs.truncate(1);
+        other_selection.active_tab = 1;
+        let command = other_selection
+            .launch_commands(&LaunchSpec::default(), false)
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            command.args[2..],
+            ["--new-window", "https://a.test/?q=one two"]
+        );
     }
     #[test]
     fn invalid_active_tab_and_option_like_url_are_review_errors() {

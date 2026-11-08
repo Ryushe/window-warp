@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Window Warp</title>
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="error-timer.css">
   <script>
     try {
       var themeName = localStorage.getItem("window-warp-theme") || "warp";
@@ -22,9 +23,13 @@
       }
     } catch (error) {}
   </script>
+  <script src="error-timer.js" defer></script>
   <script src="shortcut-picker.js" defer></script>
   <script src="app.js" defer></script>
+  <script src="browser-kinds.js" defer></script>
   <script src="workspaces.js" defer></script>
+  <script src="browser-sessions.js" defer></script>
+  <script src="browser-bridge.js" defer></script>
   <script src="legacy-import.js" defer></script>
   <script src="import-ui.js" defer></script>
 </head>
@@ -44,32 +49,35 @@
       <small id="platform">Desktop application</small>
     </div>
   </aside>
+  <div id="app-alert" class="app-alert" role="alert" hidden><strong>Error</strong><span id="app-alert-text"></span><button id="app-alert-dismiss" type="button" aria-label="Dismiss error">×</button></div>
   <main>
-    <div class="notice" id="message" role="status" aria-live="polite">Loading your shortcuts…</div>
     <div id="shortcuts-page" class="page is-entering">
       <header class="page-head">
         <div>
           <h1 id="shortcuts-heading">Shortcuts</h1>
-          <p id="edit-hint">Save to update the shortcuts that are on.</p>
         </div>
         <button id="add" type="button" disabled>Add shortcut</button>
       </header>
-      <label class="search-field">Search<input id="search" type="search" placeholder="Search names, keys, or apps"></label>
-      <div class="section-title"><div><strong>App identifiers</strong><p>Open your apps, then find their names on this device. Review the results before saving.</p></div><button id="find-apps" type="button">Find open apps</button></div>
-      <p id="find-apps-result" role="status" aria-live="polite"></p>
+      <div class="shortcut-tools"><label class="search-field">Search<input id="search" type="search" placeholder="Search names, keys, or apps"></label><button id="find-apps" type="button">Find open apps</button><button id="enable-all-shortcuts" type="button">Enable all</button><button id="select-shortcuts" type="button" aria-pressed="false">Select</button></div>
+      <p id="find-apps-result" class="local-feedback" role="status" aria-live="polite"></p>
+      <div id="shortcut-selection" class="shortcut-selection" hidden>
+        <button id="select-visible-shortcuts" type="button">Select all</button><span id="selected-shortcut-count" role="status" aria-live="polite"></span>
+        <button id="enable-selected-shortcuts" type="button">Enable</button><button id="disable-selected-shortcuts" type="button">Disable</button><button id="remove-selected-shortcuts" type="button">Remove</button>
+        <div id="confirm-remove-shortcuts" class="shortcut-remove-confirm" hidden><span id="confirm-remove-shortcuts-text"></span><button id="cancel-remove-shortcuts" type="button">Cancel</button><button id="confirm-remove-shortcuts-button" type="button">Remove shortcuts</button></div>
+      </div>
       <div id="bindings"></div>
       <div class="empty" id="empty" hidden>No shortcuts yet. Add a shortcut to create one.</div>
-      <div class="editor-footer"><span id="save-status">Stored on this device</span><span class="footer-actions"><button id="discard" type="button" disabled>Cancel changes</button><button id="save" class="primary" type="button" disabled>Save changes</button></span></div>
+      <div class="editor-footer"><div class="footer-status"><span id="save-status"></span><p class="footer-feedback" id="message" role="status" aria-live="polite"></p></div><span class="footer-actions"><button id="discard" type="button" disabled>Cancel changes</button><button id="save" class="primary" type="button" disabled>Save changes</button></span></div>
     </div>
     <section id="settings-page" class="page" hidden aria-labelledby="settings-heading">
       <header class="page-head">
         <div>
           <h1 id="settings-heading">Settings</h1>
-          <p>Appearance, monitors, hold behavior, and AutoHotkey import.</p>
         </div>
       </header>
-      <section class="group">
-        <h2>Appearance</h2>
+      <details class="setting-item">
+        <summary><span>Appearance</span><small>Theme and colors</small></summary>
+        <div class="setting-body">
         <label>Theme<select id="theme">
           <option value="warp">Warp</option>
           <option value="dracula">Dracula</option>
@@ -89,58 +97,205 @@
           <p>Applied after the theme. It can break the layout when the interface changes.</p>
           <textarea id="theme-css" rows="5" spellcheck="false" placeholder="button.primary { }"></textarea>
         </details>
-      </section>
-      <section class="group">
-        <h2>General</h2>
+        </div>
+      </details>
+      <details class="setting-item">
+        <summary><span>General</span><small>Startup and shortcuts</small></summary>
+        <div class="setting-body">
         <label class="enabled-field"><input type="checkbox" id="startup" disabled> Start Window Warp when I sign in</label>
+        <p id="startup-feedback" class="local-feedback" role="status" aria-live="polite"></p>
         <small class="startup-note">Signing in also turns your saved shortcuts on. Uncheck this to start it yourself.</small>
         <label class="enabled-field"><input type="checkbox" id="enable-on-launch" checked> Turn shortcuts on when Window Warp opens</label>
         <label>Default modifier for new popup shortcuts<select id="quick-modifier"><option value="Super">Super</option><option value="Ctrl">Ctrl</option><option value="Alt">Alt</option><option value="Shift">Shift</option></select><small>Open the popup, press a key, then Enter. You can change the modifier in the popup.</small></label>
-      </section>
-      <section class="group">
-        <h2>Monitors</h2>
-        <div class="monitor-settings"><label>Main monitor<input id="main-monitor" type="number" min="0" max="32" value="0"></label><label>Second monitor<input id="burner-monitor" type="number" min="1" max="32" value="2"></label></div>
-        <small>0 is the primary display. Other numbers follow left to right. The second monitor falls back to another connected display when that one is unavailable.</small>
-      </section>
-      <section class="group">
-        <h2>Hold behavior</h2>
+        </div>
+      </details>
+      <details class="setting-item" id="browser-extensions-settings">
+        <summary><span>Browser extensions</span><small id="browser-connection-summary">Connection and setup</small></summary>
+        <div class="setting-body">
+        <div id="firefox-store-setup">
+          <p>Get a pairing code, then paste it into the Window Warp extension in Firefox. After connecting, choose when to share your tabs in the extension.</p>
+          <div class="footer-actions extension-actions"><button id="open-firefox-addon" type="button" hidden>Get Firefox add-on</button><button id="get-browser-code" type="button">Get pairing code</button><button id="copy-browser-code" type="button" disabled>Copy code</button></div>
+        </div>
+        <label>Pairing code<input id="browser-bridge-code" readonly spellcheck="false" placeholder="Get a pairing code to connect"></label>
+        <p id="browser-bridge-status" role="status" aria-live="polite"></p>
+        <details id="developer-extension-setup" class="extension-instructions" hidden>
+        <summary id="developer-extension-summary">Developer extension setup</summary>
+        <label>Extension folder<input id="browser-extension-path" readonly spellcheck="false" placeholder="Choose your browser below"></label>
+        <div class="footer-actions extension-actions"><button id="prepare-firefox" type="button">Prepare Firefox extension</button><button id="prepare-chromium" type="button" hidden>Prepare Chrome extension</button></div>
+        <details id="browser-extension-instructions" class="extension-instructions">
+          <summary>Installation instructions</summary>
+          <p id="extension-instructions-prompt">Prepare an extension to see its instructions.</p>
+          <div id="chromium-instructions" hidden>
+            <ol>
+              <li>In Chrome, open <code>chrome://extensions</code>.</li>
+              <li>Turn on <strong>Developer mode</strong>, then select <strong>Load unpacked</strong>.</li>
+              <li>Choose the <strong>Extension folder</strong> shown above.</li>
+              <li>Open the Window Warp extension in Chrome, paste the code, and select <strong>Connect</strong>.</li>
+            </ol>
+            <button id="copy-chromium-address" class="text-link" type="button">Copy Chrome setup address</button>
+          </div>
+          <div id="firefox-instructions" hidden>
+            <ol>
+              <li>In your Firefox profile, open <code>about:debugging#/runtime/this-firefox</code>.</li>
+              <li>Select <strong>Load Temporary Add-on</strong>.</li>
+              <li>Open the <strong>Extension folder</strong> shown above and choose <code>manifest.json</code>.</li>
+              <li>Open the Window Warp extension in Firefox, paste the code, and select <strong>Connect</strong>.</li>
+            </ol>
+            <button id="copy-firefox-address" class="text-link" type="button">Copy Firefox setup address</button>
+            <p>Load it again after Firefox restarts.</p>
+          </div>
+        </details>
+        </details>
+        </div>
+      </details>
+      <details class="setting-item" id="monitor-settings">
+        <summary><span>Monitors</span><small>Main and second display</small></summary>
+        <div class="setting-body">
+        <div class="monitor-settings"><label>Main monitor<select id="main-monitor" disabled><option>Detecting monitors…</option></select></label><label>Second monitor<select id="burner-monitor" disabled><option>Detecting monitors…</option></select></label></div>
+        <small id="monitor-hint">If a selected display is unavailable or both choices match, Warp uses an available display.</small>
+        <p id="monitor-status" class="local-feedback" role="status" aria-live="polite"></p><button id="retry-monitors" type="button">Refresh monitors</button>
+        </div>
+      </details>
+      <details class="setting-item">
+        <summary><span>Hold behavior</span><small>Window tiling and picker</small></summary>
+        <div class="setting-body">
         <label class="enabled-field"><input type="checkbox" id="hold-enabled" checked> Hold app-pull shortcuts</label>
         <label>While held<select id="hold-mode"><option value="tile">Mouse tiling</option><option value="radial">Radial window picker</option></select></label>
         <label>Delay (milliseconds)<input id="hold-delay" type="number" min="100" max="5000" step="1" value="400"></label>
         <p id="hold-hint"></p>
-      </section>
-      <section class="group">
-        <h2>Import AutoHotkey settings</h2>
+        </div>
+      </details>
+      <details class="setting-item">
+        <summary><span>Import AutoHotkey settings</span><small>Import existing settings and workspaces</small></summary>
+        <div class="setting-body">
         <div id="legacy-import">
           <label class="import-label">INI files<input id="import-files" type="file" accept=".ini" multiple disabled></label>
           <p>Apps, shared hotkeys, settings, or workspace INI files. UTF-8 and UTF-16 are detected. Older ANSI files are read as Windows-1252. Imported shortcuts join your draft, and each workspace opens for review.</p>
           <div id="import-results"></div>
+          <p id="import-status" class="local-feedback" role="status" aria-live="polite"></p>
           <div class="footer-actions"><button id="apply-import" type="button" hidden disabled>Add selected shortcuts and settings to draft</button><button id="clear-import" type="button" hidden>Clear import review</button></div>
         </div>
-      </section>
-      <div class="editor-footer"><span id="settings-save-status">Stored on this device</span><span class="footer-actions"><button id="discard-settings" type="button" disabled>Cancel changes</button><button id="save-settings" class="primary" type="button" disabled>Save settings</button></span></div>
+        </div>
+      </details>
+      <div class="editor-footer"><div class="footer-status"><span id="settings-save-status"></span><p id="settings-message" class="footer-feedback" role="status" aria-live="polite"></p></div><span class="footer-actions"><button id="discard-settings" type="button" disabled>Cancel changes</button><button id="save-settings" class="primary" type="button" disabled>Save settings</button></span></div>
     </section>
     <section id="workspaces-page" class="page" hidden aria-labelledby="workspace-heading">
       <header class="page-head">
         <div>
           <h1 id="workspace-heading">Workspaces</h1>
-          <p>Save the apps and window positions for each kind of work.</p>
+          <button id="workspace-back-to-library" class="workspace-back" type="button" aria-label="Back to workspaces" title="Back to workspaces" hidden><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
         </div>
-        <button id="capture-workspace" class="primary" type="button">Capture current</button>
+        <div class="workspace-header-actions"><div class="workspace-header-buttons"><button id="select-workspace-items" type="button" aria-pressed="false">Select</button><button id="capture-workspace" class="primary" type="button">Capture current</button></div><p id="workspace-status" class="local-feedback" role="status" aria-live="polite"></p></div>
       </header>
+      <div id="workspace-recapture" class="group" hidden>
+        <p id="workspace-recapture-message"></p>
+        <div class="footer-actions"><button id="workspace-keep-draft" type="button">Keep editing</button><button id="workspace-recapture-confirm" type="button">Discard and continue</button></div>
+      </div>
+      <div id="workspace-library">
+      <div id="workspace-draft-banner" class="workspace-draft-banner" hidden><span id="workspace-draft-banner-text">Draft in progress</span><button id="workspace-resume-draft" type="button">Continue editing</button></div>
+      <div id="workspace-selection" class="shortcut-selection" hidden>
+        <button id="select-all-workspace-items" type="button">Select all</button><span id="selected-workspace-count" role="status" aria-live="polite"></span><button id="delete-selected-workspace-items" type="button">Delete</button>
+        <div id="confirm-delete-workspace-items" class="shortcut-remove-confirm" hidden><span id="confirm-delete-workspace-text"></span><button id="cancel-delete-workspace-items" type="button">Cancel</button><button id="confirm-delete-workspace-button" type="button">Delete selected</button></div>
+      </div>
       <div id="workspace-list"></div>
       <p id="workspace-empty">No workspaces yet. Capture the open windows to create one.</p>
-      <div id="workspace-editor" hidden>
-        <div class="section-title"><h2>Review workspace</h2><button id="discard-workspace" type="button">Cancel</button></div>
-        <label>Name<input id="workspace-name" maxlength="240" placeholder="e.g. Research"></label>
-        <label>Workspace platform<select id="workspace-platform"><option value="windows">Windows</option><option value="linux">Linux / KDE</option></select></label>
-        <label id="workspace-update-choice" hidden>Save as<select id="workspace-target"><option value="">New workspace</option></select><small id="workspace-suggestion"></small></label>
-        <div id="workspace-items"></div>
-        <div class="editor-footer"><span id="workspace-item-count"></span><button id="save-workspace" class="primary" type="button">Save workspace</button></div>
+      <section id="saved-browsers" class="saved-browsers" aria-labelledby="saved-browsers-heading">
+        <h2 id="saved-browsers-heading">Saved browsers</h2>
+        <p id="saved-browsers-empty" class="empty">Save a browser from the Window Warp extension to keep its tabs here.</p>
+        <div id="saved-browser-list"></div>
+        <p id="saved-browser-status" class="local-feedback" role="status" aria-live="polite" hidden></p>
+      </section>
       </div>
-      <div id="workspace-results" role="status" aria-live="polite"></div>
+      <div id="workspace-hotkey-choice" class="group" hidden>
+        <div class="workspace-capture-heading"><h2>Captured windows</h2><p>Save them as a new workspace or update an existing one.</p></div>
+        <div class="workspace-capture-options">
+          <div class="workspace-capture-new"><h3>New workspace</h3><p>Review and save the captured windows.</p><button id="workspace-hotkey-new" class="primary" type="button">New workspace</button></div>
+          <div class="workspace-capture-update"><h3>Update existing</h3><p>Update tabs only, or recapture windows and positions.</p>
+            <label>Workspace to update<select id="workspace-hotkey-target" aria-describedby="workspace-hotkey-status"></select></label>
+            <small id="workspace-hotkey-empty" hidden>No saved workspaces yet. Create one to enable updates.</small>
+            <div class="footer-actions"><button id="workspace-hotkey-urls" type="button">Update tabs</button><button id="workspace-hotkey-update" type="button">Recapture windows</button></div>
+            <small id="workspace-hotkey-status" role="status" aria-live="polite" hidden></small>
+          </div>
+        </div>
+        <div class="workspace-capture-footer"><button id="workspace-hotkey-cancel" type="button">Cancel</button></div>
+      </div>
+      <div id="workspace-capture-pending" class="group" hidden><p id="workspace-capture-pending-message">Capturing windows and tabs…</p><button id="workspace-capture-cancel" type="button">Cancel</button></div>
+      <div id="workspace-editor" hidden>
+        <div class="workspace-editor-heading"><h2 id="workspace-editor-title">New workspace</h2></div>
+        <p id="workspace-editor-status" class="workspace-inline-status" role="status" aria-live="polite" hidden></p>
+        <p id="workspace-change-summary" class="workspace-change-summary" hidden></p>
+        <details id="workspace-comparison" class="workspace-comparison" hidden>
+          <summary>Compare saved and draft</summary>
+          <p id="workspace-comparison-loading" class="workspace-comparison-loading" hidden>Browser tabs are still loading; the draft will update when they are ready.</p>
+          <div class="workspace-comparison-columns"><section><h4>Before · Saved</h4><div id="workspace-comparison-before" role="region" aria-label="Saved workspace before update" tabindex="0"></div></section><section><h4>After · Draft</h4><div id="workspace-comparison-after" role="region" aria-label="Workspace draft after update" tabindex="0"></div></section></div>
+        </details>
+        <div class="workspace-details-fields">
+          <label>Name<input id="workspace-name" maxlength="240" placeholder="e.g. Research"></label>
+          <details class="workspace-options"><summary>More workspace options</summary>
+          <label>Workspace platform<select id="workspace-platform"><option value="windows">Windows</option><option value="linux">Linux / KDE</option></select></label>
+          </details>
+        </div>
+        <div class="workspace-windows-heading">
+          <h3>Windows</h3>
+          <div class="workspace-toolbar-actions">
+            <div class="workspace-window-actions"><button id="add-workspace-window" type="button" aria-expanded="false" aria-controls="workspace-add-menu workspace-add-window-list">Add window</button><button id="refresh-workspace-tabs" type="button" hidden>Update browser tabs</button><button id="select-draft-windows" type="button" aria-pressed="false">Select windows</button></div>
+            <div id="workspace-add-menu" class="menu workspace-source-menu" hidden><button id="workspace-pick-on-screen" type="button">Pick on screen</button><button id="workspace-add-from-list" type="button" aria-expanded="false" aria-controls="workspace-add-window-list">Choose open windows</button></div>
+            <div id="workspace-add-window-list" class="menu workspace-source-menu workspace-window-picker" hidden></div>
+            <div id="workspace-draft-sources" class="menu workspace-source-menu" hidden></div>
+          </div>
+        </div>
+        <p id="workspace-tabs-status" class="local-feedback workspace-tabs-feedback" role="status" aria-live="polite" hidden></p>
+        <p id="workspace-tabs-loading" class="workspace-tabs-loading" role="status" aria-live="polite" hidden><span class="workspace-spinner" aria-hidden="true"></span>Loading URLs…</p>
+        <div id="workspace-tabs-confirm" class="workspace-tabs-confirm" hidden><p>Update browser tabs and replace the URLs you edited?</p><div class="footer-actions"><button id="workspace-tabs-keep" type="button">Keep edited URLs</button><button id="workspace-tabs-replace" type="button">Update browser tabs</button></div></div>
+        <div id="draft-window-selection" class="shortcut-selection" hidden><button id="select-all-draft-windows" type="button">Select all</button><span id="selected-draft-window-count" role="status" aria-live="polite">0 selected</span><button id="remove-selected-draft-windows" type="button">Remove selected</button></div>
+        <div id="workspace-items"></div>
+        <p id="workspace-items-empty" class="empty" hidden>No windows were captured. Open the windows you want, then capture again.</p>
+        <section id="workspace-missing-windows" class="workspace-missing-windows" aria-labelledby="workspace-missing-heading" hidden><h4 id="workspace-missing-heading">Saved windows to review</h4><p>If a saved window is missing from the draft, keep it here.</p><div id="workspace-missing-list"></div></section>
+        <details id="workspace-removed" class="workspace-removed" hidden><summary id="workspace-removed-heading">Removed windows</summary><div id="workspace-removed-items"></div><button id="restore-all-workspace-windows" type="button">Restore all</button></details>
+        <div id="workspace-replace-saved" class="group" hidden>
+          <p id="workspace-replace-saved-message"></p>
+          <div class="footer-actions"><button id="workspace-replace-cancel" type="button">Cancel</button><button id="workspace-replace-confirm" type="button">Replace workspace</button></div>
+        </div>
+        <div class="editor-footer"><div class="workspace-footer-info"><span id="workspace-item-count"></span><p id="workspace-save-status" class="workspace-inline-status" role="status" aria-live="polite" hidden></p></div><span class="footer-actions"><button id="discard-workspace" type="button">Cancel</button><button id="save-workspace" class="primary" type="button">Save workspace</button></span></div>
+      </div>
       <button id="cancel-restore" type="button" hidden>Cancel restore</button>
     </section>
+    <dialog id="saved-browser-destination" class="saved-browser-dialog" aria-labelledby="saved-browser-destination-title">
+      <header class="saved-browser-dialog-header">
+        <div><h2 id="saved-browser-destination-title">Add browser to workspace</h2><p id="saved-browser-destination-subtitle"></p></div>
+        <button id="saved-browser-destination-close" class="saved-browser-dialog-close" type="button" aria-label="Close">×</button>
+      </header>
+      <div class="saved-browser-dialog-body">
+        <section class="saved-browser-source" aria-labelledby="saved-browser-source-heading">
+          <h3 id="saved-browser-source-heading">Saved browser</h3>
+          <div id="saved-browser-source-content"></div>
+        </section>
+        <section aria-labelledby="saved-browser-target-heading">
+          <h3 id="saved-browser-target-heading">Browsers in this workspace</h3>
+          <p id="saved-browser-target-empty" class="saved-browser-target-empty" hidden>No browsers have saved tabs in this workspace yet.</p>
+          <div id="saved-browser-targets" class="saved-browser-targets"></div>
+        </section>
+      </div>
+      <p id="saved-browser-destination-status" class="local-feedback" role="status" aria-live="polite" hidden></p>
+      <footer class="saved-browser-dialog-footer">
+        <button id="saved-browser-destination-cancel" type="button">Cancel</button>
+        <div class="saved-browser-dialog-actions">
+          <button id="saved-browser-new" type="button" aria-keyshortcuts="Control+Shift+N">Add as new browser <kbd>Ctrl+Shift+N</kbd></button>
+          <button id="saved-browser-append" type="button" aria-keyshortcuts="Control+Shift+A">Append tabs <kbd>Ctrl+Shift+A</kbd></button>
+          <button id="saved-browser-replace" class="primary" type="button" aria-keyshortcuts="Control+Shift+R">Replace tabs <kbd>Ctrl+Shift+R</kbd></button>
+        </div>
+      </footer>
+    </dialog>
+    <dialog id="saved-browser-editor" class="saved-browser-dialog" aria-labelledby="saved-browser-editor-title">
+      <header class="saved-browser-dialog-header"><h2 id="saved-browser-editor-title">Edit saved browser</h2><button id="saved-browser-editor-close" class="saved-browser-dialog-close" type="button" aria-label="Close">×</button></header>
+      <div class="saved-browser-dialog-body saved-browser-editor-fields">
+        <label>Name<input id="saved-browser-editor-name" maxlength="240"></label>
+        <label>Tab URLs<textarea id="saved-browser-editor-tabs" rows="8" spellcheck="false"></textarea><small>One URL per line</small></label>
+        <label>Selected tab<input id="saved-browser-editor-active" type="number" min="1" step="1"></label>
+      </div>
+      <p id="saved-browser-editor-status" class="local-feedback" role="status" aria-live="polite" hidden></p>
+      <footer class="saved-browser-dialog-footer"><button id="saved-browser-editor-cancel" type="button">Cancel</button><button id="saved-browser-editor-save" class="primary" type="button">Save browser</button></footer>
+    </dialog>
     <div id="quick-edit" hidden>
       <div class="quick-card" role="dialog" aria-labelledby="quick-title">
         <h2 id="quick-title">This app</h2>
@@ -159,6 +314,7 @@
   <template id="binding-template">
     <article class="binding">
       <div class="binding-row">
+        <label class="binding-select" hidden><input type="checkbox" class="select-binding"></label>
         <button class="binding-summary" type="button">
           <span class="chord" data-summary="shortcut"></span>
           <span class="name" data-summary="label"></span>
@@ -168,7 +324,7 @@
       </div>
       <div class="binding-body"><div class="binding-inner">
       <div class="binding-top"><label class="label-field">Name<input data-field="label" maxlength="120" placeholder="e.g. Focus Firefox"></label><div class="key-field"><label>Shortcut<input data-field="shortcut" readonly placeholder="Click, then press C, X, or another key" spellcheck="false"></label><div class="mod-row"><button type="button" data-mod="Super" aria-pressed="false">Super</button><button type="button" data-mod="Ctrl" aria-pressed="false">Ctrl</button><button type="button" data-mod="Alt" aria-pressed="false">Alt</button><button type="button" data-mod="Shift" aria-pressed="false">Shift</button><button type="button" class="clear-shortcut">Clear</button></div></div></div>
-      <div class="binding-bottom"><label>Action<select data-field="action"><optgroup label="Movement"><option value="push">Push window</option><option value="pull">Bring the last window back</option><option value="tile">Tile window</option><option value="toggle-maximize">Maximize or restore</option><option value="close-window">Close the window</option></optgroup><optgroup label="Focus"><option value="pull-app">Bring an app to the main monitor</option><option value="focus-app">Cycle that app's windows</option></optgroup><optgroup label="Controls"><option value="toggle-pause">Pause or resume shortcuts</option><option value="open-editor">Edit the shortcut for this app</option><option value="open-workspaces">Browse workspaces</option><option value="update-workspace">Save the open windows as a workspace</option></optgroup></select></label><label class="match-field" hidden>App identifier<input data-field="appMatch" maxlength="32768" spellcheck="false"><small class="match-hint"></small></label></div>
+      <div class="binding-bottom"><label>Action<select data-field="action"><optgroup label="Movement"><option value="push">Push window</option><option value="pull">Bring the last window back</option><option value="tile">Tile window</option><option value="toggle-maximize">Maximize or restore</option><option value="close-window">Close the window</option></optgroup><optgroup label="Focus"><option value="pull-app">Bring an app to the main monitor</option><option value="focus-app">Cycle that app's windows</option></optgroup><optgroup label="Controls"><option value="toggle-pause">Pause or resume shortcuts</option><option value="open-editor">Edit the shortcut for this app</option><option value="open-workspaces">Browse workspaces</option><option value="update-workspace">Capture or update a workspace</option></optgroup></select></label><label class="match-field" hidden>App identifier<input data-field="appMatch" maxlength="32768" spellcheck="false"><small class="match-hint"></small></label></div>
       <label class="alternative-matches" hidden>Additional app identifiers<textarea class="app-matches" rows="3" spellcheck="false" placeholder="One identifier per line"></textarea><small>Any listed identifier can match. Windows-specific criteria take precedence on Windows.</small></label>
       <div class="push-options" hidden><label>Direction<select class="push-direction"><option value="left">Left</option><option value="right">Right</option></select></label><label class="enabled-field"><input class="push-center" type="checkbox"> Center the pointer</label></div>
       <div class="tile-options" hidden><label>Side<select class="tile-side"><option value="left">Left half</option><option value="right">Right half</option><option value="up">Top half</option><option value="down">Bottom half</option></select></label></div>
@@ -185,33 +341,55 @@
           <label class="enabled-field"><input data-windows-match="activeOnly" type="checkbox">Only the active window</label>
         </details>
       </div>
-      <div class="app-options" hidden><p class="behavior-heading">Behavior</p><label>If it is already on the main monitor<select data-field="mainMonitorAction"><option value="burner">Send it to the second monitor</option><option value="focus-last">Switch back to the previous app</option></select><small class="choice-hint" data-hint="main"></small></label><label>On the second monitor<select data-field="burnerLayout"><option value="float">Keep size and place</option><option value="tile-left">Left half</option><option value="tile-right">Right half</option><option value="fullscreen">Fill the monitor</option></select><small class="choice-hint" data-hint="layout"></small></label></div>
+      <div class="app-options" hidden><p class="behavior-heading">Behavior</p><label>If it is already on the main monitor<select data-field="mainMonitorAction"><option value="burner">Send it to the second monitor</option><option value="focus-last">Switch back to the previous app</option></select><small class="choice-hint" data-hint="main"></small></label><label class="burner-layout-field">On the second monitor<select data-field="burnerLayout"><option value="float">Keep size and place</option><option value="tile-left">Left half</option><option value="tile-right">Right half</option><option value="fullscreen">Fill the monitor</option></select><small class="choice-hint" data-hint="layout"></small></label></div>
       <div class="binding-actions"><button type="button" class="remove" aria-label="Remove shortcut">Remove</button><button type="button" class="reassign">Reassign this key</button></div>
+      <p class="binding-feedback local-feedback" role="status" aria-live="polite"></p>
       <div class="reassignment" hidden><p class="reassignment-summary"></p><button type="button" class="confirm-reassignment">Use key and disable conflicts</button><button type="button" class="cancel-reassignment">Cancel</button></div>
       </div></div>
     </article>
   </template>
-  <template id="workspace-card-template"><article class="workspace-card"><div class="workspace-main"><div><h3 class="workspace-title"></h3><p class="workspace-summary"></p></div><div class="workspace-actions"><button data-action="restore" type="button">Open</button><button class="menu-button" type="button" aria-label="Workspace actions">···</button><div class="menu" hidden><button data-action="edit" type="button">Edit</button><button data-action="update" type="button">Update from current</button><button data-action="up" type="button">Move up</button><button data-action="down" type="button">Move down</button><button data-action="delete" type="button">Delete</button></div></div></div><div class="workspace-delete-confirm" hidden><p>Delete this saved workspace? Open windows will stay open.</p><button data-action="confirm-delete" type="button">Delete workspace</button><button data-action="cancel-delete" type="button">Keep it</button></div></article></template>
+  <template id="workspace-card-template"><article class="workspace-card"><div class="workspace-main"><input class="workspace-bulk-checkbox" type="checkbox" hidden><button class="workspace-preview-toggle" type="button" aria-expanded="false"><span class="workspace-title"></span><span class="workspace-summary"><span class="workspace-summary-text"></span><span class="workspace-open-on" hidden></span></span></button><div class="workspace-actions"><button data-action="restore" type="button">Open</button><button data-action="edit" class="workspace-icon-button" type="button" title="Edit workspace" aria-label="Edit workspace"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4Zm9-13 4 4"/></svg></button><button data-action="delete" class="workspace-icon-button danger-icon" type="button" title="Delete workspace" aria-label="Delete workspace"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg></button><button class="menu-button" type="button" aria-label="More workspace actions">···</button><div class="menu workspace-action-menu" hidden><button data-action="update" type="button">Update from current</button><button data-action="up" type="button">Move up</button><button data-action="down" type="button">Move down</button></div></div></div><div class="workspace-preview" hidden><div class="workspace-preview-content"></div><div class="workspace-preview-actions"><button data-action="refresh-tabs" type="button" hidden>Refresh saved tabs</button><div class="menu workspace-source-menu" hidden></div></div></div><p class="workspace-card-status workspace-browser-status" role="status" hidden></p><div class="workspace-open-choice" role="group" aria-label="Workspace desktop choices" hidden></div><div class="workspace-card-results" role="status" aria-live="polite"></div><div class="workspace-delete-confirm" hidden><p>Delete this saved workspace? Open windows will stay open.</p><button data-action="confirm-delete" type="button">Delete workspace</button><button data-action="cancel-delete" type="button">Keep it</button></div></article></template>
   <template id="workspace-item-template"><article class="workspace-item">
-    <label class="enabled-field"><input type="checkbox" class="include-window" checked><span class="window-title"></span></label>
-    <p class="window-placement"></p><p class="capture-note" hidden></p>
+    <div class="workspace-item-head">
+      <input type="checkbox" class="draft-window-checkbox" hidden>
+      <button type="button" class="workspace-item-toggle" aria-expanded="false"><svg class="workspace-item-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg><span class="window-title"></span><span class="workspace-change-badge" hidden></span></button>
+      <button type="button" class="browser-connection-dot" hidden><span aria-hidden="true"></span></button><span class="window-tabs-summary" hidden></span>
+      <div class="workspace-position-controls"><label>Position<select class="window-position" aria-label="Position"><option value="custom">Custom</option><option value="fill">Fill monitor</option><option value="left">Left half</option><option value="right">Right half</option><option value="top">Top half</option><option value="bottom">Bottom half</option></select></label><label>Monitor<select class="window-placement" aria-label="Monitor"></select></label><label class="window-placement-fallback" hidden>Monitor<input class="monitor-number" type="number" min="1" max="100"></label><button type="button" class="set-position">Set position</button></div>
+      <input type="checkbox" class="include-window" checked hidden><button class="remove-workspace-window" type="button" title="Remove from workspace"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg></button>
+    </div>
+    <p class="capture-note" hidden></p>
+    <button type="button" class="review-browser-tabs" hidden>Review tabs</button>
+    <details class="workspace-window-options"><summary hidden>Window options</summary>
+    <section class="browser-settings" hidden><h4 class="browser-summary">Browser tabs</h4>
+      <label class="enabled-field"><input type="checkbox" class="restore-browser" checked><span class="browser-restore-label">Restore this Firefox profile and its tabs</span></label>
+      <label>Browser tab URLs<textarea data-browser="tabs" rows="5" spellcheck="false"></textarea><small>One URL per line.</small></label>
+      <p class="browser-tab-count"></p><button type="button" class="use-current-browser-tabs">Use current browser tabs</button>
+      <small class="browser-current-status" role="status"></small>
+      <p class="workspace-browser-hint"></p>
+    </section>
+    <details class="workspace-advanced"><summary>Advanced</summary>
+    <section class="browser-advanced" hidden>
+      <label><span class="browser-profile-label">Firefox profile</span><select class="browser-profile"><option value="">Detected automatically</option></select></label>
+      <small>Changing the profile keeps the saved tabs.</small>
+      <details><summary>Manual profile settings</summary>
+        <label>Profile folder<input data-browser="profilePath" spellcheck="false"></label>
+        <label>Profile name (used when no folder is set)<input data-browser="profileName"></label>
+      </details>
+      <button type="button" class="find-browser-tabs">Choose a saved Firefox window</button>
+      <div class="browser-session-choice" hidden><label>Browser window<select class="browser-session"></select></label><button type="button" class="use-browser-session">Use these tabs</button></div>
+      <small class="browser-session-status" role="status"></small>
+      <label>Focused tab<select data-browser="activeTab"></select><small class="focused-tab-hint">Initially the tab that was active when captured.</small></label>
+      <p class="focused-tab-status local-feedback" role="status" aria-live="polite" hidden></p>
+      <small class="browser-restore-hint">Firefox reuses a window when its URLs match; otherwise it opens a new one. The selected tab is focused when possible.</small>
+    </section>
     <details><summary>Window matching and placement</summary>
       <label>App identifier<input data-window="appId" spellcheck="false"></label>
       <label>Desktop file ID / Windows packaged app ID<input data-window="desktopId" spellcheck="false"></label>
-      <label>Monitor number<input data-window="monitor" type="number" min="1" max="100"></label>
       <div class="monitor-settings"><label>Left<input data-rect="x" type="number"></label><label>Top<input data-rect="y" type="number"></label><label>Width<input data-rect="width" type="number" min="1"></label><label>Height<input data-rect="height" type="number" min="1"></label></div>
       <p>Reference monitor work area (used to scale placement after a display change):</p>
       <div class="monitor-settings"><label>Left<input data-area="x" type="number"></label><label>Top<input data-area="y" type="number"></label><label>Width<input data-area="width" type="number" min="1"></label><label>Height<input data-area="height" type="number" min="1"></label></div>
     </details>
-    <details class="browser-settings" hidden><summary>Firefox profile and tabs</summary>
-      <label class="enabled-field"><input type="checkbox" class="restore-browser" checked>Restore this Firefox profile and its tabs</label>
-      <label>Profile folder<input data-browser="profilePath" spellcheck="false"></label>
-      <label>Profile name (used when no folder is set)<input data-browser="profileName"></label>
-      <label>Tab URLs (one per line)<textarea data-browser="tabs" rows="5" spellcheck="false"></textarea></label>
-      <label>Selected tab number<input data-browser="activeTab" type="number" min="1" step="1"></label>
-      <small>The selected tab opens last. Existing matching browser windows are reused unless “Always open a new window” is checked.</small>
-    </details>
-    <details class="terminal-settings" hidden><summary class="terminal-summary">Terminal session</summary>
+    <section class="terminal-settings" hidden><h4 class="terminal-summary">Terminal session</h4>
       <label>Terminal app<select data-terminal="kind"><option value="windows-terminal">Windows Terminal</option><option value="konsole">Konsole</option></select></label>
       <label class="enabled-field"><input type="checkbox" class="restore-terminal" checked>Restore this terminal session</label>
       <label>Profile name<input data-terminal="profileName" spellcheck="false"></label>
@@ -221,7 +399,7 @@
       <label>Terminal working directory<input data-terminal="workingDirectory" spellcheck="false"></label>
       <div class="wsl-settings"><label>WSL distribution (requires wsl.exe)<input data-terminal="wslDistro" spellcheck="false"></label><label>WSL user (optional)<input data-terminal="wslUser" spellcheck="false"></label></div>
       <small>Opens a fresh shell. Commands running inside the captured terminal are not replayed. These settings replace the generic app arguments below while terminal restoration is enabled.</small>
-    </details>
+    </section>
     <details><summary>App launch settings</summary>
       <label>Launch type<select data-launch="kind"><option value="executable">Executable</option><option value="desktop-entry">Linux desktop entry</option><option value="packaged-app">Windows packaged app</option></select></label>
       <label><span class="launch-target-label">Program</span><input data-launch="program" spellcheck="false"></label>
@@ -229,6 +407,8 @@
       <label>Working directory (executable launches only)<input data-launch="workingDirectory" spellcheck="false"></label>
       <label class="enabled-field"><input type="checkbox" data-launch="newWindow">Require a new window</label>
       <p class="launch-hint">Apps that reuse an existing window may not support opening a new one.</p>
+    </details>
+    </details>
     </details>
   </article></template>
 </body>

@@ -1,0 +1,427 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import vm from "node:vm";
+import {parseHTML} from "linkedom";
+
+const source = fs.readFileSync(new URL("../browser-extension/common/background.js", import.meta.url), "utf8");
+const tick = () => new Promise(resolve => setImmediate(resolve));
+function event() { return {listeners:[],addListener(fn){this.listeners.push(fn);}}; }
+async function fixture(firefox = false, {installType = "development", version = "0.1.1", marker = "fixture-installation"} = {}) {
+    const data = {enabled:true,pairing:"43210:0123456789abcdef0123456789abcdef",profilePath:"/profiles/work",profileName:"Work",clientId:"fixture"};
+    const calls = [], activated = [], timers = new Map(); let nextTimer = 0, windowReads = 0, reloads = 0, alarm = null, pollBlock = null;
+    const server = {live:false,requestId:""};
+    const api = {
+        storage:{local:{async get(){return {...data};},async set(values){Object.assign(data,values);}},onChanged:event()},
+        windows:{async getAll(){windowReads++; return [
+            {id:7,incognito:false,left:10,top:20,width:800,height:600,tabs:[{id:71,active:true,url:"https://one.test/",title:"One"},{id:72,active:false,url:"https://two.test/",title:"Two"}]},
+            {id:8,incognito:true,tabs:[{id:81,active:true,url:"https://private.test/",title:"Private"}]}
+        ];},onRemoved:event(),onFocusChanged:event()},
+        tabs:{async update(id,options){activated.push({id,options});},onCreated:event(),onRemoved:event(),onUpdated:event(),onActivated:event()},
+        runtime:{getURL:part=>(firefox ? "moz-extension://fixture/" : "chrome-extension://fixture/") + part,getManifest:()=>({version}),reload:()=>{reloads++;},onStartup:event(),onInstalled:event(),onMessage:event()},
+        management:{async getSelf(){return {installType};}},
+        alarms:{async create(name,options){alarm={name,...options};},async get(){return alarm;},async clear(){alarm=null;return true;},onAlarm:event()}
+    };
+    const globals = {crypto:{randomUUID:()=>"fixture"},setTimeout:fn=>{const id=++nextTimer;timers.set(id,fn);return id;},clearTimeout:id=>timers.delete(id),fetch:async (url,options)=>{
+        if (url.endsWith("/warp-managed.json")) { if (!marker) throw new Error("No managed marker"); return {async json(){return {id:marker};}}; }
+        const body=JSON.parse(options.body); calls.push({url,body});
+        if (body.action === "poll" && pollBlock) await pollBlock.promise;
+        return {async json(){return {...server,updated:1};}};
+    }};
+    globals[firefox ? "browser" : "chrome"] = api;
+    vm.runInNewContext(source, globals);
+    await tick();
+    const send = (action,options) => new Promise(resolve => api.runtime.onMessage.listeners[0]({action,options},null,resolve));
+    const runTimer = async () => {const [id,fn]=timers.entries().next().value; timers.delete(id); await fn(); await tick();};
+    return {api,data,calls,activated,server,send,runTimer,clearTimers(){timers.clear();},blockPoll(){let release;const promise=new Promise(resolve=>{release=resolve;});pollBlock={promise,release};},releasePoll(){const blocked=pollBlock;pollBlock=null;blocked.release();},get alarm(){return alarm;},get windowReads(){return windowReads;},get reloads(){return reloads;}};
+}
+for (const firefox of [false,true]) {
+    test(`${firefox ? "Firefox" : "Chromium"} selects only the requested matching browser tab`, async () => {
+        const e=await fixture(firefox);
+        e.server.focusCommands=[{id:"focus-one",windowId:7,tabIndex:1,expectedUrls:["https://one.test/","https://two.test/"]}];
+        await e.api.alarms.onAlarm.listeners[0]({name:"connection"});
+        assert.equal(e.activated.length,1);
+        assert.equal(e.activated[0].id,72);
+        assert.equal(e.activated[0].options.active,true);
+        assert.equal(e.calls.find(call=>call.body.action==='focus-result').body.name,'ok');
+        assert.equal(e.calls.find(call=>call.body.action==='poll').body.supportsFocus,true);
+        e.server.focusCommands=[{id:"focus-stale",windowId:7,tabIndex:1,expectedUrls:["https://changed.test/","https://two.test/"]},{id:"focus-private",windowId:8,tabIndex:0,expectedUrls:["https://private.test/"]}];
+        await e.api.alarms.onAlarm.listeners[0]({name:"connection"});
+        assert.equal(e.activated.length,1,"changed and private windows must not be changed");
+        assert.deepEqual(e.calls.filter(call=>call.body.action==='focus-result').slice(-2).map(call=>call.body.name),['failed','failed']);
+    });
+}
+test("Firefox alarm wakes an idle extension for an on-demand tab request", async () => {
+    const e=await fixture(true);
+    assert.equal(e.alarm.periodInMinutes,0.1);
+    e.clearTimers(); // A suspended event page loses ordinary timers.
+    await e.api.alarms.onAlarm.listeners[0]({name:"connection"});
+    assert.equal(e.windowReads,0,"the wake-up alone does not share tabs");
+    e.server.requestId="requested-after-idle";
+    e.clearTimers();
+    await e.api.alarms.onAlarm.listeners[0]({name:"connection"});
+    assert.equal(e.windowReads,1);
+    assert.equal(e.calls.filter(call=>call.body.action==='snapshot').at(-1).body.requestId,"requested-after-idle");
+    e.data.enabled=false;
+    e.api.storage.onChanged.listeners[0]({enabled:{newValue:false}});
+    await tick();
+    assert.equal(e.alarm,null,"disconnecting stops periodic wake-ups");
+});
+test("an alarm waits for an already-running poll before the event page can sleep", async () => {
+    const e=await fixture(true);
+    e.blockPoll();
+    const first=e.api.alarms.onAlarm.listeners[0]({name:"connection"});
+    await tick();
+    let completed=false;
+    const second=e.api.alarms.onAlarm.listeners[0]({name:"connection"}).then(()=>{completed=true;});
+    await tick();
+    assert.equal(completed,false);
+    e.releasePoll();
+    await Promise.all([first,second]);
+    assert.equal(completed,true);
+});
+
+test("disconnect waits for older requests so they cannot reconnect the browser", async () => {
+    const e=await fixture();
+    e.blockPoll();
+    const poll=e.api.alarms.onAlarm.listeners[0]({name:"connection"});
+    await tick();
+    e.data.enabled=false; e.data.liveSharing=false;
+    let completed=false;
+    const disconnect=e.send("disconnect").then(result=>{completed=true;return result;});
+    await tick();
+    assert.equal(completed,false);
+    assert.equal(e.calls.some(call=>call.body.action==="disconnect"),false);
+    e.releasePoll();
+    await Promise.all([poll,disconnect]);
+    assert.equal(e.calls.at(-1).body.action,"disconnect");
+});
+for (const firefox of [false,true]) {
+    test(`${firefox ? "Firefox" : "Chromium"} shares no tab data until requested and excludes private windows`, async () => {
+        const e=await fixture(firefox);
+        assert.equal(e.windowReads,0);
+        assert.equal(e.calls[0].body.action,"poll");
+        assert.deepEqual(e.calls[0].body.windows,[]);
+        assert.equal(e.calls[0].body.installationId,"fixture-installation");
+        assert.equal(e.calls[0].body.profilePath,"");
+        e.api.tabs.onUpdated.listeners[0](); await tick();
+        assert.equal(e.windowReads,0);
+        e.server.requestId="capture-1";
+        await e.runTimer();
+        const capture=e.calls.find(call=>call.body.action==="snapshot");
+        assert.equal(capture.body.requestId,"capture-1");
+        assert.equal(capture.body.browser,firefox ? "firefox" : "chromium");
+        assert.equal(capture.body.windows.length,1);
+        assert.deepEqual(capture.body.windows[0].tabs.map(tab=>tab.url),["https://one.test/","https://two.test/"]);
+        assert.equal(capture.body.windows[0].id,7);
+        assert.equal(capture.body.windows[0].activeTab,1);
+        await e.runTimer();
+        assert.equal(e.calls.filter(call=>call.body.action==="snapshot").length,1,"one capture request produces one snapshot");
+        e.data.enabled=false;
+        assert.match((await e.send("update")).error,/Connect/);
+    });
+}
+test("live sharing requires this browser's opt-in and stops before reading tabs", async () => {
+    const e=await fixture();
+    e.server.live=true; await e.runTimer();
+    assert.equal(e.windowReads,0,"another browser's server setting cannot start sharing here");
+    e.data.liveSharing=true; await e.runTimer();
+    assert.equal(e.calls.filter(call=>call.body.action==="snapshot").length,1);
+    e.data.liveSharing=false;
+    e.api.tabs.onUpdated.listeners[0]();
+    const reads=e.windowReads;
+    // The status poll timer may run before the debounced tab event.
+    await e.runTimer(); await e.runTimer();
+    assert.equal(e.windowReads,reads);
+    assert.equal(e.calls.filter(call=>call.body.action==="snapshot").length,1);
+});
+
+test("live sharing sends changed tabs and excludes a window while it is closing", async () => {
+    const e=await fixture();
+    e.server.live=true; e.data.liveSharing=true;
+    await e.runTimer();
+    e.clearTimers();
+    e.api.tabs.onCreated.listeners[0]();
+    await e.runTimer();
+    let snapshots=e.calls.filter(call=>call.body.action==="snapshot");
+    assert.equal(snapshots.length,2,"a tab change triggers a fresh live snapshot");
+    assert.equal(snapshots.at(-1).body.windows[0].id,7);
+    e.clearTimers();
+    e.api.tabs.onRemoved.listeners[0](42,{windowId:7,isWindowClosing:true});
+    await e.runTimer();
+    snapshots=e.calls.filter(call=>call.body.action==="snapshot");
+    assert.equal(snapshots.length,3);
+    assert.deepEqual(snapshots.at(-1).body.windows,[],"partial shutdown tabs never replace the saved session");
+});
+
+test("the open popup is notified when the live destination changes", async () => {
+    const e=await fixture(), events=[];
+    e.api.runtime.sendMessage=async message=>{events.push(message);};
+    e.server.live=true; e.server.destinations={7:"Research"}; e.data.liveSharing=true;
+    await e.runTimer();
+    assert.equal(events.length,1);
+    e.clearTimers(); e.api.tabs.onUpdated.listeners[0](); await e.runTimer();
+    assert.equal(events.length,1,"ordinary tab changes do not continually rebuild the popup");
+    e.server.destinations={7:"Work"};
+    e.clearTimers(); e.api.tabs.onUpdated.listeners[0](); await e.runTimer();
+    assert.equal(events.length,2);
+    assert.equal(events.at(-1).event,"warp-live-updated");
+});
+
+test("changing the live switch sends no browser tabs", async () => {
+    const e=await fixture();
+    const before=e.windowReads;
+    await e.send("set-live",{live:true});
+    assert.equal(e.windowReads,before);
+    const call=e.calls.find(call=>call.body.action==='set-live');
+    assert.equal(call.body.live,true);
+    assert.deepEqual(call.body.windows,[]);
+});
+
+test("opening Workspaces sends no browser tabs", async () => {
+    const e=await fixture();
+    const before=e.windowReads;
+    await e.send("open-workspaces");
+    assert.equal(e.windowReads,before);
+    const call=e.calls.find(call=>call.body.action==='open-workspaces');
+    assert.deepEqual(call.body.windows,[]);
+});
+test("only a managed development extension reloads once for a newer version", async () => {
+    const e=await fixture();
+    e.server.extensionVersion="0.1.2";
+    await e.runTimer();
+    assert.equal(e.reloads,1);
+    assert.equal(e.windowReads,0,"update checks do not read browser tabs");
+    await e.runTimer();
+    assert.equal(e.reloads,1,"a failed reload does not loop");
+    assert.equal((await e.send("status")).updatePending,true);
+    const store=await fixture(false,{installType:"normal"}); store.server.extensionVersion="0.1.2";
+    await store.runTimer(); assert.equal(store.reloads,0,"store extensions keep browser-managed updates");
+    const unmanaged=await fixture(false,{marker:""}); unmanaged.server.extensionVersion="0.1.2";
+    await unmanaged.runTimer(); assert.equal(unmanaged.reloads,0,"an unowned extension is not reloaded");
+    const newer=await fixture(false,{version:"0.2.0"}); newer.server.extensionVersion="0.1.9";
+    await newer.runTimer(); assert.equal(newer.reloads,0,"older desktop files do not downgrade an extension");
+    const firefox=await fixture(true); firefox.server.extensionVersion="0.1.2";
+    await firefox.runTimer(); assert.equal(firefox.reloads,1,"Firefox development extensions use the same guarded update flow");
+});
+test("extension manifests use the app icon and grant only local bridge access", () => {
+    for (const name of ["chromium","firefox"]) {
+        const manifest=JSON.parse(fs.readFileSync(new URL(`../browser-extension/${name}-manifest.json`,import.meta.url),"utf8"));
+        assert.deepEqual(manifest.host_permissions,["http://127.0.0.1/*"]);
+        assert.ok(manifest.permissions.includes("tabs"));
+        const size=name === "firefox" ? "512" : "128";
+        assert.equal(manifest.icons[size],"icon.png");
+        assert.equal(manifest.action.default_icon[size],"icon.png");
+    }
+    assert.ok(fs.statSync(new URL("../browser-extension/common/icon.png",import.meta.url)).size > 0);
+});
+test("popup can update a newly saved workspace without reading tabs at rest", async () => {
+    const html=fs.readFileSync(new URL("../browser-extension/common/popup.html",import.meta.url),"utf8");
+    const popup=fs.readFileSync(new URL("../browser-extension/common/popup.js",import.meta.url),"utf8");
+    const {window,document}=parseHTML(html), calls=[];
+    Object.defineProperty(window.HTMLSelectElement.prototype,"value",{configurable:true,
+        get(){return this.querySelector("option[selected]")?.value ?? this.querySelector("option")?.value;},
+        set(value){this.querySelectorAll("option").forEach(option=>option.removeAttribute("selected")); [...this.querySelectorAll("option")].find(option=>option.value===value)?.setAttribute("selected","");}
+    });
+    let windowReads=0;
+    const api={
+        storage:{local:{async get(){return {enabled:true,pairing:"1234:token"};},async set(){}}},
+        windows:{async getAll(){windowReads++;return [{id:7,incognito:false,tabs:[{active:true,title:"Example"}]}]; }},
+        runtime:{async sendMessage(request){
+            calls.push(request);
+            if(request.action==="status") return {workspace:null,live:false,profiles:[],workspaces:[{id:"work",name:"Work",items:[{index:0,label:"Browser"}]}]};
+            if(request.action==="update") return {updated:1,unmatched:0,workspace:"Work"};
+            return {};
+        }}
+    };
+    vm.runInNewContext(popup,{window,document,chrome:api}); await tick();
+    assert.equal(windowReads,0);
+    assert.equal(document.querySelector("#update").disabled,false);
+    assert.equal(document.querySelector("#manual").hidden,false);
+    assert.notEqual(document.querySelector("#manual").open,true);
+    document.querySelector("#update").click(); await tick(); await tick();
+    assert.equal(calls.filter(call=>call.action==="update").length,1);
+    assert.match(document.querySelector("#status").textContent,/Updated 1 browser window in Work/);
+    assert.equal(windowReads,0,"the popup does not inspect tab titles before an explicit manual choice");
+    const manual=document.querySelector("#manual"); manual.open=true; manual.dispatchEvent(new window.Event("toggle")); await tick();
+    assert.equal(windowReads,1);
+    assert.equal(document.querySelector("#use-tabs").disabled,false);
+});
+test("popup offers a manual workspace and window choice after an ambiguous update", async () => {
+    const html=fs.readFileSync(new URL("../browser-extension/common/popup.html",import.meta.url),"utf8");
+    const popup=fs.readFileSync(new URL("../browser-extension/common/popup.js",import.meta.url),"utf8");
+    const {window,document}=parseHTML(html), calls=[];
+    Object.defineProperty(window.HTMLSelectElement.prototype,"value",{configurable:true,
+        get(){return this.querySelector("option[selected]")?.value ?? this.querySelector("option")?.value;},
+        set(value){this.querySelectorAll("option").forEach(option=>option.removeAttribute("selected")); [...this.querySelectorAll("option")].find(option=>option.value===value)?.setAttribute("selected","");}
+    });
+    const api={
+        storage:{local:{async get(){return {enabled:true,pairing:"1234:token"};},async set(){}}},
+        windows:{async getAll(){return [{id:7,incognito:false,tabs:[{active:true,title:"Research"}]}];}},
+        runtime:{async sendMessage(request){
+            calls.push(request);
+            if(request.action==="status") return {workspace:"Work",live:false,profiles:[],workspaces:[{id:"work",name:"Work",items:[{index:2,label:"Research"}]}]};
+            if(request.action==="update") return request.options?.workspaceId ? {updated:1,unmatched:0} : {error:"No window matched automatically."};
+            return {};
+        }}
+    };
+    vm.runInNewContext(popup,{window,document,chrome:api}); await tick();
+    document.querySelector("#update").click(); await tick(); await tick();
+    assert.equal(document.querySelector("#manual").hidden,false);
+    document.querySelector("#use-tabs").click(); await tick(); await tick();
+    const manual=calls.find(call=>call.action==="update" && call.options?.workspaceId);
+    assert.deepEqual(JSON.parse(JSON.stringify(manual.options)),{workspaceId:"work",itemIndex:2,windowId:7});
+    assert.match(document.querySelector("#status").textContent,/Updated 1 browser window/);
+});
+
+test("a browser can pair and be saved when no workspace exists", async () => {
+    const html=fs.readFileSync(new URL("../browser-extension/common/popup.html",import.meta.url),"utf8");
+    const popup=fs.readFileSync(new URL("../browser-extension/common/popup.js",import.meta.url),"utf8");
+    const {window,document}=parseHTML(html), data={enabled:false,pairing:"",liveSharing:false}, calls=[];
+    Object.defineProperty(window.HTMLSelectElement.prototype,"value",{configurable:true,
+        get(){return this.querySelector("option[selected]")?.value ?? this.querySelector("option")?.value;},
+        set(value){this.querySelectorAll("option").forEach(option=>option.removeAttribute("selected")); [...this.querySelectorAll("option")].find(option=>option.value===value)?.setAttribute("selected","");}
+    });
+    let destination=null;
+    const api={storage:{local:{async get(){return {...data};},async set(values){Object.assign(data,values);}}},
+        windows:{async getCurrent(){return {id:7};},async getAll(){return [{id:7,incognito:false,tabs:[{active:true,url:"https://example.test/",title:"Example"}]}];}},
+        runtime:{getURL:part=>`moz-extension://fixture/${part}`,async sendMessage(request){
+            calls.push(request);
+            if(request.action==="status") return {workspace:null,destination,live:false,profiles:[],workspaces:[]};
+            if(request.action==="save-browser") {destination=request.options.name; return {saved:true,destination};}
+            return {};
+        }}
+    };
+    vm.runInNewContext(popup,{window,document,chrome:api}); await tick();
+    document.querySelector("#pairing").value="1234:0123456789abcdef0123456789abcdef";
+    document.querySelector("#connect").click(); await tick(); await tick(); await tick();
+    assert.equal(data.enabled,true);
+    assert.equal(document.querySelector("#connected").hidden,false);
+    assert.match(document.querySelector("#workspace").textContent,/No saved destination/);
+    assert.equal(document.querySelector("#update").hidden,true);
+    document.querySelector("#save-browser").click(); await tick(); await tick();
+    document.querySelector("#browser-name").value="Research";
+    document.querySelector("#save-browser-form").dispatchEvent(new window.Event("submit",{cancelable:true})); await tick(); await tick(); await tick();
+    assert.deepEqual(JSON.parse(JSON.stringify(calls.find(call=>call.action==="save-browser").options)),{name:"Research",windowId:7});
+    assert.equal(document.querySelector("#workspace").textContent,"Research");
+    assert.match(document.querySelector("#status").textContent,/Saved Research/);
+    document.querySelector("#create-workspace").click(); await tick();
+    assert.equal(calls.some(call=>call.action==="create-workspace"),true);
+    document.querySelector("#open-workspaces").click(); await tick();
+    assert.equal(calls.some(call=>call.action==="open-workspaces"),true);
+});
+
+test("the popup refreshes its live destination when the background connects it", async () => {
+    const html=fs.readFileSync(new URL("../browser-extension/common/popup.html",import.meta.url),"utf8");
+    const popup=fs.readFileSync(new URL("../browser-extension/common/popup.js",import.meta.url),"utf8");
+    const {window,document}=parseHTML(html), listeners=[];
+    let destination=null;
+    const api={storage:{local:{async get(){return {enabled:true,pairing:"1234:token",liveSharing:true};},async set(){}}},
+        windows:{async getCurrent(){return {id:7};},async getAll(){return [];}},
+        runtime:{onMessage:{addListener(fn){listeners.push(fn);}},async sendMessage(){return {workspace:null,destination,live:true,profiles:[],workspaces:[]};}}
+    };
+    vm.runInNewContext(popup,{window,document,chrome:api}); await tick(); await tick();
+    assert.match(document.querySelector("#workspace").textContent,/No saved destination/);
+    destination="Research"; listeners[0]({event:"warp-live-updated"}); await tick(); await tick();
+    assert.equal(document.querySelector("#workspace").textContent,"Research");
+    assert.match(document.querySelector("#sharing").textContent,/saved here/);
+});
+
+test("pairing stays connected when desktop integration or saved data is unavailable", async () => {
+    const html=fs.readFileSync(new URL("../browser-extension/common/popup.html",import.meta.url),"utf8");
+    const popup=fs.readFileSync(new URL("../browser-extension/common/popup.js",import.meta.url),"utf8");
+    const {window,document}=parseHTML(html), data={enabled:false,pairing:"",liveSharing:false};
+    const api={storage:{local:{async get(){return {...data};},async set(values){Object.assign(data,values);}}},
+        windows:{async getCurrent(){return {id:7};},async getAll(){return [];}},
+        runtime:{async sendMessage(request){
+            if(request.action==="status") return {workspace:null,live:false,profiles:[],workspaces:[],windowsAvailable:false,storageError:"Saved workspaces could not be read."};
+            return {};
+        }}
+    };
+    vm.runInNewContext(popup,{window,document,chrome:api}); await tick();
+    document.querySelector("#pairing").value="1234:0123456789abcdef0123456789abcdef";
+    document.querySelector("#connect").click(); await tick(); await tick(); await tick();
+    assert.equal(data.enabled,true);
+    assert.equal(document.querySelector("#connected").hidden,false);
+    assert.match(document.querySelector("#status").textContent,/Connected.*could not be read/);
+    assert.match(document.querySelector("#sharing").textContent,/can't see open windows/);
+});
+
+test("updating an existing saved browser requires an explicit replace choice", async () => {
+    const html=fs.readFileSync(new URL("../browser-extension/common/popup.html",import.meta.url),"utf8");
+    const popup=fs.readFileSync(new URL("../browser-extension/common/popup.js",import.meta.url),"utf8");
+    const {window,document}=parseHTML(html), calls=[];
+    Object.defineProperty(window.HTMLSelectElement.prototype,"value",{configurable:true,
+        get(){return this.querySelector("option[selected]")?.value ?? this.querySelector("option")?.value;},
+        set(value){this.querySelectorAll("option").forEach(option=>option.removeAttribute("selected")); [...this.querySelectorAll("option")].find(option=>option.value===value)?.setAttribute("selected","");}
+    });
+    const api={storage:{local:{async get(){return {enabled:true,pairing:"1234:token",liveSharing:false};},async set(){}}},
+        windows:{async getCurrent(){return {id:7};},async getAll(){return [{id:7,incognito:false,tabs:[{active:true,url:"https://example.test/",title:"Example"}]}];}},
+        runtime:{getURL:part=>`chrome-extension://fixture/${part}`,async sendMessage(request){
+            calls.push(request);
+            if(request.action==="status") return {workspace:null,live:false,profiles:[],workspaces:[],savedBrowsers:[{id:"saved",name:"Research"}]};
+            return {saved:true};
+        }}
+    };
+    vm.runInNewContext(popup,{window,document,chrome:api}); await tick(); await tick();
+    document.querySelector("#save-browser").click(); await tick(); await tick();
+    const select=document.querySelector("#save-target"); select.value="saved"; select.dispatchEvent(new window.Event("change"));
+    assert.equal(document.querySelector("#browser-name").value,"Research");
+    const submit=()=>document.querySelector("#save-browser-form").dispatchEvent(new window.Event("submit",{cancelable:true}));
+    submit(); await tick();
+    assert.equal(document.querySelector("#replace-browser-confirmation").hidden,false);
+    assert.equal(calls.some(call=>call.action==="save-browser"),false);
+    document.querySelector("#cancel-replace-browser").click();
+    assert.equal(calls.some(call=>call.action==="save-browser"),false);
+    submit(); document.querySelector("#confirm-replace-browser").click(); await tick(); await tick(); await tick();
+    assert.deepEqual(JSON.parse(JSON.stringify(calls.find(call=>call.action==="save-browser").options)),{name:"Research",windowId:7,savedBrowserId:"saved"});
+    assert.match(document.querySelector("#status").textContent,/Updated Research/);
+});
+
+test("popup live sharing connects this browser automatically and disconnecting stops it", async () => {
+    const html=fs.readFileSync(new URL("../browser-extension/common/popup.html",import.meta.url),"utf8");
+    const popup=fs.readFileSync(new URL("../browser-extension/common/popup.js",import.meta.url),"utf8");
+    const {window,document}=parseHTML(html), data={enabled:false,pairing:'',liveSharing:false};
+    const calls=[]; let live=false;
+    const api={
+        storage:{local:{async get(){return {...data};},async set(values){Object.assign(data,values);}}},
+        windows:{async getAll(){return [];}},
+        runtime:{async sendMessage(request){
+            calls.push(request);
+            if(request.action==='set-live') { live=request.options.live; return {live}; }
+            if(request.action==='disconnect') { live=false; return {disconnected:true}; }
+            if(request.action==='status') return {workspace:'Work',live,profiles:[],workspaces:[]};
+            return {};
+        }}
+    };
+    vm.runInNewContext(popup,{window,document,chrome:api}); await tick();
+    const liveSwitch=document.querySelector('#live'), connection=document.querySelector('#connection');
+    liveSwitch.checked=true; liveSwitch.dispatchEvent(new window.Event('change')); await tick(); await tick();
+    assert.equal(data.enabled,false);
+    assert.match(document.querySelector('#status').textContent,/Enter the pairing code/);
+    document.querySelector('#pairing').value='1234:token';
+    document.querySelector('#connect').click(); await tick(); await tick();
+    assert.equal(data.enabled,true); assert.equal(data.liveSharing,true); assert.equal(live,true);
+    assert.equal(connection.checked,true); assert.equal(liveSwitch.checked,true);
+    connection.checked=false; connection.dispatchEvent(new window.Event('change')); await tick();
+    assert.equal(data.enabled,false); assert.equal(data.liveSharing,false); assert.equal(live,false);
+    assert.equal(liveSwitch.checked,false);
+    connection.checked=true; connection.dispatchEvent(new window.Event('change')); await tick(); await tick();
+    assert.equal(data.enabled,true); assert.equal(data.liveSharing,false); assert.equal(live,false);
+    assert.ok(calls.some(call=>call.action==='disconnect'));
+});
+
+test("a saved pairing can be corrected when Window Warp cannot be reached", async () => {
+    const html=fs.readFileSync(new URL("../browser-extension/common/popup.html",import.meta.url),"utf8");
+    const popup=fs.readFileSync(new URL("../browser-extension/common/popup.js",import.meta.url),"utf8");
+    const {window,document}=parseHTML(html);
+    const api={
+        storage:{local:{async get(){return {enabled:true,pairing:'old-code'};},async set(){}}},
+        runtime:{async sendMessage(){return {error:'Cannot reach Window Warp.'};}}
+    };
+    vm.runInNewContext(popup,{window,document,chrome:api}); await tick();
+    assert.equal(document.querySelector('#pairing-section').hidden,false);
+    assert.equal(document.querySelector('#connected').hidden,true);
+    assert.equal(document.querySelector('#pairing').value,'old-code');
+    assert.match(document.querySelector('#status').textContent,/Cannot reach/);
+});

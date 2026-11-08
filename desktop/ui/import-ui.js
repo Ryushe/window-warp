@@ -3,6 +3,8 @@
     let entries = [];
     let reading = false;
     const results = document.querySelector("#import-results");
+    const status = document.querySelector("#import-status");
+    const report = (text, error = false) => setFeedback(status, text, error);
     function renderImport() {
         results.replaceChildren();
         for (const entry of entries) {
@@ -29,7 +31,7 @@
                     if (reading) return;
                     button.disabled = true;
                     try { await window.reviewImportedWorkspace(entry.value); }
-                    catch (error) { message(String(error.message || error), true); }
+                    catch (error) { report(String(error.message || error), true); }
                     finally { button.disabled = false; }
                 }); card.append(button);
             }
@@ -43,7 +45,7 @@
         if (reading || busy || enabled || !config) return;
         const files = [...event.target.files];
         if (!files.length) return;
-        if (files.length > 20 || files.reduce((n,f) => n + f.size,0) > 32 * 1024 * 1024) { message("Choose at most 20 INI files totaling 32 MiB.", true); return; }
+        if (files.length > 20 || files.reduce((n,f) => n + f.size,0) > 32 * 1024 * 1024) { report("Choose at most 20 INI files totaling 32 MiB.", true); return; }
         reading = true; busy = true; controls();
         try {
             const monitors = await native.core.invoke("get_import_monitors");
@@ -55,28 +57,29 @@
                 } catch (error) { next.push({kind:"error",label:file.name,source:file.name,raw:"",notes:[],problems:[String(error.message || error)],value:null}); }
             }
             entries = next; renderImport();
-            message("Review the import. Nothing has been saved. Unsupported entries remain visible with their original settings.");
-        } catch (error) { message(String(error.message || error), true); }
+            report("Ready to review.");
+        } catch (error) { report(String(error.message || error), true); }
         finally { reading = false; busy = false; controls(); }
     });
     $("#apply-import").addEventListener("click", () => {
         if (reading || busy || enabled || !config) return;
         const chosen = entries.filter(e => e.selected && e.value && e.kind !== "workspace");
-        if (!chosen.length) { message("Select shortcuts or settings to add to the draft."); return; }
+        if (!chosen.length) { report("Select shortcuts or settings to add to the draft.", true); return; }
         const next = JSON.parse(JSON.stringify(config));
         for (const entry of chosen) {
             if (entry.kind === "binding") next.bindings.push(JSON.parse(JSON.stringify(entry.value)));
             else next.settings = {...next.settings, ...entry.value};
         }
-        if (next.bindings.length > 100) { message("The combined draft exceeds 100 shortcuts. Select fewer entries or remove existing bindings first.", true); return; }
+        if (next.bindings.length > 100) { report("The combined draft exceeds 100 shortcuts. Select fewer entries or remove existing bindings first.", true); return; }
         config = next; changed(); render();
         for (const entry of chosen) entry.selected = false;
         renderImport();
         $("#show-shortcuts").click();
-        message("Imported into your unsaved draft. Review app identifiers and conflicting keys, then Save changes. Existing shortcuts were kept.");
+        report("");
+        message("Imported into your draft. Review and save.");
     });
     $("#clear-import").addEventListener("click", () => {
         if (reading) return;
-        entries = []; $("#import-files").value = ""; renderImport();
+        entries = []; $("#import-files").value = ""; renderImport(); report("");
     });
 })();

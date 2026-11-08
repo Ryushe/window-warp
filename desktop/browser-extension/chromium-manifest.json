@@ -1,0 +1,1 @@
+{"manifest_version":3,"name":"Window Warp","version":"0.1.8","description":"Save browser tabs with Window Warp.","permissions":["tabs","storage","alarms"],"host_permissions":["http://127.0.0.1/*"],"icons":{"128":"icon.png"},"background":{"service_worker":"background.js"},"action":{"default_popup":"popup.html","default_icon":{"128":"icon.png"}}}

@@ -117,6 +117,97 @@ function controlRetile(f, direction, completed) {
     });
     dispatch();
 }
+test("KWin workspace snapshots include windows on other virtual desktops", () => {
+    const f=fixture([]);
+    Object.assign(f.window,{normalWindow:true,caption:"First",pid:11});
+    const other={...f.window,internalId:"other",caption:"Second",pid:12,desktops:["desktop-2"]};
+    f.workspace.stackingOrder.push(other);
+    let dispatch, result;
+    vm.runInNewContext(controlSource,{
+        WARP_CONTROL:{service:"fixture",token:"owned",action:"dispatch",ownPid:999}, Warp:f.warp,
+        Date:{now:()=>f.clock.now}, print:()=>{},
+        registerShortcut:(_id,_label,_key,callback)=>{dispatch=callback;return true;},
+        callDBus:(_service,_path,_interface,method,...args)=>{
+            if(method==="InputGeneration")args.at(-1)(JSON.stringify("generation-1"));
+            else if(method==="Next")args.at(-1)(JSON.stringify({id:1,expires:f.clock.now+5000,command:{kind:"snapshot"}}));
+            else if(method==="getWindowInfo")args.at(-1)({uuid:args[0],maximizeHorizontal:false,maximizeVertical:false});
+            else if(method==="Reply")result=JSON.parse(args.at(-1));
+        }
+    });
+    dispatch();
+    assert.deepEqual(clone(result.result.map(window=>window.id)),["a","other"]);
+});
+for (const legacy of [false,true]) test(`KWin reports the actual monitor order on Plasma ${legacy ? 5 : 6}`, () => {
+    const f=fixture([],legacy); f.right.geometry.y=0;
+    let dispatch, result;
+    vm.runInNewContext(controlSource,{
+        workspace:f.workspace, WARP_CONTROL:{service:'fixture',token:'owned',action:'dispatch'}, Warp:f.warp,
+        Date:{now:()=>f.clock.now}, print:()=>{}, registerShortcut:(_id,_label,_key,callback)=>{dispatch=callback;return true;},
+        callDBus:(_service,_path,_interface,method,...args)=>{
+            if(method==='InputGeneration') args.at(-1)(JSON.stringify('generation-1'));
+            else if(method==='Next') args.at(-1)(JSON.stringify({id:1,expires:f.clock.now+5000,command:{kind:'monitors'}}));
+            else if(method==='Reply') result=JSON.parse(args.at(-1));
+        }
+    });
+    dispatch();
+    assert.deepEqual(clone(result.result.map(output=>output.id)),legacy ? ['1','0'] : ['left','right']);
+    assert.deepEqual(clone(result.result.map(output=>output.primary)),[false,true]);
+    assert.deepEqual(clone(result.result.map(output=>output.stable)),[!legacy,!legacy]);
+});
+for (const legacy of [false,true]) test(`KWin desktop snapshots identify windows and the current desktop on Plasma ${legacy ? 5 : 6}`, () => {
+    const f=fixture([],legacy);
+    const first=legacy ? 1 : {id:"desk-a",name:"Work"};
+    const second=legacy ? 2 : {id:"desk-b",name:"Research"};
+    f.workspace.currentDesktop=first;
+    Object.assign(f.window,{normalWindow:true,caption:"First",pid:11,desktop:1,desktops:[first]});
+    const other={...f.window,internalId:"other",caption:"Second",pid:12,desktop:2,desktops:[second]};
+    f.workspace.stackingOrder.push(other);
+    let dispatch, result;
+    vm.runInNewContext(controlSource,{
+        workspace:f.workspace, WARP_CONTROL:{service:"fixture",token:"owned",action:"dispatch",ownPid:999}, Warp:f.warp,
+        Date:{now:()=>f.clock.now}, print:()=>{}, registerShortcut:(_id,_label,_key,callback)=>{dispatch=callback;return true;},
+        callDBus:(_service,_path,_interface,method,...args)=>{
+            if(method==="InputGeneration")args.at(-1)(JSON.stringify("generation-1"));
+            else if(method==="Next")args.at(-1)(JSON.stringify({id:1,expires:f.clock.now+5000,command:{kind:"desktop-snapshot"}}));
+            else if(method==="getWindowInfo")args.at(-1)({uuid:args[0],maximizeHorizontal:false,maximizeVertical:false});
+            else if(method==="Reply")result=JSON.parse(args.at(-1));
+        }
+    });
+    dispatch();
+    assert.equal(result.result.current.id,legacy ? "kde-number:1" : "desk-a");
+    assert.equal(result.result.windows.find(item=>item.window.id==='a').desktops[0].id,legacy ? "kde-number:1" : "desk-a");
+    assert.equal(result.result.windows.find(item=>item.window.id==='other').desktops[0].id,legacy ? "kde-number:2" : "desk-b");
+    assert.equal(result.result.windows.find(item=>item.window.id==='other').desktops[0].name,legacy ? "Desktop 2" : "Research");
+});
+for (const legacy of [false,true]) test(`KWin can move and switch workspace desktops on Plasma ${legacy ? 5 : 6}`, () => {
+    const f=fixture([],legacy);
+    const first=legacy ? 1 : {id:"desk-a",name:"Work"};
+    const second=legacy ? 2 : {id:"desk-b",name:"Research"};
+    f.workspace.currentDesktop=first;
+    f.workspace.desktops=legacy ? 2 : [first,second];
+    Object.assign(f.window,{pid:11,desktop:1,desktops:[first]});
+    let dispatch, reply, command;
+    vm.runInNewContext(controlSource,{
+        workspace:f.workspace, WARP_CONTROL:{service:"fixture",token:"owned",action:"dispatch",ownPid:999}, Warp:f.warp,
+        Date:{now:()=>f.clock.now}, print:()=>{}, registerShortcut:(_id,_label,_key,callback)=>{dispatch=callback;return true;},
+        callDBus:(_service,_path,_interface,method,...args)=>{
+            if(method==="InputGeneration")args.at(-1)(JSON.stringify("generation-1"));
+            else if(method==="Next")args.at(-1)(JSON.stringify({id:1,expires:f.clock.now+5000,command}));
+            else if(method==="Reply")reply=JSON.parse(args.at(-1));
+        }
+    });
+    const target=legacy ? "kde-number:2" : "desk-b";
+    command={kind:"move-desktop",desktop:target,window:{id:"a",pid:11}}; dispatch();
+    assert.equal(reply.result,true);
+    if (legacy) assert.equal(f.window.desktop,2); else assert.equal(f.window.desktops[0],second);
+    command={kind:"switch-desktop",desktop:target}; dispatch();
+    assert.equal(reply.result,true);
+    assert.equal(f.workspace.currentDesktop,second);
+    command={kind:"move-desktop",desktop:target,window:{id:"a",pid:12}}; dispatch();
+    assert.match(reply.error,/closed or changed identity/);
+    command={kind:"switch-desktop",desktop:"removed-desktop"}; dispatch();
+    assert.match(reply.error,/no longer available/);
+});
 for(const legacy of [false,true]) for(const fullscreen of [false,true]) {
     test(`delayed ${fullscreen?"fullscreen exit":"unmaximize"} cannot overwrite any tile path on Plasma ${legacy?5:6}`,()=>{
         const app={action:"pull-app",shortcut:"Ctrl+J",appMatch:"firefox",mainMonitorAction:"burner"};
@@ -367,12 +458,25 @@ for (const legacy of [false,true]) test(`radial selection preserves the pre-pick
     assert.throws(()=>f.warp.run(binding,settings,null,picker,f.window),/no longer matches/);
 });
 
+for (const legacy of [false,true]) test(`named monitors continue to select the same outputs after their positions change on Plasma ${legacy ? 5 : 6}`, () => {
+    const binding={label:'App',shortcut:'Ctrl+J',action:'pull-app',appMatch:'firefox',mainMonitorAction:'burner',burnerLayout:'float'};
+    const settings={mainMonitor:1,burnerMonitor:2,mainMonitorId:legacy?'0':'right',burnerMonitorId:legacy?'1':'left'};
+    const f=fixture([],legacy,settings);
+    f.left.geometry.x=1800; f.right.geometry.x=0; f.right.geometry.y=0;
+    if (legacy) f.window.screen=1; else f.window.output=f.left;
+    f.warp.run(binding,settings,null,f.window,f.window);
+    assert.equal(legacy ? f.window.screen : f.window.output,legacy ? 0 : f.right);
+    f.warp.run(binding,settings,null,f.window,f.window);
+    assert.equal(legacy ? f.window.screen : f.window.output,legacy ? 1 : f.left);
+});
+
 test("native editor focus selects only this process's normal window and reports mapping delays", () => {
     const owned = {pid:42,normalWindow:true};
     let windows = [{pid:42,normalWindow:false},{pid:7,normalWindow:true},owned];
     const focused = [], replies = [];
     let dispatch;
     vm.runInNewContext(controlSource, {
+        workspace:{currentDesktop:{id:"current"}},
         WARP_CONTROL:{service:"fixture",token:"owned",ownPid:42,action:"dispatch"},
         Warp:{windows:()=>windows,focus:window=>focused.push(window)},
         print:()=>{}, registerShortcut:(_id,_label,_key,callback)=>{dispatch=callback;return true;},
@@ -384,6 +488,7 @@ test("native editor focus selects only this process's normal window and reports 
     });
     dispatch();
     assert.deepEqual(focused,[owned]);
+    assert.equal(owned.desktops[0].id,"current", "the editor follows the current desktop");
     assert.deepEqual(replies.at(-1),{result:true});
     windows = windows.slice(0,2);
     dispatch();

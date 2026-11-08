@@ -1,7 +1,23 @@
 # Window Warp agent notes
 
+Before preparing a release or changing release packaging or store distribution,
+follow [release.md](release.md).
+
 The Windows hook is currently inconsistent. Read `desktop/HOOK-HANDOFF.md`
 before editing keyboard, popup, retile, or radial-hold code.
+
+## Interface and interaction
+
+For visual UI work, use the available `frontend-design` skill and preserve the
+existing Shortcuts visual language across the app. Evaluate the whole user
+task: automate repetitive choices when the correct result is known, retain a
+user override, and keep important information and frequent actions visible.
+Show related workspace controls together when a window is expanded; the larger
+manual positioning interface can stay separate. Make repeated changes easy to
+perform in bulk, protect destructive actions, and use consistent, noticeable
+feedback that communicates errors with text as well as color. Check the actual
+flows, including keyboard use and failure states. Outstanding UX work is in
+[desktop/TODO.md](desktop/TODO.md).
 
 ## One keyboard hook
 

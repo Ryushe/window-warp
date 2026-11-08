@@ -1,0 +1,49 @@
+Window Warp Privacy Policy
+
+Effective date: October 29, 2026
+Publisher: Ryushe
+Privacy contact: ryushe.dev@gmail.com
+
+This policy describes how the Window Warp desktop app for Windows and KDE Plasma handles information. It does not cover the websites, app stores, or other services you may use to download the app, or other applications that Window Warp opens.
+
+Information the app uses
+
+Window Warp works on your device to manage windows and respond to shortcuts. Depending on the features you use, it can access:
+
+• Keyboard input: key and modifier events needed to recognize shortcuts, record a shortcut you choose, and handle related window controls. The app does not save a general log of everything you type.
+• Window and application details: window titles, application names and identifiers, executable paths, process and window identifiers, and window position, size, display, and state. The app uses these to identify, move, and restore windows.
+• Settings and shortcuts: your shortcut assignments, app matching rules, appearance, startup preference, and other settings. If you choose to import older AutoHotkey settings, the app reads the selected legacy settings to prepare a draft for review.
+• Saved workspaces: when you capture and save a workspace, it may include window and application details, launch paths and arguments, working directories, and layout information. For supported terminal windows, it may also include terminal profile and shell details.
+• Firefox information: when capturing a workspace containing Firefox, the app may read Firefox profile and session files to identify the profile, open tab URLs, and selected tab. Saved URLs can reveal sensitive information, including information in their paths or query strings. You can review and edit captured details before saving.
+• Browser extension information: if you pair an extension, it can share the titles, URLs, selected tab, and geometry of non-private browser windows with the desktop app over a local connection. It shares a snapshot when you request a workspace capture or URL update, or when you add a saved browser to a workspace. The latter can refresh that saved browser's tabs locally before you finish adding it. It also shares changes continuously if you turn on live tab sharing. Paired connection checks do not include tabs. When live sharing is on, changes to a linked browser window are automatically saved locally to its workspace or saved browser. You can also save a browser's tabs independently.
+
+Window Warp uses this information to provide the features you request, such as recognizing shortcuts, finding windows, and saving or restoring a workspace.
+
+Storage and sharing
+
+The desktop app stores its settings, saved workspaces, and saved browsers in JSON files in its application configuration directory on your device. These files are not separately encrypted by Window Warp and can contain sensitive information. Protect your device and account, and take care when sharing or backing up these files.
+
+The current desktop app does not include analytics or an automatic feature that sends your settings, workspace data, or keyboard input to the publisher. The app does not sell this information. Window Warp interacts with your operating system and the applications you choose to control; restoring a workspace may pass saved paths, arguments, or URLs to those applications. They handle information under their own policies. Your operating system, backup or synchronization software, or other software on your device may also handle local files independently of Window Warp.
+
+Your choices and deletion
+
+You can edit shortcuts and settings, review, edit, or delete saved workspaces, and delete saved browsers in the app. You can pause shortcuts or quit Window Warp from its tray menu. Closing the editor alone leaves the app running in the tray. You can turn off starting at sign-in in the app's settings.
+
+Settings and workspaces remain on your device until you change or delete them. Uninstalling normally preserves saved settings and workspaces. On Windows, the uninstaller offers a separate option to remove application data. You can also remove the app's local configuration files yourself after quitting the app; doing so removes saved settings and workspaces. Copies in backups or synchronization services must be managed separately.
+
+Downloads and other services
+
+When you download Window Warp or contact the publisher through a third-party service, that service may process information under its own privacy policy. Opening a saved URL may cause your browser or the destination website to receive information as part of the normal connection.
+
+Your privacy rights
+
+Depending on where you live and the circumstances, you may have rights concerning personal information, including rights to access, correct, or delete it or to complain to a data protection authority. Contact us at ryushe.dev@gmail.com with a request or question. Because workspace and settings data are kept on your device, we generally cannot access or delete those local files for you.
+
+Changes to this policy
+
+We may update this policy when the app or our practices change. We will make the updated policy available and revise the effective date. If applicable law requires additional notice, we will provide it.
+
+Contact
+
+Ryushe
+ryushe.dev@gmail.com

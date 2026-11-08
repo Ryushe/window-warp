@@ -26,27 +26,39 @@ A standalone Tauri 2 application for Windows and **KDE Plasma 5.27 and 6**, with
 
 Normal launches turn shortcuts on. Settings can turn that off. A registered login launch uses `--startup` to enable saved shortcuts and hide the editor. Shortcut fields can be changed while shortcuts are on. A new configuration uses the AutoHotkey keys: Win+X/C move windows, Win+Ctrl+X/C also center the pointer, Win+R pulls the last window, Win+; pauses, Win+Z maximizes, and Win+Q closes. App keys match `window_manager_apps.ini`, including Win+D for Discord and Win+S for Firefox. Every key can be changed. Stop the AutoHotkey script before enabling these keys.
 
-New configurations also include **Win+B** to edit the current app's shortcut, **Win+O** to browse workspaces, and **Win+Y** to capture a workspace update for review. The main screen has **Start Window Warp when I sign in**; that launch enables saved shortcuts. Existing configurations can add these actions from the editor. Opening the current-app editor pauses window shortcuts and preserves existing drafts. Resume uses saved settings; unsaved edits remain in the editor.
+New configurations also include **Win+B** to edit the current app's shortcut, **Win+O** to browse workspaces, and **Win+Y** to capture a workspace for review. The workspace section opens while tab capture finishes. The shortcut offers **New**, **URLs**, and **Update**. Choose the workspace before updating; URLs changes only confidently matched browser tabs, while Update captures the open applications and their positions. If a workspace draft is open, Win+Y and **Capture current** both ask before replacing it. Replacing a saved workspace also requires confirmation. Nothing is saved until the draft is reviewed and saved. The main screen has **Start Window Warp when I sign in**; that launch enables saved shortcuts. Existing configurations can add these actions from the editor. Opening the current-app editor preserves existing drafts. Unsaved edits remain in the full editor.
 
-For a more specific Windows app shortcut, enable **Use Windows matching criteria**. Every entered criterion must match. Title text uses case-sensitive contains matching, and window classes use case-sensitive equality, matching the original AHK configuration. Executable names, full paths and packaged IDs are case-insensitive. Process IDs and window IDs can change after restart. Imported `ahk_exe`, `ahk_class`, `ahk_pid`, `ahk_id`, title and active-window rules retain these criteria, including visible owned or untitled windows. Undefined AHK groups and ambiguous rules remain visible for manual review. Windows rules stay disabled on Linux until you turn off Windows matching and enter a KDE app identifier.
+For a more specific Windows app shortcut, enable **Use Windows matching criteria**. Every entered criterion must match. Title text uses case-sensitive contains matching, and window classes use case-sensitive equality, matching the original AHK configuration. Executable names, full paths and packaged IDs are case-insensitive. Process IDs and window IDs can change after restart. Imported `ahk_exe`, `ahk_class`, `ahk_pid`, `ahk_id`, title and active-window rules retain these criteria, including visible owned or untitled windows. Undefined AHK groups and ambiguous rules remain visible for manual review. On Linux, add a KDE app identifier to use the binding across platforms.
 
-Open **Workspaces → Capture current**, choose which windows to keep, and save a name. Capture creates a review draft. Each app has editable launch arguments and an option to require a new window. **Open workspace** reuses matching windows or launches missing apps, then restores placement.
+Open **Workspaces → Capture current**, choose which windows to keep, and save a name. Capture creates a review draft; you can return to the workspace list and select workspaces while the draft stays open. Switching to a different editor offers to save or discard changed drafts. Use **Add window** to pick a window on screen or choose several open windows from a list. Each window row has position and detected-monitor selectors. On Windows, **Set position** opens a movable, resizable preview; Apply updates the draft, and Cancel leaves it unchanged. Advanced options retain editable launch arguments and the option to require a new window. **Open workspace** reuses matching windows or launches missing apps, then restores placement.
 
 **App launch settings** supports executable paths, Linux desktop entry IDs, and Windows packaged app IDs (AUMIDs). Capture records the installed desktop entry or actual Windows package identity when available. Desktop entries handle their own arguments and working directory; the editor's argument list supplies documents or URLs, with local file URLs resolved by the desktop launcher. Packaged apps receive activation arguments and choose whether to open a new window. Clear the executable-only Working directory field when selecting either application-ID launch type. Missing or refused activation appears in that window's restore result. Older AHK INIs did not save packaged activation IDs: their executable paths are preserved for review, and Windows resolves a single registered app from the saved package family even when its version changed. Missing or ambiguous registrations remain editable for recapture or an explicit AUMID.
 
-Firefox captures its profile, tab URLs, and selected tab from its last readable session file. Review them under **Firefox profile and tabs**. If the browser has not written its session yet, or the window cannot be matched reliably, the editor shows a note and allows manual entry. Restore opens the selected tab last, matching the original app's behavior. Existing profile windows are reused unless **Require a new window** is checked. When Firefox starts without profile arguments, Window Warp also checks which process holds the profile lock. This helps distinguish profiles with identical window titles; unavailable lock evidence or identical sessions within one profile may still need review. Capture does not modify browser profiles. Windows Terminal and Konsole entries also expose shell, profile, arguments, and working directory. WSL capture recognizes explicit distributions, legacy launchers, and unambiguous user/hostname prompts. Ambiguous terminals show a review note; select their distribution before saving. Capturing a terminal does not replay its running command. Browser-tab and terminal-session restoration use executable launches to supply their application-specific options.
+Firefox captures its profile, tab URLs, and selected tab from its last readable session file. Review or edit the URLs in the window, and choose a focused tab under **Advanced**. The connection dot opens browser-extension settings. If the browser has not written its session yet, or the window cannot be matched reliably, the editor shows a note and allows manual entry. A connected, updated extension can focus the selected tab in a confidently matched browser window while preserving URL order. Without one, newly launched browser windows receive the selected URL first, and the restore result warns when focus cannot be confirmed. Existing Firefox windows with the same URLs are reused; a different known set of URLs opens a new window. If current tabs cannot be verified, the app reuses an eligible window and reports the uncertainty. **Require a new window** explicitly requests another window. The session file can lag behind the live browser. When Firefox starts without profile arguments, Window Warp also checks which process holds the profile lock. This helps distinguish profiles with identical window titles; unavailable lock evidence or identical sessions within one profile may still need review. Capture does not modify browser profiles. Windows Terminal and Konsole entries also expose shell, profile, arguments, and working directory. WSL capture recognizes explicit distributions, legacy launchers, and unambiguous user/hostname prompts. Ambiguous terminals show a review note; select their distribution before saving. Capturing a terminal does not replay its running command. Browser-tab and terminal-session restoration use executable launches to supply their application-specific options.
+
+For current Firefox tabs, install the add-on and pair it with the code in Settings; you do not need a workspace first. Until a Firefox Add-ons listing is available, Settings provides a temporary Firefox installation instead. To prepare development copies for Firefox or Chromium, quit Window Warp and launch it with `--developer-extensions`; the developer setup appears under Settings → Browser extensions. **Save browser** saves the chosen window independently under **Workspaces → Saved browsers**, where you can reopen it or add it to a workspace. When adding it, Warp refreshes its tabs from the original open window when it can identify that window. Review the URLs, then add a new browser window or replace or append tabs in an existing one. Appending keeps one copy of each exactly matching URL. The extension can also update an existing saved browser after you confirm which one to replace. **Create workspace** opens a capture for review, and **Open workspaces** brings the Workspaces page forward. Choose a browser profile in Connection options when automatic detection needs help. Saved browsers contain tabs and a profile choice, not passwords or a copy of the browser profile.
+
+In the browser chooser, use **Ctrl+Shift+R** to replace tabs, **Ctrl+Shift+A** to append, or **Ctrl+Shift+N** to add a new browser window.
+
+Use the extension's **Browser connection** and **Live tab sharing** switches to control each browser profile; live sharing is off by default and turning it on also connects that profile. With live sharing on, opening, closing, or changing a tab automatically updates the workspace that opened that browser window, or its independently saved browser. Other workspaces stay separate. Closing the whole browser preserves its last saved tabs. When Window Warp cannot confidently match a window, it leaves the saved tabs unchanged. With live sharing off, Window Warp asks connected extensions for a snapshot when you capture a workspace, request a URL update, add a saved browser to a workspace, or open a workspace with a saved focused tab. Connection checks carry no tab data, private windows are excluded, and the bridge listens only on this computer. Firefox profiles are detected from the browser process when possible. Without an extension, Firefox uses its last readable saved session, which can lag. Chrome requires Developer mode to load the unpacked extension; Firefox's temporary installation is removed when Firefox exits. Browser-managed installation and updates need a published extension; Firefox also supports signed self-distribution.
+
+On Windows, the workspace list marks the workspace associated with the current virtual desktop. The last opened workspace is tracked separately for each desktop, and the same workspace can be opened on several desktops. If a known window moves, Warp can recognize its workspace on the destination desktop when the match is unambiguous. Opening a workspace reuses matching windows on that desktop; it does not count a window on another desktop as open here. The app checks desktop state on opening, focus, and workspace or browser actions rather than continuously scanning. If Windows cannot identify an empty desktop reliably, focus a window there before opening Warp.
+
+When Firefox matching is ambiguous, open **Firefox profile and tabs**, then **Choose profile or edit tabs** to select a profile or saved browser window. The extension also offers a manual window choice if an update cannot be matched automatically.
+
+Browser extensions cannot read their own profile folder. If Window Warp cannot identify a profile from the browser process or an existing workspace, the editor shows that the browser default will be used; choose a specific profile there when needed. This can occur with Chromium profiles.
+
+Once a development extension from Window Warp's prepared folder has been loaded and paired, Window Warp refreshes that folder on startup when it has a newer extension version. The extension reloads itself while connected; if automatic reloading fails, reload it from the browser's extension page. Existing 0.1.0 development copies need one manual reload to receive this update mechanism. Store-installed extensions are updated by the browser instead. Automatic file updates do not install an extension into a browser or make Firefox's temporary installation persistent. When changing extension files for a release, increase the version in both extension manifests so existing development copies can detect the update.
 
 ## Install, turn on/off, and uninstall
 
-On Windows, run `Window Warp_0.1.0_x64-setup.exe`. It installs for your Windows
-account and adds Window Warp to the Start menu and **Settings → Apps → Installed
-apps**. On KDE, install the matching Debian package with:
+On Windows, install [Window Warp from the Microsoft Store](https://apps.microsoft.com/detail/9NVBS6W8RV54?hl=en-us&gl=US&ocid=pdpshare). On KDE, download the Debian package from the [latest GitHub release](https://github.com/Ryushe/window-warp/releases/latest) and install it with:
 
 ```sh
-sudo apt install "./Window Warp_0.1.0_amd64.deb"
+sudo apt install ./window-warp_0.1.1_kubuntu24.04_amd64.deb
 ```
 
-The current Debian package is for Ubuntu 24.04 with KWin
+Run the command from the download directory, using the downloaded filename if a newer release is available. The Debian package is for Ubuntu 24.04 with KWin
 `4:5.27.11-0ubuntu3`; other KWin versions need a matching companion build.
 
 - **Turn on:** open Window Warp and click **Enable shortcuts**, or choose
@@ -60,10 +72,9 @@ The current Debian package is for Ubuntu 24.04 with KWin
 - **Uninstall:** quit first. Windows: use **Installed apps → Window Warp →
   Uninstall**. KDE: run `sudo apt remove window-warp`.
 
-Uninstalling preserves saved settings by default. Windows offers a separate
-option to remove application data. The Windows uninstaller removes its own
-login-start entry; KDE's startup entry checks that the executable exists, so
-a retained startup preference stays inactive while the package is absent.
+On KDE, uninstalling preserves saved settings by default. The startup entry checks
+that the executable exists, so a retained startup preference stays inactive while
+the package is absent.
 
 ## Development
 
@@ -106,7 +117,7 @@ For app identifiers, use the exact resource class or desktop file ID. KWin's win
 
 ## Scope and verification
 
-The full feature port is in progress; [PARITY.md](PARITY.md) tracks the source-derived requirements and verification gaps. Reviewed INI import, pointer centering and timed X/C retiling are implemented. The radial picker passes native Windows/KDE selection, Escape and focus-loss cancellation checks. Tap/hold tiling is implemented on Windows and KDE; see the checklist for native coverage and remaining gesture cases. Terminal capture and new-window restoration have passed native cmd, WSL, PowerShell, portable custom-profile Windows Terminal, and Konsole fixtures; shared-process/multi-tab identity remains limited. Workspace capture/reuse/launch, per-axis maximization/fullscreen, and Firefox tab restoration have passed native KDE tests. Startup registration passes native Windows and KDE toggle tests; actual login launches still need validation. Explicit-profile Windows and KDE Firefox capture/restore pass. Mixed-DPI displays, desktop-imposed minimum sizes, and elevated Windows applications still need coverage.
+The full feature port is in progress; [PARITY.md](PARITY.md) tracks the source-derived requirements and verification gaps. Reviewed INI import, pointer centering and timed X/C retiling are implemented. The radial picker passes native Windows/KDE selection, Escape and focus-loss cancellation checks. Tap/hold tiling is implemented on Windows and KDE; see the checklist for native coverage and remaining gesture cases. Terminal capture and new-window restoration have passed native cmd, WSL, PowerShell, portable custom-profile Windows Terminal, and Konsole fixtures; shared-process/multi-tab identity remains limited. Workspace capture/reuse/launch, per-axis maximization/fullscreen, and Firefox tab restoration have passed native KDE tests. Startup registration passes native Windows and KDE toggle tests; actual login launches still need validation. Explicit-profile Firefox capture, existing-window reuse, and fresh-window tab restore pass in the Windows fixture. Prior KDE Firefox capture/restore tests passed, but the latest browser-extension changes have not yet been tested on a live KDE desktop. Mixed-DPI displays, desktop-imposed minimum sizes, and elevated Windows applications still need coverage.
 
 ```sh
 npm test
@@ -128,7 +139,7 @@ Manual acceptance on each OS: enable the app; push a floating window across two 
 - `src-tauri/src/app_actions.rs`: application control shortcuts and pending editor/workspace requests.
 - `src-tauri/src/radial.rs` and `ui/radial.*`: stable window candidates, shared angular selection, and the temporary picker overlay.
 - `src-tauri/src/config.rs`: versioned configuration, canonical shortcut syntax, validation.
-- `src-tauri/src/windows.rs`: Win32 window enumeration, positioning, focus, and global shortcut registration.
+- `src-tauri/src/windows.rs`: Win32 window enumeration, positioning, and focus; `windows_reserved.rs` owns the shared keyboard hook.
 - `src-tauri/src/linux.rs`: KWin session integration via qdbus, with arguments passed directly without a shell.
 - `src-tauri/src/linux_control.rs`: authenticated session-bus command queue with correlated replies and input cancellation.
 - `src-tauri/src/workspaces.rs`: workspace storage, matching, launch, restore, and cancellation.
@@ -143,7 +154,9 @@ Settings live in Tauri's per-user configuration directory under `com.windowwarp.
 
 For a new shortcut in the popup, press a key and Enter. Settings chooses the
 default modifier; the popup buttons can adjust it. If a key is already used,
-the popup offers to replace it and keeps the displaced binding disabled.
+choose **Replace** to take it, or **Replace and edit old** to assign the
+displaced action a new key immediately. Press the popup shortcut again to open
+the main editor, or click outside the popup to close it.
 
 Under Shortcuts, **Find open apps** compares open app identifiers with shortcut
 names and existing identifiers. Unambiguous matches are added to the draft;
@@ -167,8 +180,8 @@ The overlay is clamped to the work area containing the original pointer. Native
 pointer updates run only while a picker is visible. On KDE, KWin positions and
 focuses the overlay, including on Wayland. More than four labels use a compact
 layout to keep all eight readable without overlap. Native Windows and KDE fixtures verify selection on release, dead-zone
-cancellation and pause/resume while held. Rapid Escape cancellation on Windows
-has a known intermittent failure; see PARITY.md.
+cancellation and pause/resume while held. Windows tests also cover rapid Escape
+and focus-loss cancellation; see [PARITY.md](PARITY.md) for the evidence and remaining coverage.
 
 
 ## Importing the original INIs
@@ -191,20 +204,6 @@ Unsupported shared actions (including move-and-center), compound AHK match
 expressions and unrecognized key syntax remain visible with the original
 settings and an explanation. They are not silently converted. Full migration
 parity still depends on the remaining action and packaged-launch features.
-
-
-## Current preview artifacts (2026-10-25)
-
-The current feature-branch builds are available locally after validation:
-
-- Windows x64 NSIS: `src-tauri/target/release/bundle/nsis/Window Warp_0.1.0_x64-setup.exe`
-- Ubuntu 24.04 amd64 Debian package, requiring `kwin-common (= 4:5.27.11-0ubuntu3)`: `src-tauri/target/release/bundle/deb/Window Warp_0.1.0_amd64.deb`
-
-Their embedded executables and package metadata were inspected without installing
-them. The preview includes the recent terminal, Firefox, tiling and gesture
-changes. Tray handlers and graceful shutdown pass on Windows and Plasma5.27. Full parity,
-installer behavior and full Plasma6 application behavior remain under validation; see PARITY.md,
-including X11 gestures, physical-display/login coverage and installer execution.
 
 
 Terminal restoration checks fresh shell/profile/distribution identity while
