@@ -60,7 +60,7 @@ async function snapshotRequest(action, options) {
         settings.clientId = crypto.randomUUID();
         await api.storage.local.set({clientId:settings.clientId});
     }
-    const open = ["poll", "status", "disconnect", "set-live", "create-workspace", "open-workspaces"].includes(action) ? [] : await api.windows.getAll({populate:true, windowTypes:["normal"]});
+    const open = ["poll", "status", "disconnect", "set-live", "create-workspace", "open-workspaces", "focus-result"].includes(action) ? [] : await api.windows.getAll({populate:true, windowTypes:["normal"]});
     const windows = open.filter(window => !window.incognito && !closingWindows.has(window.id)).map(window => {
         const tabs = (window.tabs || []).filter(tab => typeof tab.url === "string" && tab.url.length > 0);
         return {id:window.id, title:tabs.find(tab=>tab.active)?.title || "", x:window.left, y:window.top, width:window.width, height:window.height,
@@ -68,12 +68,28 @@ async function snapshotRequest(action, options) {
     }).filter(window => window.tabs.length > 0);
     try {
         const response = await fetch(`http://127.0.0.1:${port}/bridge`, {method:"POST", headers:{"Content-Type":"text/plain"},
-            body:JSON.stringify({token, action, clientId:settings.clientId, installationId:await managedInstallation(), browser:firefox ? "firefox" : "chromium", profilePath:open.length ? settings.profilePath || "" : "", profileName:open.length ? settings.profileName || "" : "", windows, ...options})});
+            body:JSON.stringify({token, action, clientId:settings.clientId, installationId:await managedInstallation(), browser:firefox ? "firefox" : "chromium", supportsFocus:true, profilePath:open.length ? settings.profilePath || "" : "", profileName:open.length ? settings.profileName || "" : "", windows, ...options})});
         const result = await response.json();
         if (["poll", "status"].includes(action) && !result.error) liveEnabled = !!result.live && !!settings.liveSharing;
         if (action === "status" && result.extensionVersion && api.runtime.getManifest) result.updatePending = newerVersion(result.extensionVersion, api.runtime.getManifest().version);
         return result;
     } catch { return {error:"Cannot reach Window Warp. Open the app and check the pairing code."}; }
+}
+
+async function focusRequestedTab(command) {
+    let success = false;
+    try {
+        const windows = await api.windows.getAll({populate:true, windowTypes:["normal"]});
+        const window = windows.find(item => item.id === command.windowId && !item.incognito && !closingWindows.has(item.id));
+        const tabs = (window?.tabs || []).filter(tab => typeof tab.url === "string" && tab.url.length > 0);
+        if (Array.isArray(command.expectedUrls) && tabs.length === command.expectedUrls.length
+            && tabs.every((tab, index) => tab.url === command.expectedUrls[index])
+            && Number.isInteger(command.tabIndex) && tabs[command.tabIndex]?.id != null) {
+            await api.tabs.update(tabs[command.tabIndex].id, {active:true});
+            success = true;
+        }
+    } catch { /* The browser window or tab may have closed. */ }
+    await snapshot("focus-result", {requestId:command.id, name:success ? "ok" : "failed"});
 }
 
 async function sendLiveSnapshot() {
@@ -108,6 +124,7 @@ function poll() {
                         const result = await snapshot("snapshot", {requestId:status.requestId});
                         if (!result.error) lastRequest = status.requestId;
                     } else if (!status.error && liveEnabled && (!wasLive || settings.liveError)) await sendLiveSnapshot();
+                    if (!status.error && Array.isArray(status.focusCommands)) for (const command of status.focusCommands) await focusRequestedTab(command);
                     if (!status.error) await reloadUpdatedExtension(status);
                 } else liveEnabled = false;
             } while (pollAgain);

@@ -605,9 +605,18 @@ impl Browser {
             Ok(Vec::new())
         }
     }
-    /// Open the selected Firefox tab first so it is active in the new window.
-    pub fn launch_commands(&self, base: &LaunchSpec) -> Result<Vec<LaunchSpec>, String> {
+    /// Preserve tab order when an extension can select the active tab later.
+    pub fn launch_commands(
+        &self,
+        base: &LaunchSpec,
+        preserve_order: bool,
+    ) -> Result<Vec<LaunchSpec>, String> {
         self.validate()?;
+        let mut urls: Vec<_> = self.tabs.iter().map(|tab| tab.url.clone()).collect();
+        if !preserve_order && !urls.is_empty() {
+            let active = urls.remove(self.active_tab.saturating_sub(1));
+            urls.insert(0, active);
+        }
         if self.kind == BrowserKind::Chromium {
             if base.kind != crate::workspaces::LaunchKind::Executable {
                 return Err("Browser tab restoration requires an executable launch.".into());
@@ -639,9 +648,7 @@ impl Browser {
             if self.tabs.is_empty() {
                 command.args.push("about:blank".into());
             } else {
-                command
-                    .args
-                    .extend(self.tabs.iter().map(|tab| tab.url.clone()));
+                command.args.extend(urls);
             }
             return Ok(vec![command]);
         }
@@ -652,12 +659,6 @@ impl Browser {
         // Firefox opens two or more positional URLs together in one new
         // window, even when this profile is already running. Supplying
         // --new-tab separately targets whichever window has focus instead.
-        let mut urls: Vec<_> = self.tabs.iter().map(|tab| tab.url.clone()).collect();
-        if !urls.is_empty() {
-            let selected = self.active_tab.saturating_sub(1);
-            let active = urls.remove(selected);
-            urls.insert(0, active);
-        }
         let mut command = base.clone();
         command.args.extend(profile_args);
         if urls.len() <= 1 {
@@ -1060,10 +1061,13 @@ mod tests {
             ..Default::default()
         };
         let commands = browser
-            .launch_commands(&LaunchSpec {
-                program: "chrome".into(),
-                ..Default::default()
-            })
+            .launch_commands(
+                &LaunchSpec {
+                    program: "chrome".into(),
+                    ..Default::default()
+                },
+                true,
+            )
             .unwrap();
         assert_eq!(commands.len(), 1);
         assert_eq!(
@@ -1075,6 +1079,13 @@ mod tests {
                 "https://one.test/?q=two%20words".into(),
                 "https://two.test/".into()
             ]
+        );
+        let fallback = browser
+            .launch_commands(&LaunchSpec::default(), false)
+            .unwrap();
+        assert_eq!(
+            &fallback[0].args[fallback[0].args.len() - 2..],
+            ["https://two.test/", "https://one.test/?q=two%20words"]
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -1101,10 +1112,13 @@ mod tests {
             active_tab: 1,
         };
         let commands = browser
-            .launch_commands(&LaunchSpec {
-                program: "firefox".into(),
-                ..Default::default()
-            })
+            .launch_commands(
+                &LaunchSpec {
+                    program: "firefox".into(),
+                    ..Default::default()
+                },
+                false,
+            )
             .unwrap();
         assert_eq!(commands.len(), 1);
         assert_eq!(
@@ -1121,7 +1135,7 @@ mod tests {
         let mut other_selection = browser.clone();
         other_selection.active_tab = 2;
         let command = other_selection
-            .launch_commands(&LaunchSpec::default())
+            .launch_commands(&LaunchSpec::default(), false)
             .unwrap()
             .remove(0);
         assert_eq!(
@@ -1132,10 +1146,22 @@ mod tests {
                 "https://c.test/"
             ]
         );
+        let preserved = other_selection
+            .launch_commands(&LaunchSpec::default(), true)
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            preserved.args[2..],
+            [
+                "https://a.test/?q=one two",
+                "https://b.test/$literal",
+                "https://c.test/"
+            ]
+        );
         other_selection.tabs.truncate(1);
         other_selection.active_tab = 1;
         let command = other_selection
-            .launch_commands(&LaunchSpec::default())
+            .launch_commands(&LaunchSpec::default(), false)
             .unwrap()
             .remove(0);
         assert_eq!(

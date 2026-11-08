@@ -9,15 +9,15 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 function event() { return {listeners:[],addListener(fn){this.listeners.push(fn);}}; }
 async function fixture(firefox = false, {installType = "development", version = "0.1.1", marker = "fixture-installation"} = {}) {
     const data = {enabled:true,pairing:"43210:0123456789abcdef0123456789abcdef",profilePath:"/profiles/work",profileName:"Work",clientId:"fixture"};
-    const calls = [], timers = new Map(); let nextTimer = 0, windowReads = 0, reloads = 0, alarm = null, pollBlock = null;
+    const calls = [], activated = [], timers = new Map(); let nextTimer = 0, windowReads = 0, reloads = 0, alarm = null, pollBlock = null;
     const server = {live:false,requestId:""};
     const api = {
         storage:{local:{async get(){return {...data};},async set(values){Object.assign(data,values);}},onChanged:event()},
         windows:{async getAll(){windowReads++; return [
-            {id:7,incognito:false,left:10,top:20,width:800,height:600,tabs:[{active:true,url:"https://one.test/",title:"One"},{active:false,url:"https://two.test/",title:"Two"}]},
-            {id:8,incognito:true,tabs:[{active:true,url:"https://private.test/",title:"Private"}]}
+            {id:7,incognito:false,left:10,top:20,width:800,height:600,tabs:[{id:71,active:true,url:"https://one.test/",title:"One"},{id:72,active:false,url:"https://two.test/",title:"Two"}]},
+            {id:8,incognito:true,tabs:[{id:81,active:true,url:"https://private.test/",title:"Private"}]}
         ];},onRemoved:event(),onFocusChanged:event()},
-        tabs:{onCreated:event(),onRemoved:event(),onUpdated:event(),onActivated:event()},
+        tabs:{async update(id,options){activated.push({id,options});},onCreated:event(),onRemoved:event(),onUpdated:event(),onActivated:event()},
         runtime:{getURL:part=>(firefox ? "moz-extension://fixture/" : "chrome-extension://fixture/") + part,getManifest:()=>({version}),reload:()=>{reloads++;},onStartup:event(),onInstalled:event(),onMessage:event()},
         management:{async getSelf(){return {installType};}},
         alarms:{async create(name,options){alarm={name,...options};},async get(){return alarm;},async clear(){alarm=null;return true;},onAlarm:event()}
@@ -33,7 +33,23 @@ async function fixture(firefox = false, {installType = "development", version = 
     await tick();
     const send = (action,options) => new Promise(resolve => api.runtime.onMessage.listeners[0]({action,options},null,resolve));
     const runTimer = async () => {const [id,fn]=timers.entries().next().value; timers.delete(id); await fn(); await tick();};
-    return {api,data,calls,server,send,runTimer,clearTimers(){timers.clear();},blockPoll(){let release;const promise=new Promise(resolve=>{release=resolve;});pollBlock={promise,release};},releasePoll(){const blocked=pollBlock;pollBlock=null;blocked.release();},get alarm(){return alarm;},get windowReads(){return windowReads;},get reloads(){return reloads;}};
+    return {api,data,calls,activated,server,send,runTimer,clearTimers(){timers.clear();},blockPoll(){let release;const promise=new Promise(resolve=>{release=resolve;});pollBlock={promise,release};},releasePoll(){const blocked=pollBlock;pollBlock=null;blocked.release();},get alarm(){return alarm;},get windowReads(){return windowReads;},get reloads(){return reloads;}};
+}
+for (const firefox of [false,true]) {
+    test(`${firefox ? "Firefox" : "Chromium"} selects only the requested matching browser tab`, async () => {
+        const e=await fixture(firefox);
+        e.server.focusCommands=[{id:"focus-one",windowId:7,tabIndex:1,expectedUrls:["https://one.test/","https://two.test/"]}];
+        await e.api.alarms.onAlarm.listeners[0]({name:"connection"});
+        assert.equal(e.activated.length,1);
+        assert.equal(e.activated[0].id,72);
+        assert.equal(e.activated[0].options.active,true);
+        assert.equal(e.calls.find(call=>call.body.action==='focus-result').body.name,'ok');
+        assert.equal(e.calls.find(call=>call.body.action==='poll').body.supportsFocus,true);
+        e.server.focusCommands=[{id:"focus-stale",windowId:7,tabIndex:1,expectedUrls:["https://changed.test/","https://two.test/"]},{id:"focus-private",windowId:8,tabIndex:0,expectedUrls:["https://private.test/"]}];
+        await e.api.alarms.onAlarm.listeners[0]({name:"connection"});
+        assert.equal(e.activated.length,1,"changed and private windows must not be changed");
+        assert.deepEqual(e.calls.filter(call=>call.body.action==='focus-result').slice(-2).map(call=>call.body.name),['failed','failed']);
+    });
 }
 test("Firefox alarm wakes an idle extension for an on-demand tab request", async () => {
     const e=await fixture(true);
