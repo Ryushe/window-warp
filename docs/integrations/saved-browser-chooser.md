@@ -5,7 +5,7 @@
 - **Branch:** `codex/saved-browser-chooser`
 - **Base:** `bc39c74f86af0798795af78dc8dbebbb238e9ec2`
 - **Intended integration target:** `refs/heads/codex/release-0.1.7-candidate` in `desktop/src-tauri/target/window-warp-release-cache.git`
-- **Latest immutable checkpoint:** recorded after the implementation commit
+- **Latest immutable checkpoint:** `3ea1afb47dfc57a0cacad773a605b84553c2594a`
 - **Last updated:** 2026-11-07
 
 ## Intent and contract
@@ -42,5 +42,5 @@ when deciding how to activate the new binary. No package publication is requeste
 ## Resume point
 
 - **Owning feature ref:** `refs/heads/codex/saved-browser-chooser`
-- **Latest checkpoint:** recorded after implementation commit
+- **Latest checkpoint:** `3ea1afb47dfc57a0cacad773a605b84553c2594a`
 - **Next action:** merge the reviewed change and build the updated preview.
