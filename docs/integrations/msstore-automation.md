@@ -8,7 +8,7 @@
   checkpoint `bffd59af4fb2605b32c1df59921cf503fbb1b702`
 - **Final integration target:** `refs/heads/main`, fetched at
   `16d8b97da718de47cc78749602b89c95095709b7`
-- **Implementation checkpoint:** pending
+- **Implementation checkpoint:** `409da7ac798ce32243c3b75a4014ddc4965f483a`
 
 ## Intent and contract
 
@@ -48,4 +48,6 @@ not atomic with concurrent manual Partner Center changes.
 Keep the feature ref and this dossier until the release candidate is reconciled,
 reviewed, integrated, and the manual Store check succeeds. Retire the dossier
 from the integration target after acceptance. A successful manual check proves
-access, not Store certification or installation and upgrade behavior.
+access, not Store certification or installation and upgrade behavior. Resume
+by reconciling the parent release candidate with the fetched `main`, then
+integrate this feature and repeat the checks on the integrated tree.
