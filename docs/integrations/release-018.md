@@ -1,14 +1,14 @@
 # Window Warp 0.1.8 integration dossier
 
-- **Status:** feature
+- **Status:** review-ready
 - **Owner:** Codex
 - **Branch:** `codex/release-0.1.8`
 - **Base commit:** `a7d45554a8bac37b2fd452b0c3f141e77c26834f`
 - **Intended integration target:** `codex/desktop-shortcut-ux`, then `main` for release
 - **Last updated:** 2026-11-08
 - **Owning feature branch/ref:** `codex/release-0.1.8`
-- **Latest immutable recovery checkpoint:** none yet
-- **Feature implementation commit(s):** none yet
+- **Latest immutable recovery checkpoint:** `9ba34d0` on `codex/release-0.1.8`
+- **Feature implementation commit(s):** `9ba34d0`
 - **Inspiration / canonical references:** user's request to align the desktop release with both 0.1.8 browser extensions; `release.md`.
 
 ## Intent and implemented contract
@@ -22,7 +22,10 @@ rewrite the already published 0.1.7 tag or replace an existing Store submission.
 - Windows: JavaScript suite (364 tests), syntax checks, `cargo fmt --check`,
   Rust suite (184 passed, 9 ignored), and Store guard tests passed. Desktop,
   lockfile, Tauri, MSIX, and both extension versions were checked together.
-- Package checks and independent review: pending.
+- Independent review found no actionable issues; the reviewer also ran 47
+  Firefox-release/extension tests and all nine Store guard tests. The KDE asset
+  must be uploaded with the exact distro-qualified name documented in README.
+- Package checks: pending.
 - The 0.1.7 Store workflow committed the MSIX submission and last reported
   preprocessing. Microsoft flagged `runFullTrust` as requiring approval.
 
@@ -39,9 +42,9 @@ rewrite the already published 0.1.7 tag or replace an existing Store submission.
 
 ## Interruption / resume handoff
 
-- **Latest immutable recovery checkpoint:** none yet.
-- **Exact resume point:** independently review the version diff, then build and
-  verify the release packages and reconcile the Store submission state.
+- **Latest immutable recovery checkpoint:** `9ba34d0` on the feature branch.
+- **Exact resume point:** build and verify the release packages, integrate the
+  reviewed version alignment, and reconcile the Store submission state.
 - **Working-tree state at handoff:** feature changes in progress.
 
 ## Decision gates
@@ -52,4 +55,4 @@ rewrite the already published 0.1.7 tag or replace an existing Store submission.
 
 ## Decision record
 
-- 2026-11-08 — created for the requested 0.1.8 alignment.
+- 2026-11-08 — created and independently reviewed for 0.1.8 alignment.
