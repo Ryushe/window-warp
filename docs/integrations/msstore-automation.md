@@ -36,23 +36,27 @@ release whose tag contains this workflow can trigger it before a merge to
   submission, and the manual account check never submitted.
 - The parent 0.1.7 candidate passed `npm run check` and all 336 JavaScript
   tests. Its local Firefox mock requires loopback access outside the sandbox.
-- The GitHub-hosted build and live Store access cannot be tested until the
-  workflow and the user's Partner Center credentials are available.
-- A temporary push trigger on this feature branch runs only the read-only Store
-  account check. Remove that trigger after checking the newly supplied secrets.
+- The existing GitHub desktop checks passed on Windows and Ubuntu for feature
+  checkpoint `ec67d580e63e7c59377ac4ac30ca3389d17f6e04`:
+  `https://github.com/Ryushe/window-warp/actions/runs/42428031052`.
+- A temporary push trigger ran the read-only Store check on feature checkpoint
+  `187db65b6da2b7f9c1f471dd306520a8afbc4f80`. Authentication and MSIX identity
+  verification passed; the Store submission step was skipped:
+  `https://github.com/Ryushe/window-warp/actions/runs/42434835778`.
+  The temporary push trigger has been removed. The Store release workflow's
+  package build and actual Store submission remain unverified on GitHub.
 - The parent release candidate and fetched `main` have known conflicts. Preserve
   both histories and resolve those conflicts before enabling the workflow on
   `main`; do not reset or stage the user's shared checkout.
-- Configure the Entra application and Actions secrets described in `release.md`,
-  then run the workflow manually to verify the account and identity without
-  submitting. Publishing also requires an existing published Store listing and
-  no pending Partner Center submission.
+- The user configured the Entra application and Actions secrets described in
+  `release.md`; the read-only check succeeded. Publishing also requires an
+  existing published Store listing and no pending Partner Center submission.
 
 ## Handoff
 
 Keep the feature ref and this dossier until the release candidate is reconciled,
-reviewed, integrated, and the manual Store check succeeds. Retire the dossier
-from the integration target after acceptance. A successful manual check proves
+reviewed, and integrated. Retire the dossier from the integration target after
+acceptance. A successful read-only check proves
 access, not Store certification or installation and upgrade behavior. Resume
 by reconciling the parent release candidate with the fetched `main`, then
 integrate this feature and repeat the checks on the integrated tree.

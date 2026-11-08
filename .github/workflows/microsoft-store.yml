@@ -4,9 +4,6 @@ on:
   release:
     types: [published]
   workflow_dispatch:
-  push:
-    branches: [codex/msstore-automation]
-    paths: [.github/workflows/microsoft-store.yml]
 
 permissions:
   contents: read
@@ -17,7 +14,7 @@ concurrency:
 
 jobs:
   store:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || !github.event.release.prerelease }}
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
     runs-on: windows-latest
     defaults:
       run:
@@ -113,7 +110,7 @@ jobs:
             --clientId $env:MSSTORE_CLIENT --clientSecret $env:MSSTORE_SECRET
           if ($LASTEXITCODE -ne 0) { throw 'Microsoft Store credential configuration failed.' }
       - name: Verify Store account without publishing
-        if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+        if: github.event_name == 'workflow_dispatch'
         run: ./desktop/scripts/check-msstore.ps1 -ProductId $env:MSSTORE_PRODUCT_ID -AllowPending
       - name: Submit the Store update
         if: github.event_name == 'release'
