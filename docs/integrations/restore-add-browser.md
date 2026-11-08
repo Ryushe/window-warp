@@ -5,7 +5,7 @@
 - **Branch:** `codex/restore-add-browser`
 - **Base:** `608f9650f6b4820e2884114ffb805518c3d6a43f`
 - **Target:** `refs/heads/codex/release-0.1.7-candidate` in the existing release cache
-- **Latest immutable checkpoint:** recorded after implementation commit
+- **Latest immutable checkpoint:** `e4457dc258e3013ae1e4d977b65e87f781057bff`
 - **Last updated:** 2026-11-07
 
 ## Intent and contract
@@ -34,5 +34,5 @@ changes. No release or publication is requested.
 ## Resume point
 
 - **Owning feature ref:** `refs/heads/codex/restore-add-browser`
-- **Latest checkpoint:** recorded after implementation commit
+- **Latest checkpoint:** `e4457dc258e3013ae1e4d977b65e87f781057bff`
 - **Next action:** merge the reviewed change and refresh the preview.
