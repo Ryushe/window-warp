@@ -121,8 +121,10 @@ This check is not atomic with publishing, so do not create a Partner Center
 draft while the Store workflow is running. Microsoft documents this behavior in
 its [MSIX CLI reference](https://learn.microsoft.com/en-us/windows/apps/publish/msstore-dev-cli/publish-command).
 Run `desktop/tests/windows/check-msstore.ps1` to exercise the read-only checks
-without credentials. The Store workflow is not active until it is integrated
-and the account setup and a manual check have succeeded.
+without credentials. GitHub can run the release workflow from a tagged commit
+that contains it even before that commit is merged into `main`; do not publish
+a stable tag from this branch before integration and account checks. The manual
+Actions run is available after the workflow exists on the default branch.
 
 Script index: `desktop/scripts/check-msstore.ps1` checks the Store account,
 package identity, and existing submission without modifying Partner Center.

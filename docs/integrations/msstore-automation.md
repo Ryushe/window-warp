@@ -1,9 +1,10 @@
 # Microsoft Store automation integration dossier
 
-- **Status:** locally prepared; not activated
+- **Status:** published on a feature branch; not integrated into `main`
 - **Owner:** Codex
 - **Feature ref:** `refs/heads/codex/msstore-automation` in
   `desktop/src-tauri/target/window-warp-release-cache.git`
+- **Remote feature ref:** `origin/codex/msstore-automation`
 - **Parent and merge-back target:** `refs/heads/codex/release-0.1.7-candidate`,
   checkpoint `bffd59af4fb2605b32c1df59921cf503fbb1b702`
 - **Final integration target:** `refs/heads/main`, fetched at
@@ -18,7 +19,9 @@ credentials and identity without submitting anything. Store credentials are
 repository secrets; the optional Firefox listing URL is an Actions variable.
 The workflow checks for a pending Partner Center submission before publishing
 because the Microsoft CLI otherwise replaces it. The API check and publish are
-not atomic with concurrent manual Partner Center changes.
+not atomic with concurrent manual Partner Center changes. A stable GitHub
+release whose tag contains this workflow can trigger it before a merge to
+`main`; the manual Actions run requires the workflow on the default branch.
 
 ## Evidence and blockers
 
