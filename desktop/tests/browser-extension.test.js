@@ -245,7 +245,7 @@ test("popup can update a newly saved workspace without reading tabs at rest", as
         windows:{async getCurrent(){return {id:7};},async getAll(){windowReads++;return [{id:7,incognito:false,tabs:[{active:true,title:"Example"}]}]; }},
         runtime:{async sendMessage(request){
             calls.push(request);
-            if(request.action==="status") return {workspace:null,hasOwners:true,live:false,profiles:[],workspaces:[{id:"work",name:"Work",items:[{index:0,label:"Browser"}]}]};
+            if(request.action==="status") return {libraryVersion:1,workspace:null,hasOwners:true,live:false,profiles:[],workspaces:[{id:"work",name:"Work",items:[{index:0,label:"Browser"}]}]};
             if(request.action==="sync-current") return {updated:1,destination:"Work"};
             return {};
         }}
@@ -272,7 +272,7 @@ test("sync elsewhere requires a workspace, browser window, and replacement confi
         windows:{async getCurrent(){return {id:7};},async getAll(){return [{id:7,incognito:false,tabs:[{active:true,title:"Research"}]}];}},
         runtime:{async sendMessage(request){
             calls.push(request);
-            if(request.action==="status") return {workspace:"Work",hasOwners:true,live:false,profiles:[],workspaces:[{id:"work",name:"Work",items:[{index:2,label:"Research",revision:"rev"}]}]};
+            if(request.action==="status") return {libraryVersion:1,workspace:"Work",hasOwners:true,live:false,profiles:[],workspaces:[{id:"work",name:"Work",items:[{index:2,label:"Research",revision:"rev"}]}]};
             if(request.action==="update-elsewhere") return {updated:1,destination:"Work"};
             return {};
         }}
@@ -303,7 +303,7 @@ test("a browser can pair and be saved when no workspace exists", async () => {
         windows:{async getCurrent(){return {id:7};},async getAll(){return [{id:7,incognito:false,tabs:[{active:true,url:"https://example.test/",title:"Example"}]}];}},
         runtime:{getURL:part=>`moz-extension://fixture/${part}`,async sendMessage(request){
             calls.push(request);
-            if(request.action==="status") return {workspace:null,destination,live:false,profiles:[],workspaces:[]};
+            if(request.action==="status") return {libraryVersion:1,workspace:null,destination,live:false,profiles:[],workspaces:[]};
             if(request.action==="save-browser") {destination=request.options.name; return {saved:true,destination};}
             return {};
         }}
@@ -334,7 +334,7 @@ test("the popup refreshes its live destination when the background connects it",
     let destination=null;
     const api={storage:{local:{async get(){return {enabled:true,pairing:"1234:token",liveSharing:true};},async set(){}}},
         windows:{async getCurrent(){return {id:7};},async getAll(){return [];}},
-        runtime:{onMessage:{addListener(fn){listeners.push(fn);}},async sendMessage(){return {workspace:null,destination,live:true,profiles:[],workspaces:[]};}}
+        runtime:{onMessage:{addListener(fn){listeners.push(fn);}},async sendMessage(){return {libraryVersion:1,workspace:null,destination,live:true,profiles:[],workspaces:[]};}}
     };
     vm.runInNewContext(popup,{window,document,chrome:api}); await tick(); await tick();
     assert.match(document.querySelector("#workspace").textContent,/No saved destination/);
@@ -350,7 +350,7 @@ test("pairing stays connected when desktop integration or saved data is unavaila
     const api={storage:{local:{async get(){return {...data};},async set(values){Object.assign(data,values);}}},
         windows:{async getCurrent(){return {id:7};},async getAll(){return [];}},
         runtime:{async sendMessage(request){
-            if(request.action==="status") return {workspace:null,live:false,profiles:[],workspaces:[],windowsAvailable:false,storageError:"Saved workspaces could not be read."};
+            if(request.action==="status") return {libraryVersion:1,workspace:null,live:false,profiles:[],workspaces:[],windowsAvailable:false,storageError:"Saved workspaces could not be read."};
             return {};
         }}
     };
@@ -375,7 +375,7 @@ test("updating an existing saved browser elsewhere requires confirmation", async
         windows:{async getCurrent(){return {id:7};},async getAll(){return [{id:7,incognito:false,tabs:[{active:true,url:"https://example.test/",title:"Example"}]}];}},
         runtime:{getURL:part=>`chrome-extension://fixture/${part}`,async sendMessage(request){
             calls.push(request);
-            if(request.action==="status") return {workspace:null,live:false,profiles:[],workspaces:[],savedBrowsers:[{id:"saved",name:"Research",itemRevision:"item-rev"}]};
+            if(request.action==="status") return {libraryVersion:1,workspace:null,live:false,profiles:[],workspaces:[],savedBrowsers:[{id:"saved",name:"Research",itemRevision:"item-rev"}]};
             return {saved:true};
         }}
     };
@@ -404,7 +404,7 @@ test("popup live sharing connects this browser automatically and disconnecting s
             calls.push(request);
             if(request.action==='set-live') { live=request.options.live; return {live}; }
             if(request.action==='disconnect') { live=false; return {disconnected:true}; }
-            if(request.action==='status') return {workspace:'Work',live,profiles:[],workspaces:[]};
+            if(request.action==='status') return {libraryVersion:1,workspace:'Work',live,profiles:[],workspaces:[]};
             return {};
         }}
     };
@@ -449,7 +449,7 @@ async function libraryPopup(overrides = {}) {
         set(value){this.querySelectorAll("option").forEach(item=>item.removeAttribute("selected")); [...this.querySelectorAll("option")].find(item=>item.value===value)?.setAttribute("selected","");}
     });
     const data={enabled:true,pairing:"1234:token",liveSharing:false};
-    const status={destination:"Focus",hasOwners:true,live:false,profiles:[],savedBrowsers:[
+    const status={libraryVersion:1,destination:"Focus",destinationId:"focus",hasOwners:true,live:false,profiles:[],savedBrowsers:[
         {id:"research",name:"Research",tabCount:4,revision:"profile-r",itemRevision:"item-r"},
         {id:"reading",name:"Reading",tabCount:2,revision:"profile-b",itemRevision:"item-b"}
     ],workspaces:[{id:"focus",name:"Focus",windowCount:3,items:[{index:0,label:"First browser",revision:"a"},{index:2,label:"Second browser",revision:"b"}]},{id:"empty",name:"Home",windowCount:1,items:[]}]};
@@ -604,4 +604,31 @@ test("opening a saved browser in a new window reports partial failures", async (
     assert.match(document.querySelector("#status").textContent,/1 window could not open/);
     assert.equal(document.querySelector("#status").classList.contains("error"),true);
     assert.equal(e.reads,0);
+});
+
+test("an older desktop asks for an update and keeps a way to open Window Warp", async () => {
+    let old=true;
+    const e=await libraryPopup({status:(_request,status)=>old ? {live:false,profiles:[],workspaces:[]} : {...status}}), {document}=e;
+    assert.equal(document.querySelector("#connection").checked,true);
+    assert.equal(document.querySelector("#library").hidden,true);
+    assert.equal(document.querySelector("#upgrade-required").hidden,false);
+    assert.match(document.querySelector("#status").textContent,/Update Window Warp/);
+    document.querySelector("#upgrade-open-workspaces").click(); await tick();
+    assert.equal(e.calls.some(call=>call.action==="open-workspaces"),true);
+    old=false; e.api.runtime.onMessage.listeners[0]({event:"warp-live-updated"});
+    await tick(); await tick();
+    assert.equal(document.querySelector("#upgrade-required").hidden,true);
+    assert.equal(document.querySelector("#library").hidden,false);
+});
+
+test("sync sends the destination shown when the user clicked", async () => {
+    const e=await libraryPopup({"sync-current":(_request,status)=>{
+        status.destination="Other"; status.destinationId="other";
+        return {error:"The current sync destination changed. Review it and try again."};
+    }}), {document}=e;
+    document.querySelector("#update").click();
+    for(let i=0;i<5;i++) await tick();
+    assert.deepEqual(JSON.parse(JSON.stringify(e.calls.find(call=>call.action==="sync-current").options)),{windowId:7,expectedDestinationId:"focus"});
+    assert.match(document.querySelector("#status").textContent,/destination changed/);
+    assert.match(document.querySelector("#destination").textContent,/Other/);
 });
