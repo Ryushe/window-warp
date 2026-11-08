@@ -17,7 +17,9 @@ window still had an `Untitled` title; the resulting focus request was omitted
 and the user saw a warning. Reobserve both sides briefly for a newly launched
 window. Continue requiring the same unique window, browser profile, and saved
 URL checks, and retain the warning if the match remains uncertain. Existing
-windows do not receive the launch-specific retry.
+windows do not receive the launch-specific retry. All observations share one
+eight-second budget. The target's native title must stay unchanged across the
+extension snapshot, and cancellation is rechecked under the command-queue lock.
 
 ## Evidence and review
 
@@ -28,7 +30,10 @@ windows do not receive the launch-specific retry.
   as expected. All 49 Windows browser-bridge tests then passed with loopback.
   The regression also verifies that ambiguous windows remain unmatched after
   all retries. A fresh native Chromium run is pending after propagation.
-- Independent review and propagation are pending.
+- Independent review identified the need for a shared time budget and a title
+  stability check. All 49 bridge tests passed again after those changes; the
+  regression covers both a slow observation and a title swap. A final review
+  and propagation remain pending.
 
 ## Blockers and deferred work
 

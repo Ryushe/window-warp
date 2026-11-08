@@ -297,24 +297,30 @@ impl Bridge {
         // Include competing browser windows on other virtual desktops; the
         // extension can report those windows even though restore targets only
         // the current desktop.
+        let observation_deadline = Instant::now() + Duration::from_secs(8);
         let plans = focus_plans_after_launch(
             workspace,
             results,
             &requested,
             &capable,
             cancelled,
+            observation_deadline,
             || {
-                let snapshots = self.capture_focus_snapshots(cancelled);
-                let current = crate::platform::snapshot_for_restore(app).ok()?;
-                Some((current, snapshots))
+                let before = crate::platform::snapshot_for_restore(app).ok()?;
+                let snapshots = self.capture_focus_snapshots_until(cancelled, observation_deadline);
+                let after = crate::platform::snapshot_for_restore(app).ok()?;
+                Some((before, snapshots, after))
             },
-            || std::thread::sleep(Duration::from_millis(250)),
+            std::thread::sleep,
         );
         if cancelled.load(Ordering::Relaxed) {
             return Vec::new();
         }
         let mut waiting = Vec::new();
         if let Ok(mut state) = self.state.lock() {
+            if cancelled.load(Ordering::Relaxed) {
+                return Vec::new();
+            }
             for (index, client, command) in plans {
                 waiting.push((index, client.clone(), command.id.clone()));
                 state.focus_pending.entry(client).or_default().push(command);
@@ -538,7 +544,14 @@ impl Bridge {
         }
     }
     fn capture_focus_snapshots(&self, cancelled: &AtomicBool) -> CapturedSnapshots {
-        let deadline = Instant::now() + Duration::from_secs(8);
+        self.capture_focus_snapshots_until(cancelled, Instant::now() + Duration::from_secs(8))
+    }
+
+    fn capture_focus_snapshots_until(
+        &self,
+        cancelled: &AtomicBool,
+        deadline: Instant,
+    ) -> CapturedSnapshots {
         let _guard = loop {
             if cancelled.load(Ordering::Relaxed) || Instant::now() >= deadline {
                 return CapturedSnapshots::default();
@@ -2965,35 +2978,59 @@ fn focus_plans_after_launch<Observe, Pause>(
     requested: &[usize],
     capable: &HashSet<String>,
     cancelled: &AtomicBool,
+    deadline: Instant,
     mut observe: Observe,
     mut pause: Pause,
 ) -> Vec<(usize, String, FocusCommand)>
 where
-    Observe: FnMut() -> Option<(Vec<crate::workspaces::WindowInfo>, CapturedSnapshots)>,
-    Pause: FnMut(),
+    Observe: FnMut() -> Option<(
+        Vec<crate::workspaces::WindowInfo>,
+        CapturedSnapshots,
+        Vec<crate::workspaces::WindowInfo>,
+    )>,
+    Pause: FnMut(Duration),
 {
     // Newly created browser windows can still be called "Untitled" when the
     // extension has already reported their final tab titles. Reobserve both
     // sides briefly, but keep the same unique-window and profile checks.
     for attempt in 0..3 {
-        if cancelled.load(Ordering::Relaxed) {
+        if cancelled.load(Ordering::Relaxed) || Instant::now() >= deadline {
             return Vec::new();
         }
-        let Some((current, snapshots)) = observe() else {
+        let Some((before, snapshots, after)) = observe() else {
             return Vec::new();
         };
         if cancelled.load(Ordering::Relaxed) {
             return Vec::new();
         }
-        let plans = focus_plans(workspace, results, &current, &snapshots, capable);
+        let mut plans = focus_plans(workspace, results, &after, &snapshots, capable);
+        // A title change during the extension snapshot could otherwise pair
+        // the target with a different browser window that has the same tabs.
+        plans.retain(|(index, _, _)| {
+            let Some((id, pid)) = results
+                .get(*index)
+                .and_then(|result| result.target.as_ref())
+            else {
+                return false;
+            };
+            let old = before
+                .iter()
+                .find(|window| &window.id == id && &window.pid == pid);
+            let new = after
+                .iter()
+                .find(|window| &window.id == id && &window.pid == pid);
+            old.zip(new)
+                .is_some_and(|(old, new)| old.title == new.title)
+        });
         let pending_launch = requested.iter().any(|&index| {
             results.get(index).is_some_and(|result| result.launched)
                 && !plans.iter().any(|(planned, _, _)| *planned == index)
         });
-        if !pending_launch || attempt == 2 {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if !pending_launch || attempt == 2 || remaining.is_zero() {
             return plans;
         }
-        pause();
+        pause(Duration::from_millis(250).min(remaining));
     }
     Vec::new()
 }
@@ -3778,15 +3815,20 @@ mod tests {
             &[0],
             &HashSet::from(["fixture".to_string()]),
             &AtomicBool::new(false),
+            Instant::now() + Duration::from_secs(1),
             || {
                 observations += 1;
                 let mut native = saved.window.clone();
                 if observations == 1 {
                     native.title = "Untitled - Google Chrome".into();
                 }
-                Some((vec![native], CapturedSnapshots(vec![live.clone()])))
+                Some((
+                    vec![native],
+                    CapturedSnapshots(vec![live.clone()]),
+                    vec![saved.window.clone()],
+                ))
             },
-            || pauses.set(pauses.get() + 1),
+            |_| pauses.set(pauses.get() + 1),
         );
         assert_eq!(observations, 2);
         assert_eq!(pauses.get(), 1);
@@ -3802,21 +3844,77 @@ mod tests {
         let mut attempts = 0;
         let plans = focus_plans_after_launch(
             &workspace,
-            &[result],
+            std::slice::from_ref(&result),
             &[0],
             &HashSet::from(["fixture".to_string()]),
             &AtomicBool::new(false),
+            Instant::now() + Duration::from_secs(1),
             || {
                 attempts += 1;
                 Some((
                     vec![saved.window.clone()],
                     CapturedSnapshots(vec![ambiguous.clone()]),
+                    vec![saved.window.clone()],
                 ))
             },
-            || {},
+            |_| {},
         );
         assert!(plans.is_empty());
         assert_eq!(attempts, 3);
+
+        // A slow observation consumes the shared budget and is not retried.
+        let mut slow_attempts = 0;
+        let slow_pauses = std::cell::Cell::new(0);
+        let plans = focus_plans_after_launch(
+            &workspace,
+            std::slice::from_ref(&result),
+            &[0],
+            &HashSet::from(["fixture".to_string()]),
+            &AtomicBool::new(false),
+            Instant::now() + Duration::from_millis(100),
+            || {
+                slow_attempts += 1;
+                std::thread::sleep(Duration::from_millis(150));
+                Some((
+                    vec![saved.window.clone()],
+                    CapturedSnapshots(vec![ambiguous.clone()]),
+                    vec![saved.window.clone()],
+                ))
+            },
+            |_| slow_pauses.set(slow_pauses.get() + 1),
+        );
+        assert!(plans.is_empty());
+        assert_eq!(slow_attempts, 1);
+        assert_eq!(slow_pauses.get(), 0);
+
+        // A title swap during capture must not redirect focus to another window.
+        let mut swapped_live = live.clone();
+        let mut other = swapped_live.windows[0].clone();
+        other.id = 2;
+        other.title = "Second".into();
+        swapped_live.windows.push(other);
+        let original_other = item("other", "Second - Google Chrome", 20).window;
+        let mut after_target = saved.window.clone();
+        after_target.title = "Second - Google Chrome".into();
+        let mut after_other = original_other.clone();
+        after_other.title = saved.window.title.clone();
+        let plans = focus_plans_after_launch(
+            &workspace,
+            &[result],
+            &[0],
+            &HashSet::from(["fixture".to_string()]),
+            &AtomicBool::new(false),
+            Instant::now() + Duration::from_secs(1),
+            || {
+                Some((
+                    vec![saved.window.clone(), original_other.clone()],
+                    CapturedSnapshots(vec![swapped_live.clone()]),
+                    vec![after_target.clone(), after_other.clone()],
+                ))
+            },
+            |_| {},
+        );
+        assert!(plans.is_empty());
     }
 
     #[test]
