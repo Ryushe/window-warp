@@ -7,8 +7,8 @@
 - **Intended integration target:** `refs/heads/codex/release-0.1.7-candidate` in the existing release cache; `refs/heads/main` remains the later release integration target.
 - **Last updated:** 2026-11-07
 - **Owning feature branch/ref:** `refs/heads/codex/workspace-editor-flow` in this isolated checkout
-- **Latest immutable recovery checkpoint:** recorded in the follow-up handoff commit
-- **Feature implementation commit(s):** recorded in the follow-up handoff commit
+- **Latest immutable recovery checkpoint:** `13ae194ea65a8fa75b99bd2e8cb0e7f932a2bb36`
+- **Feature implementation commit(s):** `13ae194ea65a8fa75b99bd2e8cb0e7f932a2bb36`
 - **References:** user-reviewed workspace previews, `AGENTS.md`, `desktop/HOOK-HANDOFF.md`, `desktop/TODO.md`
 
 ## Intent and success criteria
@@ -83,10 +83,10 @@ or silently discard saved URLs.
 ## Interruption / resume handoff
 
 - **Owning feature branch/ref:** `refs/heads/codex/workspace-editor-flow`
-- **Latest immutable recovery checkpoint:** recorded in the follow-up handoff commit
+- **Latest immutable recovery checkpoint:** `13ae194ea65a8fa75b99bd2e8cb0e7f932a2bb36`
 - **Exact resume point:** independent review, paired-browser acceptance, and
   candidate-branch reconciliation.
-- **Working-tree state at handoff:** implementation checkpoint.
+- **Working-tree state at handoff:** implementation checkpoint followed by this dossier-only update.
 
 ## Decision gates
 
