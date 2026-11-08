@@ -297,15 +297,19 @@ impl Bridge {
         // Include competing browser windows on other virtual desktops; the
         // extension can report those windows even though restore targets only
         // the current desktop.
-        let current = match crate::platform::snapshot_for_restore(app) {
-            Ok(current) => current,
-            Err(_) => return requested,
-        };
-        let snapshots = self.capture_focus_snapshots(cancelled);
-        if cancelled.load(Ordering::Relaxed) {
-            return Vec::new();
-        }
-        let plans = focus_plans(workspace, results, &current, &snapshots, &capable);
+        let plans = focus_plans_after_launch(
+            workspace,
+            results,
+            &requested,
+            &capable,
+            cancelled,
+            || {
+                let snapshots = self.capture_focus_snapshots(cancelled);
+                let current = crate::platform::snapshot_for_restore(app).ok()?;
+                Some((current, snapshots))
+            },
+            || std::thread::sleep(Duration::from_millis(250)),
+        );
         if cancelled.load(Ordering::Relaxed) {
             return Vec::new();
         }
@@ -2955,6 +2959,45 @@ fn match_focus_snapshot(items: &[WorkspaceItem], snapshot: &Snapshot) -> Vec<(us
         .collect()
 }
 
+fn focus_plans_after_launch<Observe, Pause>(
+    workspace: &crate::workspaces::Workspace,
+    results: &[RestoreResult],
+    requested: &[usize],
+    capable: &HashSet<String>,
+    cancelled: &AtomicBool,
+    mut observe: Observe,
+    mut pause: Pause,
+) -> Vec<(usize, String, FocusCommand)>
+where
+    Observe: FnMut() -> Option<(Vec<crate::workspaces::WindowInfo>, CapturedSnapshots)>,
+    Pause: FnMut(),
+{
+    // Newly created browser windows can still be called "Untitled" when the
+    // extension has already reported their final tab titles. Reobserve both
+    // sides briefly, but keep the same unique-window and profile checks.
+    for attempt in 0..3 {
+        if cancelled.load(Ordering::Relaxed) {
+            return Vec::new();
+        }
+        let Some((current, snapshots)) = observe() else {
+            return Vec::new();
+        };
+        if cancelled.load(Ordering::Relaxed) {
+            return Vec::new();
+        }
+        let plans = focus_plans(workspace, results, &current, &snapshots, capable);
+        let pending_launch = requested.iter().any(|&index| {
+            results.get(index).is_some_and(|result| result.launched)
+                && !plans.iter().any(|(planned, _, _)| *planned == index)
+        });
+        if !pending_launch || attempt == 2 {
+            return plans;
+        }
+        pause();
+    }
+    Vec::new()
+}
+
 fn focus_plans(
     workspace: &crate::workspaces::Workspace,
     results: &[RestoreResult],
@@ -3690,6 +3733,90 @@ mod tests {
         other_window.id = 2;
         live.windows.push(other_window);
         assert!(match_focus_snapshot(&[target, other], &live).is_empty());
+    }
+
+    #[test]
+    fn focus_waits_for_a_new_browser_window_title_to_settle() {
+        let mut saved = item("native", "Example - Google Chrome", 10);
+        let tabs = vec![
+            Tab {
+                url: "https://example.test/".into(),
+                title: "Example".into(),
+            },
+            Tab {
+                url: "https://second.test/".into(),
+                title: "Second".into(),
+            },
+        ];
+        saved.browser = Some(Browser {
+            kind: BrowserKind::Chromium,
+            tabs: tabs.clone(),
+            active_tab: 2,
+            ..Default::default()
+        });
+        let workspace = crate::workspaces::Workspace {
+            id: "work".into(),
+            name: "Work".into(),
+            platform: std::env::consts::OS.into(),
+            items: vec![saved.clone()],
+        };
+        let result = RestoreResult {
+            label: "Browser".into(),
+            restored: true,
+            launched: true,
+            error: None,
+            warning: None,
+            target: Some((saved.window.id.clone(), saved.window.pid)),
+        };
+        let mut live = snapshot();
+        live.windows[0].tabs = tabs;
+        let mut observations = 0;
+        let pauses = std::cell::Cell::new(0);
+        let plans = focus_plans_after_launch(
+            &workspace,
+            std::slice::from_ref(&result),
+            &[0],
+            &HashSet::from(["fixture".to_string()]),
+            &AtomicBool::new(false),
+            || {
+                observations += 1;
+                let mut native = saved.window.clone();
+                if observations == 1 {
+                    native.title = "Untitled - Google Chrome".into();
+                }
+                Some((vec![native], CapturedSnapshots(vec![live.clone()])))
+            },
+            || pauses.set(pauses.get() + 1),
+        );
+        assert_eq!(observations, 2);
+        assert_eq!(pauses.get(), 1);
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].2.window_id, 1);
+        assert_eq!(plans[0].2.tab_index, 1);
+
+        // Repeated observations must never choose between identical windows.
+        let mut ambiguous = live.clone();
+        let mut other = ambiguous.windows[0].clone();
+        other.id = 2;
+        ambiguous.windows.push(other);
+        let mut attempts = 0;
+        let plans = focus_plans_after_launch(
+            &workspace,
+            &[result],
+            &[0],
+            &HashSet::from(["fixture".to_string()]),
+            &AtomicBool::new(false),
+            || {
+                attempts += 1;
+                Some((
+                    vec![saved.window.clone()],
+                    CapturedSnapshots(vec![ambiguous.clone()]),
+                ))
+            },
+            || {},
+        );
+        assert!(plans.is_empty());
+        assert_eq!(attempts, 3);
     }
 
     #[test]
