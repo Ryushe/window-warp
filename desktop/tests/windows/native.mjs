@@ -1860,7 +1860,8 @@ try {
         await wait("document.querySelector('.saved-browser-card [data-action=add]') !== null",'saved browser');
         await click('.saved-browser-card [data-action=add]');
         await wait("document.querySelector('#saved-browser-destination').open && document.querySelectorAll('#saved-browser-targets input').length === 2",'chooser ready');
-        assert.equal(await evaluate("['new','append','replace'].every(action => document.querySelector('#saved-browser-' + action).disabled)"),true);
+        assert.equal(await evaluate("document.querySelector('#saved-browser-new').disabled"),false);
+        assert.equal(await evaluate("['append','replace'].every(action => document.querySelector('#saved-browser-' + action).disabled)"),true);
         await evaluate("document.querySelectorAll('#saved-browser-targets .saved-browser-target')[1].querySelector('li').click()");
         assert.equal(await evaluate("document.querySelectorAll('#saved-browser-targets input')[1].checked"),true);
         assert.equal(await evaluate("['new','append','replace'].every(action => !document.querySelector('#saved-browser-' + action).disabled)"),true);
