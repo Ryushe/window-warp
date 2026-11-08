@@ -5,7 +5,7 @@
 - **Branch:** `codex/extension-focus-version`
 - **Base:** `d7cd97a9efbe04a2035c6a58e5701e5d6779353d`
 - **Intended integration target:** `refs/heads/codex/release-0.1.7-candidate` in the existing release cache, then the user-requested `refs/heads/codex/desktop-shortcut-ux`
-- **Latest immutable checkpoint:** recorded after implementation commit
+- **Latest immutable checkpoint:** `9bbffc99864be63fbdebc9075987e5b3f2062ccb`
 - **Last updated:** 2026-11-07
 
 ## Intent and contract
@@ -37,5 +37,5 @@ store submission, or installed-app update is requested.
 ## Resume point
 
 - **Owning feature ref:** `refs/heads/codex/extension-focus-version`
-- **Latest checkpoint:** recorded after implementation commit
+- **Latest checkpoint:** `9bbffc99864be63fbdebc9075987e5b3f2062ccb`
 - **Next action:** integrate the manifest version bump and push the user-named branch.
