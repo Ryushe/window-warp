@@ -4465,7 +4465,7 @@ dependencies = [
 
 [[package]]
 name = "window-warp"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "gio",
  "libc",

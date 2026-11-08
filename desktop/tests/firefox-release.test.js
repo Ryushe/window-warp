@@ -10,7 +10,7 @@ import {fileURLToPath} from "node:url";
 import {authorization, ensurePrivacyPolicy, plan, prepare, sourceFingerprint, submissionDecision} from "../scripts/firefox-release.mjs";
 
 const response = (status, body) => ({status, ok:status >= 200 && status < 300, json:async()=>body});
-const args = {id:"window-warp@ryushe.local",version:"0.1.7",fingerprint:"a".repeat(64),apiKey:"test-key",apiSecret:"test-secret"};
+const args = {id:"window-warp@ryushe.local",version:"0.1.8",fingerprint:"a".repeat(64),apiKey:"test-key",apiSecret:"test-secret"};
 const listed = (fingerprint = args.fingerprint, status = "public") => ({channel:"listed",file:{status},approval_notes:`Reviewer notes\n\nWindow Warp source SHA-256: ${fingerprint}`});
 
 test("Firefox release workflow packages for manual submission without uploading", async () => {
