@@ -1695,7 +1695,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
                         click(".saved-browser-card [data-action=add]")
                         wait_for("return !document.querySelector('.saved-browser-popover').hidden && document.querySelectorAll('.saved-browser-popover button').length === 2")
                         click(".saved-browser-popover button:nth-of-type(2)")
-                        wait_for("return document.querySelector('#saved-browser-destination').open && !document.querySelector('#saved-browser-new').disabled")
+                        wait_for("return document.querySelector('#saved-browser-destination').open && document.querySelectorAll('#saved-browser-targets input').length > 0")
 
                     reopen_browser_chooser()
                     click("#saved-browser-targets .saved-browser-target:first-child li")

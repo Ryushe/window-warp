@@ -142,7 +142,8 @@
     function dialogControls() {
         const ready=!!destination?.source && !!destination?.workspace && !destination.busy;
         const selected=ready && destination.selected !== null;
-        newButton.disabled=!ready; appendButton.disabled=!selected; replaceButton.disabled=!selected;
+        newButton.disabled=!ready || (!selected && destination.workspace.items.some(isBrowserItem));
+        appendButton.disabled=!selected; replaceButton.disabled=!selected;
         document.querySelector("#saved-browser-destination-close").disabled=!!destination?.busy;
         cancelButton.disabled=!!destination?.busy;
         targetList.querySelectorAll("input").forEach(input => { input.disabled=!!destination?.busy; });
@@ -223,7 +224,7 @@
     }
     async function applyDestination(mode) {
         const opened=destination;
-        if (!opened || opened.busy || !opened.source || !opened.workspace || (mode !== "new" && !opened.selected)) return;
+        if (!opened || opened.busy || !opened.source || !opened.workspace || (mode === "new" ? newButton.disabled : !opened.selected)) return;
         opened.busy=true; dialogControls();
         try {
             const target=mode === "new" ? null : {index:opened.selected.index,expected:opened.selected.item,mode};
