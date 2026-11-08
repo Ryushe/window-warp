@@ -127,8 +127,9 @@ export WARP_KWIN_PACKAGE_VERSION="$(dpkg-query -W -f='${Version}' kwin-common)"
 bash tests/kde/build.sh
 ```
 
-The package pins `kwin-common` to that SDK version; it is not a universal
-Plasma package. See `tests/kde/README.md` for the SDK, isolated compositor,
+The 0.1.7 package targets Linux Mint 22.2 amd64 with KDE Plasma 5 on Wayland
+and pins `kwin-common` to `4:5.27.11-0ubuntu3`; it is not a universal Plasma
+package. See `tests/kde/README.md` for the SDK, isolated compositor,
 and native GUI tests. Test installation, upgrade, and login behavior on the
 target distribution before publishing.
 

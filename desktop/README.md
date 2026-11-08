@@ -57,14 +57,14 @@ Once a development extension from Window Warp's prepared folder has been loaded 
 On Windows, install [Window Warp from the Microsoft Store](https://apps.microsoft.com/detail/9NVBS6W8RV54?hl=en-us&gl=US&ocid=pdpshare). On KDE, download the Debian package from the [latest GitHub release](https://github.com/Ryushe/window-warp/releases/latest) and install it with:
 
 ```sh
-sudo apt install ./WindowWarp_0.1.7_kubuntu24.04_amd64.deb
+sudo apt install ./WindowWarp_0.1.7_linuxmint22.2_kde5_amd64.deb
 ```
 
 Run the command from the download directory, using the downloaded filename if a
 newer release is available. `apt` installs the package and resolves its
 dependencies; `sudo dpkg -i` also works when those dependencies are installed.
-The Debian package is for Ubuntu/Kubuntu 24.04 amd64, Plasma 5.27.11 on Wayland,
-with KWin `4:5.27.11-0ubuntu3`. Other KWin versions, including Plasma 6, need a
+The Debian package is for Linux Mint 22.2 amd64 with KDE Plasma 5 on Wayland
+and KWin `4:5.27.11-0ubuntu3`. Other KWin versions, including Plasma 6, need a
 matching companion and package build.
 
 - **Turn on:** open Window Warp and click **Enable shortcuts**, or choose
