@@ -399,7 +399,7 @@ export async function testChromium({output,marker,invoke,until,checks,report,eva
         await click('.saved-browser-card [data-action=add]');
         await wait("[...document.querySelectorAll('.saved-browser-popover button')].some(button=>button.textContent==='Two owned browser windows')",'workspace chooser shown',30000);
         await evaluate("[...document.querySelectorAll('.saved-browser-popover button')].find(button=>button.textContent==='Two owned browser windows').click()");
-        await wait("document.querySelector('#saved-browser-destination').open && !document.querySelector('#saved-browser-new').disabled",'browser destination dialog ready',30000);
+        await wait("document.querySelector('#saved-browser-destination').open && document.querySelectorAll('#saved-browser-targets input').length === 2",'browser destination dialog ready',30000);
         assert.equal(await evaluate("document.querySelectorAll('#saved-browser-targets input').length"),2);
         const sourceUrls=await evaluate("[...document.querySelectorAll('#saved-browser-source-content .saved-browser-urls li')].map(item=>item.textContent)");
         await evaluate("document.querySelectorAll('#saved-browser-targets .saved-browser-target')[1].querySelector('li').click()");
@@ -416,7 +416,7 @@ export async function testChromium({output,marker,invoke,until,checks,report,eva
         await click('.saved-browser-card [data-action=add]');
         await wait("[...document.querySelectorAll('.saved-browser-popover button')].some(button=>button.textContent==='Two owned browser windows')",'workspace chooser shown again',30000);
         await evaluate("[...document.querySelectorAll('.saved-browser-popover button')].find(button=>button.textContent==='Two owned browser windows').click()");
-        await wait("document.querySelector('#saved-browser-destination').open && !document.querySelector('#saved-browser-new').disabled",'replacement dialog ready',30000);
+        await wait("document.querySelector('#saved-browser-destination').open && document.querySelectorAll('#saved-browser-targets input').length === 2",'replacement dialog ready',30000);
         const replacementUrls=await evaluate("[...document.querySelectorAll('#saved-browser-source-content .saved-browser-urls li')].map(item=>item.textContent)");
         await evaluate("document.querySelectorAll('#saved-browser-targets input')[0].click()");
         const replaceKey=async()=>{

@@ -103,6 +103,7 @@ test("Ctrl+Shift+A appends to the selected existing browser",async()=>{
 
 test("Ctrl+Shift+N adds a new browser when no target exists",async()=>{
     const e=await fixture([{id:"work",name:"Work",items:[]}]); await e.click("Add to workspace");
+    assert.equal(e.document.querySelector("#saved-browser-new").disabled,false,"an empty workspace can receive its first browser");
     const event=new e.window.Event("keydown",{bubbles:true,cancelable:true});
     for(const [key,value] of Object.entries({key:"N",altKey:false,ctrlKey:true,shiftKey:true,metaKey:false,repeat:false})) Object.defineProperty(event,key,{value});
     e.document.querySelector("#saved-browser-destination").dispatchEvent(event); await tick(); await tick();
@@ -143,6 +144,21 @@ test("clicking anywhere on a browser tile selects it for replacement",async()=>{
     await e.press("#saved-browser-replace");
     const target=e.calls.find(call=>call.command==="add_saved_browser_to_workspace").args.target;
     assert.equal(target.index,1); assert.equal(target.mode,"replace"); assert.equal(target.expected.label,"Second Chrome");
+});
+
+test("adding as a new browser waits for a selection when choices exist",async()=>{
+    const workspace={...defaultWorkspace,items:[...defaultWorkspace.items,item("Second Chrome","chromium","https://second.test/")]};
+    const e=await fixture([workspace]); await e.click("Add to workspace");
+    for (const action of ["new","append","replace"]) assert.equal(e.document.querySelector("#saved-browser-" + action).disabled,true);
+    const shortcut=()=>{const event=new e.window.Event("keydown",{bubbles:true,cancelable:true});
+        for(const [key,value] of Object.entries({key:"N",altKey:false,ctrlKey:true,shiftKey:true,metaKey:false,repeat:false})) Object.defineProperty(event,key,{value});
+        e.document.querySelector("#saved-browser-destination").dispatchEvent(event); return event;};
+    shortcut(); await tick();
+    assert.equal(e.calls.some(call=>call.command==="add_saved_browser_to_workspace"),false);
+    e.document.querySelector("#saved-browser-targets .saved-browser-target li").click();
+    for (const action of ["new","append","replace"]) assert.equal(e.document.querySelector("#saved-browser-" + action).disabled,false);
+    assert.equal(shortcut().defaultPrevented,true); await tick(); await tick();
+    assert.equal(e.calls.find(call=>call.command==="add_saved_browser_to_workspace").args.target,null);
 });
 
 test("Cancel closes the chooser without changing the workspace",async()=>{
