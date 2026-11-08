@@ -5,7 +5,7 @@ const message = async (action, options = {}) => {
     catch { return {error:"The extension could not reach its background process."}; }
 };
 let workspaces = [], savedBrowsers = [], currentStatus = {}, activeTab = "saved", settingsOpen = false;
-let chooserMode = "elsewhere", pendingChoice = null, renaming = null, pendingLive = false, chooserBusy = false, syncBusy = false, statusSequence = 0;
+let chooserMode = "elsewhere", pendingChoice = null, renaming = null, pendingLive = false, chooserBusy = false, syncBusy = false, statusSequence = 0, compatible = null;
 const queries = {saved:"", workspaces:""};
 
 function feedback(element, value, {error = false, quiet = false} = {}) {
@@ -96,21 +96,29 @@ async function showStatus() {
     const result = await message("status", {windowId:await currentWindowId()});
     if (sequence !== statusSequence) return true;
     if (result?.error) { currentStatus = {}; setStatus(result.error, {error:true}); $("#update").disabled = true; return false; }
-    currentStatus = result;
-    workspaces = result.workspaces || []; savedBrowsers = result.savedBrowsers || [];
     const settings = await api.storage.local.get(["liveSharing", "liveError", "profilePath"]);
     if (sequence !== statusSequence) return true;
+    currentStatus = result;
+    workspaces = result.workspaces || []; savedBrowsers = result.savedBrowsers || [];
     $("#live").checked = !!result.live && !!settings.liveSharing;
     $("#live-label").textContent = `Live updates: ${$("#live").checked ? "On" : "Off"}`;
+    const chosen = settings.profilePath || "", profile = $("#profile"); profile.replaceChildren(); profile.append(option("", "Detect automatically"));
+    for (const item of result.profiles || []) profile.append(option(item.path, item.name));
+    profile.value = [...profile.options].some(item => item.value === chosen) ? chosen : "";
+    if (!Number.isInteger(result.libraryVersion) || result.libraryVersion < 1) {
+        compatible = false; showView("none"); $("#upgrade-required").hidden = false; $("#update").disabled = true;
+        setStatus("Update Window Warp to use the new saved tabs and workspace controls.", {error:true});
+        return true;
+    }
+    $("#upgrade-required").hidden = true;
+    if (compatible === false) showView("library");
+    compatible = true;
     $("#workspace").textContent = result.destination || "No saved destination yet";
     $("#sharing").textContent = $("#live").checked ? "Live tab changes are saved to the linked destination." : "Tabs are shared only when requested.";
     const destination = $("#destination"); destination.replaceChildren();
     const known = result.destination || (result.hasOwners ? "Detected when you sync" : "No current sync destination");
     destination.append(option("current", known), option("change", "Choose current sync destination…"));
     $("#update").disabled = syncBusy || result.windowsAvailable === false || !(result.destination || result.hasOwners);
-    const chosen = settings.profilePath || "", profile = $("#profile"); profile.replaceChildren(); profile.append(option("", "Detect automatically"));
-    for (const item of result.profiles || []) profile.append(option(item.path, item.name));
-    profile.value = [...profile.options].some(item => item.value === chosen) ? chosen : "";
     const firefox = typeof api.runtime.getURL === "function" && api.runtime.getURL("").startsWith("moz-extension:");
     $("#save-profile-hint").hidden = firefox || !!chosen;
     renderList();
@@ -306,11 +314,14 @@ $("#save-browser-form").addEventListener("submit", async event => {
 });
 $("#update").addEventListener("click", async () => {
     if (syncBusy) return;
+    const expectedDestinationId = currentStatus.destinationId;
     syncBusy = true; $("#update").disabled = true;
     try {
         const id = await currentWindowId();
         if (!Number.isInteger(id)) { setStatus("Open a non-private browser window and try again.", {error:true}); return; }
-        const result = await message("sync-current", {windowId:id}); await showStatus();
+        const options = {windowId:id};
+        if (typeof expectedDestinationId === "string") options.expectedDestinationId = expectedDestinationId;
+        const result = await message("sync-current", options); await showStatus();
         if (result?.error) setStatus(result.error, {error:true}); else setStatus(`Synced tabs to ${result.destination}.`);
     } finally { syncBusy = false; $("#update").disabled = currentStatus.windowsAvailable === false || !(currentStatus.destination || currentStatus.hasOwners); }
 });
@@ -339,5 +350,6 @@ $("#rename-form").addEventListener("submit", async event => {
 });
 $("#create-workspace").addEventListener("click", async () => { const result = await message("create-workspace"); setStatus(result?.error || "Continue creating the workspace in Window Warp.", {error:!!result?.error}); });
 $("#open-workspaces").addEventListener("click", async () => { const result = await message("open-workspaces"); setStatus(result?.error || "Opening Workspaces in Window Warp…", {error:!!result?.error}); });
+$("#upgrade-open-workspaces").addEventListener("click", async () => { const result = await message("open-workspaces"); if (result?.error) setStatus(result.error, {error:true}); });
 api.runtime.onMessage?.addListener(event => { if (event?.event === "warp-live-updated") showStatus(); });
 init();
