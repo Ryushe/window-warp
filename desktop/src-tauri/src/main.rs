@@ -733,6 +733,12 @@ async fn restore_destination(
         let active_targets = browser_bridge::workspace_active_targets_here(&app, profile)?;
         let desktop = platform::current_desktop_key(&app).ok();
         let mut results = workspaces::restore(&app, profile, &runtime.cancel_restore, desktop.as_deref(), &active_targets)?;
+        for index in app.state::<browser_bridge::Bridge>().focus_restored_tabs(&app, profile, &results, &runtime.cancel_restore) {
+            if let Some(result) = results.get_mut(index) {
+                let message = "Could not confirm the saved browser tab is selected. Check the browser extension or select it manually.";
+                result.warning = Some(match result.warning.take() { Some(previous) => format!("{previous} {message}"), None => message.into() });
+            }
+        }
         if results.iter().any(|result| result.restored) {
             let remembered = desktop.ok_or_else(|| "The current desktop could not be identified.".to_string()).and_then(|desktop| {
                 if platform::current_desktop_key(&app)? != desktop { return Err("The desktop changed while the workspace was opening.".into()); }

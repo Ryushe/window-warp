@@ -752,7 +752,11 @@ pub fn restore(
                     .map(|w| w.id.clone())
                     .collect();
                 let commands = if let Some(browser) = &item.browser {
-                    browser.launch_commands(&item.launch)?
+                    browser.launch_commands(
+                        &item.launch,
+                        app.state::<crate::browser_bridge::Bridge>()
+                            .supports_tab_focus(browser.kind),
+                    )?
                 } else if let Some(terminal) = &item.terminal {
                     vec![terminal.launch_command(&item.launch)?]
                 } else {
@@ -839,8 +843,7 @@ fn check_restore_desktop(app: &AppHandle, expected: Option<&str>) -> Result<(), 
 }
 
 fn same_browser_tabs(current: &crate::firefox::Browser, saved: &crate::firefox::Browser) -> bool {
-    current.active_tab == saved.active_tab
-        && current.tabs.len() == saved.tabs.len()
+    current.tabs.len() == saved.tabs.len()
         && current
             .tabs
             .iter()

@@ -274,7 +274,9 @@ export async function testFirefox({output,marker,native,invoke,evaluate,wait,cli
         await wait("!document.querySelector('#workspace-editor').hidden","Firefox workspace editor");
         await wait("!document.querySelector('#add-workspace-window').disabled","workspace controls ready");
         assert.equal(await evaluate("document.querySelector('#refresh-workspace-tabs').hidden"),false);
-        assert.equal(await evaluate("document.querySelector('#workspace-add-from-list').textContent"),'Choose from a list');
+        await click('#add-workspace-window');
+        assert.equal(await evaluate("document.querySelector('#workspace-add-from-list').textContent"),'Choose open windows');
+        await click('#add-workspace-window');
         await evaluate("document.querySelector('.workspace-windows-heading').scrollIntoView({block:'center'})");
         await screenshot("firefox-workspace-toolbar.png");
         const reviewed = await evaluate(`(() => {const row=document.querySelector('.workspace-item');return {
