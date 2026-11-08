@@ -170,6 +170,22 @@ test("opening Workspaces sends no browser tabs", async () => {
     const call=e.calls.find(call=>call.body.action==='open-workspaces');
     assert.deepEqual(call.body.windows,[]);
 });
+for (const firefox of [false, true]) {
+    test(`${firefox ? "Firefox" : "Chromium"} opens saved tabs beside the current tab without reading open tabs`, async () => {
+        const e=await fixture(firefox), created=[];
+        e.server.tabs=[{url:"https://one.test/"},{url:"https://bad.test/"},{url:"https://two.test/"}];
+        e.api.windows.get=async id=>({id,type:"normal",incognito:false});
+        e.api.tabs.create=async options=>{ if(options.url.includes("bad")) throw Error("blocked"); created.push(options); };
+        const before=e.windowReads;
+        const result=await e.send("open-saved-in-current",{savedBrowserId:"saved",windowId:7});
+        assert.deepEqual(JSON.parse(JSON.stringify(result)),{opened:2,failed:1});
+        assert.equal(e.windowReads,before,"opening saved tabs does not send the user's existing tabs");
+        assert.deepEqual(created.map(item=>({windowId:item.windowId,active:item.active})),[{windowId:7,active:false},{windowId:7,active:false}]);
+        e.api.windows.get=async id=>({id,type:"normal",incognito:true});
+        assert.match((await e.send("open-saved-in-current",{savedBrowserId:"saved",windowId:7})).error,/non-private/);
+        assert.equal(created.length,2);
+    });
+}
 test("only a managed development extension reloads once for a newer version", async () => {
     const e=await fixture();
     e.server.extensionVersion="0.1.2";
@@ -210,28 +226,24 @@ test("popup can update a newly saved workspace without reading tabs at rest", as
     let windowReads=0;
     const api={
         storage:{local:{async get(){return {enabled:true,pairing:"1234:token"};},async set(){}}},
-        windows:{async getAll(){windowReads++;return [{id:7,incognito:false,tabs:[{active:true,title:"Example"}]}]; }},
+        windows:{async getCurrent(){return {id:7};},async getAll(){windowReads++;return [{id:7,incognito:false,tabs:[{active:true,title:"Example"}]}]; }},
         runtime:{async sendMessage(request){
             calls.push(request);
-            if(request.action==="status") return {workspace:null,live:false,profiles:[],workspaces:[{id:"work",name:"Work",items:[{index:0,label:"Browser"}]}]};
-            if(request.action==="update") return {updated:1,unmatched:0,workspace:"Work"};
+            if(request.action==="status") return {workspace:null,hasOwners:true,live:false,profiles:[],workspaces:[{id:"work",name:"Work",items:[{index:0,label:"Browser"}]}]};
+            if(request.action==="sync-current") return {updated:1,destination:"Work"};
             return {};
         }}
     };
     vm.runInNewContext(popup,{window,document,chrome:api}); await tick();
     assert.equal(windowReads,0);
     assert.equal(document.querySelector("#update").disabled,false);
-    assert.equal(document.querySelector("#manual").hidden,false);
-    assert.notEqual(document.querySelector("#manual").open,true);
     document.querySelector("#update").click(); await tick(); await tick();
-    assert.equal(calls.filter(call=>call.action==="update").length,1);
-    assert.match(document.querySelector("#status").textContent,/Updated 1 browser window in Work/);
-    assert.equal(windowReads,0,"the popup does not inspect tab titles before an explicit manual choice");
-    const manual=document.querySelector("#manual"); manual.open=true; manual.dispatchEvent(new window.Event("toggle")); await tick();
-    assert.equal(windowReads,1);
-    assert.equal(document.querySelector("#use-tabs").disabled,false);
+    assert.equal(calls.filter(call=>call.action==="sync-current").length,1);
+    assert.deepEqual(JSON.parse(JSON.stringify(calls.find(call=>call.action==="sync-current").options)),{windowId:7});
+    assert.match(document.querySelector("#status").textContent,/Synced tabs to Work/);
+    assert.equal(windowReads,0,"the popup leaves tab capture to an explicitly requested background action");
 });
-test("popup offers a manual workspace and window choice after an ambiguous update", async () => {
+test("sync elsewhere requires a workspace, browser window, and replacement confirmation", async () => {
     const html=fs.readFileSync(new URL("../browser-extension/common/popup.html",import.meta.url),"utf8");
     const popup=fs.readFileSync(new URL("../browser-extension/common/popup.js",import.meta.url),"utf8");
     const {window,document}=parseHTML(html), calls=[];
@@ -241,21 +253,25 @@ test("popup offers a manual workspace and window choice after an ambiguous updat
     });
     const api={
         storage:{local:{async get(){return {enabled:true,pairing:"1234:token"};},async set(){}}},
-        windows:{async getAll(){return [{id:7,incognito:false,tabs:[{active:true,title:"Research"}]}];}},
+        windows:{async getCurrent(){return {id:7};},async getAll(){return [{id:7,incognito:false,tabs:[{active:true,title:"Research"}]}];}},
         runtime:{async sendMessage(request){
             calls.push(request);
-            if(request.action==="status") return {workspace:"Work",live:false,profiles:[],workspaces:[{id:"work",name:"Work",items:[{index:2,label:"Research"}]}]};
-            if(request.action==="update") return request.options?.workspaceId ? {updated:1,unmatched:0} : {error:"No window matched automatically."};
+            if(request.action==="status") return {workspace:"Work",hasOwners:true,live:false,profiles:[],workspaces:[{id:"work",name:"Work",items:[{index:2,label:"Research",revision:"rev"}]}]};
+            if(request.action==="update-elsewhere") return {updated:1,destination:"Work"};
             return {};
         }}
     };
     vm.runInNewContext(popup,{window,document,chrome:api}); await tick();
-    document.querySelector("#update").click(); await tick(); await tick();
-    assert.equal(document.querySelector("#manual").hidden,false);
-    document.querySelector("#use-tabs").click(); await tick(); await tick();
-    const manual=calls.find(call=>call.action==="update" && call.options?.workspaceId);
-    assert.deepEqual(JSON.parse(JSON.stringify(manual.options)),{workspaceId:"work",itemIndex:2,windowId:7});
-    assert.match(document.querySelector("#status").textContent,/Updated 1 browser window/);
+    document.querySelector("#sync-elsewhere").click();
+    document.querySelector("#target-destination").value="workspace:work";
+    document.querySelector("#target-destination").dispatchEvent(new window.Event("change"));
+    document.querySelector("#chooser-review").click();
+    assert.equal(document.querySelector("#chooser-confirm").hidden,false);
+    assert.equal(calls.some(call=>call.action==="update-elsewhere"),false);
+    document.querySelector("#chooser-confirm-button").click(); await tick(); await tick();
+    const manual=calls.find(call=>call.action==="update-elsewhere");
+    assert.deepEqual(JSON.parse(JSON.stringify(manual.options)),{workspaceId:"work",itemIndex:2,expectedRevision:"rev",windowId:7});
+    assert.match(document.querySelector("#status").textContent,/Updated Work \/ Research once/);
 });
 
 test("a browser can pair and be saved when no workspace exists", async () => {
@@ -282,11 +298,11 @@ test("a browser can pair and be saved when no workspace exists", async () => {
     assert.equal(data.enabled,true);
     assert.equal(document.querySelector("#connected").hidden,false);
     assert.match(document.querySelector("#workspace").textContent,/No saved destination/);
-    assert.equal(document.querySelector("#update").hidden,true);
+    assert.equal(document.querySelector("#update").disabled,true);
     document.querySelector("#save-browser").click(); await tick(); await tick();
     document.querySelector("#browser-name").value="Research";
     document.querySelector("#save-browser-form").dispatchEvent(new window.Event("submit",{cancelable:true})); await tick(); await tick(); await tick();
-    assert.deepEqual(JSON.parse(JSON.stringify(calls.find(call=>call.action==="save-browser").options)),{name:"Research",windowId:7});
+    assert.deepEqual(JSON.parse(JSON.stringify(calls.find(call=>call.action==="save-browser").options)),{name:"Research",windowId:7,makeCurrent:true});
     assert.equal(document.querySelector("#workspace").textContent,"Research");
     assert.match(document.querySelector("#status").textContent,/Saved Research/);
     document.querySelector("#create-workspace").click(); await tick();
@@ -308,7 +324,7 @@ test("the popup refreshes its live destination when the background connects it",
     assert.match(document.querySelector("#workspace").textContent,/No saved destination/);
     destination="Research"; listeners[0]({event:"warp-live-updated"}); await tick(); await tick();
     assert.equal(document.querySelector("#workspace").textContent,"Research");
-    assert.match(document.querySelector("#sharing").textContent,/saved here/);
+    assert.match(document.querySelector("#sharing").textContent,/linked destination/);
 });
 
 test("pairing stays connected when desktop integration or saved data is unavailable", async () => {
@@ -327,11 +343,11 @@ test("pairing stays connected when desktop integration or saved data is unavaila
     document.querySelector("#connect").click(); await tick(); await tick(); await tick();
     assert.equal(data.enabled,true);
     assert.equal(document.querySelector("#connected").hidden,false);
-    assert.match(document.querySelector("#status").textContent,/Connected.*could not be read/);
-    assert.match(document.querySelector("#sharing").textContent,/can't see open windows/);
+    assert.match(document.querySelector("#status").textContent,/could not be read/);
+    assert.match(document.querySelector("#status").textContent,/cannot see open windows/);
 });
 
-test("updating an existing saved browser requires an explicit replace choice", async () => {
+test("updating an existing saved browser elsewhere requires confirmation", async () => {
     const html=fs.readFileSync(new URL("../browser-extension/common/popup.html",import.meta.url),"utf8");
     const popup=fs.readFileSync(new URL("../browser-extension/common/popup.js",import.meta.url),"utf8");
     const {window,document}=parseHTML(html), calls=[];
@@ -343,23 +359,21 @@ test("updating an existing saved browser requires an explicit replace choice", a
         windows:{async getCurrent(){return {id:7};},async getAll(){return [{id:7,incognito:false,tabs:[{active:true,url:"https://example.test/",title:"Example"}]}];}},
         runtime:{getURL:part=>`chrome-extension://fixture/${part}`,async sendMessage(request){
             calls.push(request);
-            if(request.action==="status") return {workspace:null,live:false,profiles:[],workspaces:[],savedBrowsers:[{id:"saved",name:"Research"}]};
+            if(request.action==="status") return {workspace:null,live:false,profiles:[],workspaces:[],savedBrowsers:[{id:"saved",name:"Research",itemRevision:"item-rev"}]};
             return {saved:true};
         }}
     };
     vm.runInNewContext(popup,{window,document,chrome:api}); await tick(); await tick();
-    document.querySelector("#save-browser").click(); await tick(); await tick();
-    const select=document.querySelector("#save-target"); select.value="saved"; select.dispatchEvent(new window.Event("change"));
-    assert.equal(document.querySelector("#browser-name").value,"Research");
-    const submit=()=>document.querySelector("#save-browser-form").dispatchEvent(new window.Event("submit",{cancelable:true}));
-    submit(); await tick();
-    assert.equal(document.querySelector("#replace-browser-confirmation").hidden,false);
-    assert.equal(calls.some(call=>call.action==="save-browser"),false);
-    document.querySelector("#cancel-replace-browser").click();
-    assert.equal(calls.some(call=>call.action==="save-browser"),false);
-    submit(); document.querySelector("#confirm-replace-browser").click(); await tick(); await tick(); await tick();
-    assert.deepEqual(JSON.parse(JSON.stringify(calls.find(call=>call.action==="save-browser").options)),{name:"Research",windowId:7,savedBrowserId:"saved"});
-    assert.match(document.querySelector("#status").textContent,/Updated Research/);
+    document.querySelector("#sync-elsewhere").click();
+    const select=document.querySelector("#target-destination"); select.value="saved:saved"; select.dispatchEvent(new window.Event("change"));
+    document.querySelector("#chooser-review").click();
+    assert.equal(document.querySelector("#chooser-confirm").hidden,false);
+    assert.equal(calls.some(call=>call.action==="update-elsewhere"),false);
+    document.querySelector("#chooser-back").click();
+    assert.equal(calls.some(call=>call.action==="update-elsewhere"),false);
+    document.querySelector("#chooser-review").click(); document.querySelector("#chooser-confirm-button").click(); await tick(); await tick(); await tick();
+    assert.deepEqual(JSON.parse(JSON.stringify(calls.find(call=>call.action==="update-elsewhere").options)),{savedBrowserId:"saved",expectedRevision:"item-rev",windowId:7});
+    assert.match(document.querySelector("#status").textContent,/Updated Research once/);
 });
 
 test("popup live sharing connects this browser automatically and disconnecting stops it", async () => {
@@ -408,4 +422,170 @@ test("a saved pairing can be corrected when Window Warp cannot be reached", asyn
     assert.equal(document.querySelector('#connected').hidden,true);
     assert.equal(document.querySelector('#pairing').value,'old-code');
     assert.match(document.querySelector('#status').textContent,/Cannot reach/);
+});
+
+async function libraryPopup(overrides = {}) {
+    const html=fs.readFileSync(new URL("../browser-extension/common/popup.html",import.meta.url),"utf8");
+    const source=fs.readFileSync(new URL("../browser-extension/common/popup.js",import.meta.url),"utf8");
+    const {window,document}=parseHTML(html), calls=[];
+    Object.defineProperty(window.HTMLSelectElement.prototype,"value",{configurable:true,
+        get(){return this.querySelector("option[selected]")?.value ?? this.querySelector("option")?.value;},
+        set(value){this.querySelectorAll("option").forEach(item=>item.removeAttribute("selected")); [...this.querySelectorAll("option")].find(item=>item.value===value)?.setAttribute("selected","");}
+    });
+    const data={enabled:true,pairing:"1234:token",liveSharing:false};
+    const status={destination:"Focus",hasOwners:true,live:false,profiles:[],savedBrowsers:[
+        {id:"research",name:"Research",tabCount:4,revision:"profile-r",itemRevision:"item-r"},
+        {id:"reading",name:"Reading",tabCount:2,revision:"profile-b",itemRevision:"item-b"}
+    ],workspaces:[{id:"focus",name:"Focus",windowCount:3,items:[{index:0,label:"First browser",revision:"a"},{index:2,label:"Second browser",revision:"b"}]},{id:"empty",name:"Home",windowCount:1,items:[]}]};
+    let reads=0;
+    const api={storage:{local:{async get(){return {...data};},async set(values){Object.assign(data,values);}}},
+        windows:{async getCurrent(){return {id:7,incognito:false};},async getAll(){reads++;return [{id:7,incognito:false,tabs:[{active:true,url:"https://example.test/",title:"Example"}]}];}},
+        runtime:{getURL:part=>`moz-extension://fixture/${part}`,onMessage:event(),async sendMessage(request){
+            calls.push(request);
+            if (overrides[request.action]) return overrides[request.action](request,status);
+            if (request.action==="status") return {...status};
+            if (request.action==="open-workspace" || request.action==="open-saved-browser") return {operationId:"operation"};
+            if (request.action==="operation-status") return {done:true,opened:1,failed:0};
+            return {saved:true,updated:1,linked:true};
+        }}
+    };
+    vm.runInNewContext(source,{window,document,chrome:api,setTimeout:fn=>{fn();return 1;},Date});
+    await tick(); await tick();
+    return {window,document,api,data,status,calls,get reads(){return reads;}};
+}
+
+test("the extension lists and searches saved browsers and workspaces without capturing tabs", async () => {
+    const e=await libraryPopup(), {document,window}=e;
+    assert.equal(e.reads,0);
+    assert.equal(document.querySelectorAll("#saved-browser-list .library-row").length,2);
+    const search=document.querySelector("#list-search"); search.value="read"; search.dispatchEvent(new window.Event("input"));
+    assert.equal(document.querySelectorAll("#saved-browser-list .library-row").length,1);
+    assert.match(document.querySelector("#saved-browser-list").textContent,/Reading/);
+    document.querySelector("#workspaces-tab").click();
+    assert.equal(document.querySelectorAll("#workspace-list .library-row").length,2,"workspaces without a matching browser can still be opened");
+    assert.equal(document.querySelector("#workspaces-panel").hidden,false);
+    assert.match(document.querySelector("#workspace-list").textContent,/Open workspace/);
+    assert.equal(e.reads,0);
+});
+
+test("saving current tabs can create a browser-only workspace and opt into linking", async () => {
+    const e=await libraryPopup(), {document,window}=e;
+    document.querySelector("#save-browser").click(); await tick(); await tick();
+    document.querySelector("#save-kind").value="workspace";
+    document.querySelector("#save-kind").dispatchEvent(new window.Event("change"));
+    assert.match(document.querySelector("#save-kind-hint").textContent,/this browser window/);
+    document.querySelector("#browser-name").value="Writing"; document.querySelector("#save-link").checked=true;
+    document.querySelector("#save-browser-form").dispatchEvent(new window.Event("submit",{cancelable:true})); await tick(); await tick();
+    assert.deepEqual(JSON.parse(JSON.stringify(e.calls.find(call=>call.action==="save-workspace").options)),{name:"Writing",windowId:7,makeCurrent:true});
+    assert.equal(document.querySelector("#workspaces-panel").hidden,false);
+});
+
+test("renaming uses the displayed revision and preserves an error for a changed record", async () => {
+    const e=await libraryPopup({"rename-saved-browser":()=>({error:"The saved tabs changed. Reopen the chooser."})}), {document,window}=e;
+    document.querySelector("#saved-browser-list .rename-button").click();
+    document.querySelector("#rename-name").value="New name";
+    document.querySelector("#rename-form").dispatchEvent(new window.Event("submit",{cancelable:true})); await tick();
+    assert.deepEqual(JSON.parse(JSON.stringify(e.calls.find(call=>call.action==="rename-saved-browser").options)),{savedBrowserId:"research",name:"New name",expectedRevision:"profile-r"});
+    assert.equal(document.querySelector("#rename-form").hidden,false);
+    assert.match(document.querySelector("#rename-feedback").textContent,/changed/);
+});
+
+test("opening a workspace waits for the background operation without sending tab snapshots", async () => {
+    const e=await libraryPopup(), {document}=e;
+    document.querySelector("#workspaces-tab").click();
+    document.querySelector("#workspace-list .row-actions button").click();
+    for(let i=0;i<5;i++) await tick();
+    assert.deepEqual(JSON.parse(JSON.stringify(e.calls.find(call=>call.action==="open-workspace").options)),{workspaceId:"focus"});
+    assert.deepEqual(JSON.parse(JSON.stringify(e.calls.find(call=>call.action==="operation-status").options)),{operationId:"operation"});
+    assert.match(document.querySelector("#status").textContent,/Opened Focus/);
+    assert.equal(e.reads,0);
+});
+
+test("an ambiguous workspace choice cannot overwrite tabs until a window is selected", async () => {
+    const e=await libraryPopup(), {document,window}=e;
+    document.querySelector("#sync-elsewhere").click();
+    const select=document.querySelector("#target-destination"); select.value="workspace:focus"; select.dispatchEvent(new window.Event("change"));
+    document.querySelector("#chooser-review").click();
+    assert.match(document.querySelector("#chooser-feedback").textContent,/Choose a destination and browser window/);
+    assert.equal(e.calls.some(call=>call.action==="update-elsewhere"),false);
+    document.querySelector("#target-item").value="2"; document.querySelector("#chooser-review").click();
+    assert.match(document.querySelector("#chooser-confirm-text").textContent,/one-time update/);
+    document.querySelector("#chooser-confirm-button").click(); for(let i=0;i<4;i++) await tick();
+    assert.deepEqual(JSON.parse(JSON.stringify(e.calls.find(call=>call.action==="update-elsewhere").options)),{workspaceId:"focus",itemIndex:2,expectedRevision:"b",windowId:7});
+    assert.match(document.querySelector("#status").textContent,/current sync destination stays the same/);
+});
+
+test("a separate extension popup uses the sole normal window without guessing among several", async () => {
+    const e=await libraryPopup(), {document}=e;
+    e.api.windows.getCurrent=async()=>({id:88,type:"popup",incognito:false});
+    let windows=[{id:7,type:"normal",incognito:false}];
+    e.api.windows.getAll=async options=>{assert.equal(options.populate,false);return windows;};
+    document.querySelectorAll("#saved-browser-list .row-actions button")[1].click();
+    for(let i=0;i<4;i++) await tick();
+    assert.deepEqual(JSON.parse(JSON.stringify(e.calls.find(call=>call.action==="open-saved-in-current").options)),{savedBrowserId:"research",windowId:7});
+    windows=[{id:7,type:"normal"},{id:9,type:"normal"}];
+    document.querySelectorAll("#saved-browser-list .row-actions button")[1].click();
+    for(let i=0;i<3;i++) await tick();
+    assert.equal(e.calls.filter(call=>call.action==="open-saved-in-current").length,1);
+    assert.match(document.querySelector("#status").textContent,/non-private browser window/);
+});
+
+test("sync disables its action while resolving the current window and rejects duplicate clicks", async () => {
+    const e=await libraryPopup(), {document}=e;
+    let finish;
+    e.api.windows.getCurrent=()=>new Promise(resolve=>{finish=resolve;});
+    document.querySelector("#update").click();
+    assert.equal(document.querySelector("#update").disabled,true);
+    document.querySelector("#update").click();
+    // The refresh that follows sync also checks the current window.
+    e.api.windows.getCurrent=async()=>({id:7,incognito:false});
+    finish({id:7,incognito:false});
+    for(let i=0;i<4;i++) await tick();
+    assert.equal(e.calls.filter(call=>call.action==="sync-current").length,1);
+});
+
+test("canceling destination selection keeps the current destination visible and can be reopened", async () => {
+    const e=await libraryPopup(), {document,window}=e, select=document.querySelector("#destination");
+    select.value="change"; select.dispatchEvent(new window.Event("change"));
+    assert.equal(document.querySelector("#chooser").hidden,false);
+    document.querySelector("#chooser-cancel").click();
+    assert.equal(select.value,"current");
+    assert.equal(select.querySelector("option[selected]").textContent,"Focus");
+    select.value="change"; select.dispatchEvent(new window.Event("change"));
+    assert.equal(document.querySelector("#chooser").hidden,false);
+});
+
+test("saving from a private window does not silently select another browser window", async () => {
+    const e=await libraryPopup(), {document}=e;
+    e.api.windows.getCurrent=async()=>({id:88,type:"normal",incognito:true});
+    document.querySelector("#save-browser").click();
+    for(let i=0;i<3;i++) await tick();
+    assert.equal(document.querySelector("#save-browser-form").hidden,true);
+    assert.match(document.querySelector("#status").textContent,/non-private browser window/);
+    assert.equal(e.reads,0);
+});
+
+test("changing a live current destination requires confirmation before linking", async () => {
+    const e=await libraryPopup(), {document,window}=e;
+    e.data.liveSharing=true; e.status.live=true;
+    e.api.runtime.onMessage.listeners[0]({event:"warp-live-updated"});
+    await tick(); await tick();
+    const current=document.querySelector("#destination"); current.value="change"; current.dispatchEvent(new window.Event("change"));
+    const target=document.querySelector("#target-destination"); target.value="saved:research"; target.dispatchEvent(new window.Event("change"));
+    document.querySelector("#chooser-review").click();
+    assert.match(document.querySelector("#chooser-confirm-text").textContent,/Live updates may replace/);
+    assert.equal(e.calls.some(call=>call.action==="link-current"),false);
+    document.querySelector("#chooser-confirm-button").click();
+    for(let i=0;i<4;i++) await tick();
+    assert.deepEqual(JSON.parse(JSON.stringify(e.calls.find(call=>call.action==="link-current").options)),{savedBrowserId:"research",expectedRevision:"item-r",windowId:7});
+});
+
+test("opening a saved browser in a new window reports partial failures", async () => {
+    const e=await libraryPopup({"operation-status":()=>({done:true,opened:1,failed:1})}), {document}=e;
+    document.querySelector("#saved-browser-list .row-actions button").click();
+    for(let i=0;i<5;i++) await tick();
+    assert.deepEqual(JSON.parse(JSON.stringify(e.calls.find(call=>call.action==="open-saved-browser").options)),{savedBrowserId:"research"});
+    assert.match(document.querySelector("#status").textContent,/1 window could not open/);
+    assert.equal(document.querySelector("#status").classList.contains("error"),true);
+    assert.equal(e.reads,0);
 });

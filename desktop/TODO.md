@@ -24,6 +24,19 @@
   for an upstream fix when updating the publishing tool; it is not shipped in
   the extension or desktop app.
 
+## Browser tab and workspace sync
+
+- Explore optional shared sync between a saved browser tab set and its copy in
+  a workspace, so tab changes can update both. Decide how the two are linked,
+  how conflicting edits are resolved, and how live updates and unlinking work
+  before implementing it.
+
+## Browser extension scale
+
+- Measure popup loading, search, and opening large saved libraries. Consider
+  paging or virtualized rows if needed, while preserving keyboard navigation,
+  useful progress, and the existing tab-sharing privacy behavior.
+
 ## More than two monitors
 
 - Extend the main/burner two-monitor workflow to support three or more displays

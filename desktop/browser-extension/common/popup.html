@@ -1,39 +1,60 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Window Warp</title><link rel="stylesheet" href="popup.css"><script defer src="popup.js"></script></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Window Warp</title><link rel="stylesheet" href="popup.css"><script defer src="popup.js"></script></head>
 <body>
-  <header><img src="icon.png" alt=""><div><h1>Window Warp</h1><p id="status" role="status">Checking connection…</p></div></header>
-  <section class="switches" aria-label="Browser connection settings">
-    <label class="switch-row"><span>Browser connection</span><input id="connection" type="checkbox" role="switch"></label>
-    <label class="switch-row"><span>Live tab sharing</span><input id="live" type="checkbox" role="switch"></label>
-  </section>
-  <section id="pairing-section">
+  <header class="toolbar" aria-label="Browser connection">
+    <label class="toggle-button"><input id="connection" type="checkbox" role="switch"><span id="connection-label">Connect</span></label>
+    <label class="toggle-button"><input id="live" type="checkbox" role="switch"><span id="live-label">Live updates: Off</span></label>
+    <button id="settings-toggle" type="button" aria-expanded="false" aria-controls="settings-panel">Settings</button>
+  </header>
+  <p id="status" class="feedback" role="status" aria-live="polite"></p>
+  <section id="pairing-section" hidden>
     <label for="pairing">Pairing code</label>
     <div class="pairing"><input id="pairing" autocomplete="off" spellcheck="false" placeholder="From Window Warp settings"><button id="connect" type="button">Connect</button></div>
   </section>
+  <section id="settings-panel" hidden>
+    <h2>Settings</h2>
+    <label for="profile">Browser profile</label><select id="profile"><option value="">Detect automatically</option></select>
+    <p class="hint">Choose a profile if automatic detection needs help.</p>
+    <button id="settings-back" type="button">Back</button>
+  </section>
   <section id="connected" hidden>
-    <div class="workspace"><span>Saving to</span><strong id="workspace">Checking…</strong><p class="hint" id="sharing">Tabs are shared only when requested.</p></div>
-    <div class="actions"><button id="save-browser" class="primary" type="button">Save browser</button><button id="create-workspace" type="button">Create workspace</button><button id="update" type="button" aria-label="Update workspace URLs">Update URLs</button><button id="open-workspaces" type="button">Open workspaces</button></div>
-    <form id="save-browser-form" class="save-form" hidden>
-      <label id="save-target-label" for="save-target" hidden>Save as</label><select id="save-target" hidden></select>
+    <div id="library">
+      <div class="primary-actions">
+        <button id="update" class="primary has-tip" type="button" aria-label="Sync tabs" aria-describedby="sync-help">Sync tabs<span id="sync-help" class="tooltip" role="tooltip">Update the saved browser or workspace linked to this window.</span></button>
+        <button id="save-browser" class="has-tip" type="button" aria-label="Save current tabs" aria-describedby="save-help">Save current tabs<span id="save-help" class="tooltip" role="tooltip">Create a new saved browser or workspace from this window.</span></button>
+        <button id="sync-elsewhere" class="has-tip" type="button" aria-label="Sync elsewhere" aria-describedby="elsewhere-help">Sync elsewhere…<span id="elsewhere-help" class="tooltip" role="tooltip">Update a different saved browser or workspace once.</span></button>
+      </div>
+      <label class="sr-only" for="destination">Current sync destination</label>
+      <select id="destination"><option value="current">Checking destination…</option><option value="change">Choose current sync destination…</option></select>
+      <span id="workspace" class="sr-only"></span><span id="sharing" class="sr-only"></span>
+      <div class="tabs" role="tablist" aria-label="Saved items">
+        <button id="saved-tab" type="button" role="tab" aria-selected="true" aria-controls="saved-panel">Saved tabs</button>
+        <button id="workspaces-tab" type="button" role="tab" aria-selected="false" aria-controls="workspaces-panel">Workspaces</button>
+      </div>
+      <label for="list-search" id="search-label">Search saved tabs</label><input id="list-search" type="search" placeholder="Search saved tabs" autocomplete="off">
+      <p id="list-count" class="hint" role="status" aria-live="polite"></p>
+      <div id="saved-panel" role="tabpanel" aria-labelledby="saved-tab"><div id="saved-browser-list" class="library-list"></div></div>
+      <div id="workspaces-panel" role="tabpanel" aria-labelledby="workspaces-tab" hidden><div id="workspace-list" class="library-list"></div><div class="footer-actions"><button id="create-workspace" type="button">Create workspace</button><button id="open-workspaces" type="button">Open in Window Warp</button></div></div>
+    </div>
+    <form id="save-browser-form" class="editor" hidden>
+      <h2>Save current tabs</h2>
+      <label for="save-kind">Save as</label><select id="save-kind"><option value="browser">New saved browser</option><option value="workspace">New workspace</option></select>
+      <p id="save-kind-hint" class="hint">Create a saved browser containing this window’s tabs.</p>
       <label for="browser-name">Name</label><input id="browser-name" maxlength="240" autocomplete="off">
       <label id="save-window-label" for="save-window">Browser window</label><select id="save-window"></select>
-      <p id="save-profile-hint" class="hint" hidden>Uses the default browser profile. Choose another in Connection options if needed.</p>
-      <p id="save-feedback" class="hint" role="status" aria-live="polite"></p>
-      <div class="actions"><button id="confirm-save-browser" class="primary" type="submit">Save</button><button id="cancel-save-browser" type="button">Cancel</button></div>
-      <div id="replace-browser-confirmation" class="replace-confirmation" hidden>
-        <p>Replace the saved tabs in <strong id="replace-browser-name"></strong>?</p>
-        <div class="actions"><button id="confirm-replace-browser" class="primary" type="button">Replace tabs</button><button id="cancel-replace-browser" type="button">Keep current</button></div>
-      </div>
+      <label class="check-row"><input id="save-link" type="checkbox">Use as this window’s current sync destination</label>
+      <p id="save-profile-hint" class="hint" hidden>Uses the default browser profile. Choose another in Settings if needed.</p>
+      <p id="save-feedback" class="feedback" role="status" aria-live="polite"></p>
+      <div class="footer-actions"><button id="confirm-save-browser" class="primary" type="submit">Save</button><button id="cancel-save-browser" type="button">Cancel</button></div>
     </form>
-    <details id="manual" hidden><summary>Choose a window manually</summary>
-      <label for="manual-workspace">Workspace</label><select id="manual-workspace"></select>
-      <label for="manual-item">Window in workspace</label><select id="manual-item"></select>
-      <label for="manual-window">Open browser window</label><select id="manual-window"></select>
-      <button id="use-tabs" type="button">Use these tabs</button>
-    </details>
-    <details><summary>Connection options</summary>
-      <label for="profile">Browser profile</label><select id="profile"><option value="">Detect automatically</option></select>
-      <p class="hint">Choose a profile only if automatic detection needs help.</p>
-    </details>
+    <section id="chooser" class="editor" hidden aria-labelledby="chooser-title">
+      <h2 id="chooser-title">Sync elsewhere</h2><p id="chooser-hint" class="hint"></p>
+      <label for="target-destination">Destination</label><select id="target-destination"></select>
+      <label id="target-item-label" for="target-item" hidden>Browser window in workspace</label><select id="target-item" hidden></select>
+      <p id="chooser-feedback" class="feedback" role="status" aria-live="polite"></p>
+      <div id="chooser-actions" class="footer-actions"><button id="chooser-review" class="primary" type="button">Review update</button><button id="chooser-cancel" type="button">Cancel</button></div>
+      <div id="chooser-confirm" class="confirmation" hidden><p id="chooser-confirm-text"></p><div class="footer-actions"><button id="chooser-confirm-button" class="primary" type="button">Update saved tabs</button><button id="chooser-back" type="button">Back</button><button id="chooser-keep" type="button">Cancel</button></div></div>
+    </section>
+    <form id="rename-form" class="editor" hidden><h2>Rename saved browser</h2><label for="rename-name">Name</label><input id="rename-name" maxlength="240" autocomplete="off"><p id="rename-feedback" class="feedback" role="status" aria-live="polite"></p><div class="footer-actions"><button class="primary" type="submit">Save name</button><button id="rename-cancel" type="button">Cancel</button></div></form>
   </section>
 </body></html>

@@ -60,7 +60,7 @@ async function snapshotRequest(action, options) {
         settings.clientId = crypto.randomUUID();
         await api.storage.local.set({clientId:settings.clientId});
     }
-    const open = ["poll", "status", "disconnect", "set-live", "create-workspace", "open-workspaces"].includes(action) ? [] : await api.windows.getAll({populate:true, windowTypes:["normal"]});
+    const open = ["poll", "status", "disconnect", "set-live", "create-workspace", "open-workspaces", "get-saved-tabs", "rename-saved-browser", "open-saved-browser", "open-workspace", "operation-status"].includes(action) ? [] : await api.windows.getAll({populate:true, windowTypes:["normal"]});
     const windows = open.filter(window => !window.incognito && !closingWindows.has(window.id)).map(window => {
         const tabs = (window.tabs || []).filter(tab => typeof tab.url === "string" && tab.url.length > 0);
         return {id:window.id, title:tabs.find(tab=>tab.active)?.title || "", x:window.left, y:window.top, width:window.width, height:window.height,
@@ -86,6 +86,22 @@ async function sendLiveSnapshot() {
         try { if (api.runtime.sendMessage) await api.runtime.sendMessage({event:"warp-live-updated"}); } catch {}
     }
     return result;
+}
+
+async function openSavedInCurrent(options) {
+    if (!Number.isInteger(options.windowId)) return {error:"Choose a browser window first."};
+    let window;
+    try { window = await api.windows.get(options.windowId); }
+    catch { return {error:"That browser window is no longer open."}; }
+    if (window.incognito || (window.type && window.type !== "normal")) return {error:"Open a non-private browser window and try again."};
+    const result = await snapshot("get-saved-tabs", {savedBrowserId:options.savedBrowserId});
+    if (result?.error) return result;
+    let opened = 0, failed = 0;
+    for (const tab of result.tabs || []) {
+        try { await api.tabs.create({windowId:options.windowId, url:tab.url, active:false}); opened++; }
+        catch { failed++; }
+    }
+    return {opened, failed};
 }
 
 function poll() {
@@ -134,9 +150,10 @@ api.runtime.onInstalled.addListener(poll);
 api.storage.onChanged.addListener(changes => { if (changes.liveSharing?.newValue === false || changes.enabled?.newValue === false) lastLiveState=""; if (changes.enabled || changes.pairing || changes.liveSharing) poll(); });
 api.alarms.onAlarm.addListener(alarm => { if (alarm.name === "connection") return poll(); });
 api.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (!["status", "snapshot", "update", "disconnect", "set-live", "save-browser", "create-workspace", "open-workspaces"].includes(message?.action)) return false;
+    if (!["status", "snapshot", "update", "disconnect", "set-live", "save-browser", "save-workspace", "sync-current", "update-elsewhere", "link-current", "get-saved-tabs", "open-saved-in-current", "rename-saved-browser", "open-saved-browser", "open-workspace", "operation-status", "create-workspace", "open-workspaces"].includes(message?.action)) return false;
     const options = message.action === "snapshot" ? {explicit:true} : (message.options || {});
     const run = async () => {
+        if (message.action === "open-saved-in-current") return openSavedInCurrent(options);
         if (message.action === "disconnect") {
             clearTimeout(pending);
             await Promise.allSettled([...inFlightRequests]);
