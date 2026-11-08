@@ -1,0 +1,120 @@
+name: Publish Microsoft Store update
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: microsoft-store-publish
+  cancel-in-progress: false
+
+jobs:
+  store:
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      MSSTORE_PRODUCT_ID: 9NVBS6W8RV54
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check release version
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $version = (Get-Content -LiteralPath 'desktop/src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json).version
+          if ($env:RELEASE_TAG -cne "v$version" -and $env:RELEASE_TAG -cne $version) {
+            throw "Release tag $env:RELEASE_TAG does not match the desktop app version $version."
+          }
+          $output = Join-Path $env:RUNNER_TEMP 'window-warp-msix'
+          $package = Join-Path $output "WindowWarp_${version}.0_x64.msix"
+          "WARP_MSIX_PATH=$package" | Out-File -LiteralPath $env:GITHUB_ENV -Encoding utf8 -Append
+      - uses: actions/setup-node@v4
+        if: github.event_name == 'release'
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        if: github.event_name == 'release'
+        with:
+          components: rustfmt
+      - name: Install locked dependencies
+        if: github.event_name == 'release'
+        working-directory: desktop
+        run: npm ci --ignore-scripts
+      - name: Check and test the desktop app
+        if: github.event_name == 'release'
+        working-directory: desktop
+        run: |
+          npm run check
+          if ($LASTEXITCODE -ne 0) { throw 'JavaScript syntax checks failed.' }
+          npm test
+          if ($LASTEXITCODE -ne 0) { throw 'JavaScript tests failed.' }
+          cargo fmt --manifest-path src-tauri/Cargo.toml --check
+          if ($LASTEXITCODE -ne 0) { throw 'Rust formatting check failed.' }
+          cargo test --manifest-path src-tauri/Cargo.toml --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Rust tests failed.' }
+          ./tests/windows/check-msstore.ps1
+      - name: Build the release executable
+        if: github.event_name == 'release'
+        working-directory: desktop
+        env:
+          FIREFOX_ADDON_URL: ${{ vars.WINDOW_WARP_FIREFOX_ADDON_URL }}
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:FIREFOX_ADDON_URL)) {
+            $env:WINDOW_WARP_FIREFOX_ADDON_URL = $env:FIREFOX_ADDON_URL
+          }
+          npm run build -- --no-bundle
+          if ($LASTEXITCODE -ne 0) { throw 'The desktop release build failed.' }
+      - name: Package the Store MSIX
+        if: github.event_name == 'release'
+        run: |
+          ./desktop/scripts/build-msix.ps1 -OutputDirectory (Split-Path -Parent $env:WARP_MSIX_PATH)
+          if (-not (Test-Path -LiteralPath $env:WARP_MSIX_PATH -PathType Leaf)) {
+            throw 'The expected Store MSIX was not created.'
+          }
+      - name: Keep the Store package for inspection
+        if: github.event_name == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: window-warp-store-msix-${{ github.event.release.tag_name }}
+          path: ${{ env.WARP_MSIX_PATH }}
+          if-no-files-found: error
+      - name: Set up the Microsoft Store CLI
+        uses: microsoft/microsoft-store-apppublisher@15abd1c50fcc164b19cb240fb04ef3c49bf715a2 # v1.1
+        with:
+          version: v0.4.4
+      - name: Configure Partner Center credentials
+        env:
+          MSSTORE_TENANT: ${{ secrets.AZURE_AD_TENANT_ID }}
+          MSSTORE_CLIENT: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          MSSTORE_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+          MSSTORE_SELLER: ${{ secrets.SELLER_ID }}
+        run: |
+          foreach ($name in @('MSSTORE_TENANT', 'MSSTORE_CLIENT', 'MSSTORE_SECRET', 'MSSTORE_SELLER')) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw 'Add the four Microsoft Store Actions secrets described in release.md.'
+            }
+          }
+          msstore reconfigure --tenantId $env:MSSTORE_TENANT --sellerId $env:MSSTORE_SELLER `
+            --clientId $env:MSSTORE_CLIENT --clientSecret $env:MSSTORE_SECRET
+          if ($LASTEXITCODE -ne 0) { throw 'Microsoft Store credential configuration failed.' }
+      - name: Verify Store account without publishing
+        if: github.event_name == 'workflow_dispatch'
+        run: ./desktop/scripts/check-msstore.ps1 -ProductId $env:MSSTORE_PRODUCT_ID -AllowPending
+      - name: Submit the Store update
+        if: github.event_name == 'release'
+        run: |
+          ./desktop/scripts/check-msstore.ps1 -ProductId $env:MSSTORE_PRODUCT_ID
+          msstore publish $env:WARP_MSIX_PATH -id $env:MSSTORE_PRODUCT_ID
+          if ($LASTEXITCODE -ne 0) { throw 'Microsoft Store submission failed; check Partner Center before retrying.' }
