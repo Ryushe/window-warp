@@ -16,6 +16,10 @@ stale destination label and that a newer extension could connect to an older
 desktop lacking the library actions. Invalidate cached labels when ownership
 changes, require a sync to match the destination displayed when clicked, and
 show an actionable desktop-update message when the library protocol is absent.
+Publish a live snapshot's destination cache under the same ownership lock, so
+an in-flight snapshot cannot restore a label invalidated by a later open.
+Moving a window to another item in the same workspace removes its previous
+claim, and an ownership revision rejects a sync started for the former item.
 
 Implement the shared Firefox and Chromium extension library without redesigning
 the Windows Workspaces page. The popup provides searchable saved-browser and
@@ -34,7 +38,7 @@ The TODO covers large libraries and optional shared sync between two destination
 
 - Windows JavaScript: `npm test` in `desktop` passed 349 tests, including the
   extension and local mock service; `npm run check` passed.
-- Focused fix checks: 35 extension tests and 40 browser-bridge tests passed; the
+- Focused fix checks: 35 extension tests and 42 browser-bridge tests passed; the
   existing loopback-origin test was excluded from the latter sandbox run.
 - Windows Rust: `cargo test --offline --manifest-path src-tauri/Cargo.toml
   browser_bridge::tests -j 1` passed 40 tests with loopback access; `cargo fmt

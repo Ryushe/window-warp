@@ -2626,7 +2626,7 @@ fn link_current_from_extension(
             previous.targets.get(position).cloned().flatten()
         })
         .collect();
-    targets[index] = Some((native.id.clone(), native.pid));
+    assign_opened_target(&mut targets, index, (native.id.clone(), native.pid));
     let mut config = state.config.clone();
     remember_opened(
         &mut config,
@@ -2644,6 +2644,19 @@ fn link_current_from_extension(
         .or_default()
         .insert(window.id, (profile.id.clone(), profile.name.clone()));
     Ok(serde_json::json!({"linked":true,"destination":profile.name}))
+}
+
+fn assign_opened_target(
+    targets: &mut [Option<(String, u32)>],
+    index: usize,
+    target: (String, u32),
+) {
+    for (position, previous) in targets.iter_mut().enumerate() {
+        if position != index && previous.as_ref() == Some(&target) {
+            *previous = None;
+        }
+    }
+    targets[index] = Some(target);
 }
 
 fn open_from_extension(
@@ -2975,12 +2988,6 @@ fn handle(
                 .iter()
                 .map(|(id, (_, name))| (*id, name.clone()))
                 .collect();
-            bridge
-                .state
-                .lock()
-                .map_err(|e| e.to_string())?
-                .live_destinations
-                .insert(client_id, destinations);
             return Ok(serde_json::json!({"received":true,"destinations":visible}));
         }
         return Ok(serde_json::json!({"received":true}));
@@ -2991,20 +2998,27 @@ fn handle(
         Err(_) if request.action == "status" => (Vec::new(), false),
         Err(error) => return Err(error),
     };
-    let (active, live, extension_version, destination, has_owners) = {
+    let (active, live, extension_version, destination, destination_revision, has_owners) = {
         let state = bridge.state.lock().map_err(|e| e.to_string())?;
+        let destination = request.window_id.and_then(|id| {
+            state
+                .live_destinations
+                .get(&client_id)
+                .and_then(|windows| windows.get(&id))
+                .cloned()
+        });
+        let destination_revision = destination
+            .as_ref()
+            .and_then(|(id, _)| state.config.opened.get(id))
+            .map(revision)
+            .transpose()?;
         (
             desktop
                 .and_then(|key| active_on_desktop(&state.config.active, &key, &current).cloned()),
             client_live(&state, &client_id),
             update_version(&state, &request).map(str::to_owned),
-            request.window_id.and_then(|id| {
-                state
-                    .live_destinations
-                    .get(&client_id)
-                    .and_then(|windows| windows.get(&id))
-                    .cloned()
-            }),
+            destination,
+            destination_revision,
             state
                 .config
                 .opened
@@ -3046,9 +3060,10 @@ fn handle(
             .find(|profile| profile.id == id)
             .map(|profile| (profile.id.clone(), profile.name.clone()))
     });
-    let (destination_id, destination_name) = destination
-        .map(|(id, name)| (Some(id), Some(name)))
-        .unwrap_or((None, None));
+    let (destination_id, destination_name) = match (destination, destination_revision) {
+        (Some((_, name)), Some(revision)) => (Some(revision), Some(name)),
+        _ => (None, None),
+    };
     let workspace = active
         .as_ref()
         .and_then(|active| store.profiles.iter().find(|p| p.id == active.id));
@@ -3867,12 +3882,20 @@ fn sync_current_from_extension(
         .get(&window.id)
         .cloned()
         .ok_or("This window has no unique saved destination. Choose a current sync destination above, or use Sync elsewhere for a one-time update.")?;
+    let current_revision = revision(
+        state
+            .config
+            .opened
+            .get(&destination.0)
+            .ok_or("The current sync destination is no longer available.")?,
+    )?;
     confirm_sync_destination(
         &mut state,
         client_id,
         window.id,
         request.expected_destination_id.as_deref(),
         &destination,
+        &current_revision,
     )?;
     if !changed_workspaces.is_empty() {
         crate::workspaces::save(app, &workspaces)?;
@@ -3898,8 +3921,9 @@ fn confirm_sync_destination(
     window_id: i64,
     expected: Option<&str>,
     destination: &(String, String),
+    current_revision: &str,
 ) -> Result<(), String> {
-    if expected.is_some_and(|expected| expected != destination.0) {
+    if expected.is_some_and(|expected| expected != current_revision) {
         state
             .live_destinations
             .entry(client_id.to_string())
@@ -3920,6 +3944,11 @@ fn save_live_snapshot(
     }
     let bridge = app.state::<Bridge>();
     if snapshot.windows.is_empty() {
+        let mut state = bridge.state.lock().map_err(|e| e.to_string())?;
+        if !client_live(&state, &snapshot.client_id) {
+            return Err("Live tab sharing is off.".into());
+        }
+        cache_live_destinations(&mut state, &snapshot.client_id, HashMap::new());
         return Ok(HashMap::new());
     }
     let windows = crate::platform::snapshot(app)?;
@@ -3927,12 +3956,12 @@ fn save_live_snapshot(
     if runtime.restoring.load(Ordering::SeqCst) {
         return Ok(HashMap::new());
     }
-    let state = bridge.state.lock().map_err(|e| e.to_string())?;
+    let mut state = bridge.state.lock().map_err(|e| e.to_string())?;
     if !client_live(&state, &snapshot.client_id) {
         return Err("Live tab sharing is off.".into());
     }
-    let opened = &state.config.opened;
-    if opened.is_empty() {
+    if state.config.opened.is_empty() {
+        cache_live_destinations(&mut state, &snapshot.client_id, HashMap::new());
         return Ok(HashMap::new());
     }
     let mut workspaces = crate::workspaces::load(app)?;
@@ -3940,7 +3969,7 @@ fn save_live_snapshot(
     let (changed_workspaces, changed_browsers, destinations) = apply_live_snapshot(
         &mut workspaces,
         &mut saved_browsers,
-        opened,
+        &state.config.opened,
         &windows,
         snapshot,
     );
@@ -3954,7 +3983,25 @@ fn save_live_snapshot(
         crate::workspaces::save_saved_browsers(app, &saved_browsers)?;
         let _ = app.emit("warp-saved-browsers-updated", ());
     }
+    // Publish the cache under the same ownership lock used to compute it.
+    // A later workspace open then clears it rather than being followed by a
+    // delayed cache write for the previous owner.
+    cache_live_destinations(&mut state, &snapshot.client_id, destinations.clone());
     Ok(destinations)
+}
+
+fn cache_live_destinations(
+    state: &mut State,
+    client_id: &str,
+    destinations: HashMap<i64, (String, String)>,
+) {
+    if destinations.is_empty() {
+        state.live_destinations.remove(client_id);
+    } else {
+        state
+            .live_destinations
+            .insert(client_id.to_string(), destinations);
+    }
 }
 pub(crate) fn same_path(left: &str, right: &str) -> bool {
     let left = fs::canonicalize(left).unwrap_or_else(|_| PathBuf::from(left));
@@ -4553,6 +4600,43 @@ mod tests {
     }
 
     #[test]
+    fn a_live_cache_write_cannot_follow_a_new_owner() {
+        let state = Arc::new(Mutex::new(State::default()));
+        let (cached_tx, cached_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let writer_state = state.clone();
+        let writer = std::thread::spawn(move || {
+            let mut state = writer_state.lock().unwrap();
+            cache_live_destinations(
+                &mut state,
+                "client",
+                HashMap::from([(7, ("a".into(), "A".into()))]),
+            );
+            cached_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        cached_rx.recv().unwrap();
+        let owner_state = state.clone();
+        let owner = std::thread::spawn(move || {
+            let mut state = owner_state.lock().unwrap();
+            remember_opened_for_state(
+                &mut state,
+                Active {
+                    id: "b".into(),
+                    targets: vec![],
+                    saved: vec![],
+                },
+            );
+        });
+        release_tx.send(()).unwrap();
+        writer.join().unwrap();
+        owner.join().unwrap();
+        let state = state.lock().unwrap();
+        assert!(state.config.opened.contains_key("b"));
+        assert!(state.live_destinations.is_empty());
+    }
+
+    #[test]
     fn a_changed_owner_invalidates_old_labels_and_rejects_a_stale_sync() {
         let saved = item("saved", "Example", 10);
         let active = |id: &str| Active {
@@ -4561,6 +4645,8 @@ mod tests {
             saved: vec![saved_window_key(&saved)],
         };
         let mut state = State::default();
+        let old_revision = revision(&active("workspace-a")).unwrap();
+        let new_revision = revision(&active("workspace-b")).unwrap();
         remember_opened_for_state(&mut state, active("workspace-a"));
         state
             .live_destinations
@@ -4572,15 +4658,76 @@ mod tests {
         assert!(state.live_destinations.is_empty());
         assert!(state.config.opened["workspace-a"].targets[0].is_none());
         let current = ("workspace-b".into(), "Workspace B".into());
-        assert!(
-            confirm_sync_destination(&mut state, "client", 7, Some("workspace-a"), &current)
-                .is_err()
-        );
+        assert!(confirm_sync_destination(
+            &mut state,
+            "client",
+            7,
+            Some(&old_revision),
+            &current,
+            &new_revision
+        )
+        .is_err());
         assert_eq!(state.live_destinations["client"][&7], current);
-        assert!(
-            confirm_sync_destination(&mut state, "client", 7, Some("workspace-b"), &current)
-                .is_ok()
+        assert!(confirm_sync_destination(
+            &mut state,
+            "client",
+            7,
+            Some(&new_revision),
+            &current,
+            &new_revision
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn relinking_within_a_workspace_moves_the_claim_and_changes_the_sync_revision() {
+        let first = item("saved-a", "Example", 10);
+        let second = item("saved-b", "Example", 10);
+        let mut owner = Active {
+            id: "work".into(),
+            targets: vec![Some(("open".into(), 1)), None],
+            saved: vec![saved_window_key(&first), saved_window_key(&second)],
+        };
+        let previous_revision = revision(&owner).unwrap();
+        assign_opened_target(&mut owner.targets, 1, ("open".into(), 1));
+        let new_revision = revision(&owner).unwrap();
+        assert_ne!(previous_revision, new_revision);
+        assert!(owner.targets[0].is_none());
+        let mut store = crate::workspaces::WorkspaceStore {
+            version: 1,
+            profiles: vec![crate::workspaces::Workspace {
+                id: "work".into(),
+                name: "Work".into(),
+                platform: std::env::consts::OS.into(),
+                items: vec![first, second],
+            }],
+        };
+        let mut saved = crate::workspaces::WorkspaceStore::default();
+        let (changed, _, destinations) = apply_owned_snapshot(
+            &mut store,
+            &mut saved,
+            &HashMap::from([("work".into(), owner)]),
+            &[item("open", "Example", 10).window],
+            &snapshot(),
+            Some(1),
         );
+        assert_eq!(changed, vec!["work"]);
+        assert!(destinations.contains_key(&1));
+        assert!(store.profiles[0].items[0].browser.is_none());
+        assert_eq!(
+            store.profiles[0].items[1].browser.as_ref().unwrap().tabs[0].url,
+            "https://example.test/"
+        );
+        let mut state = State::default();
+        assert!(confirm_sync_destination(
+            &mut state,
+            "client",
+            1,
+            Some(&previous_revision),
+            &destinations[&1],
+            &new_revision
+        )
+        .is_err());
     }
 
     #[test]
