@@ -57,7 +57,7 @@ Once a development extension from Window Warp's prepared folder has been loaded 
 On Windows, install [Window Warp from the Microsoft Store](https://apps.microsoft.com/detail/9NVBS6W8RV54?hl=en-us&gl=US&ocid=pdpshare). On KDE, download the Debian package from the [latest GitHub release](https://github.com/Ryushe/window-warp/releases/latest) and install it with:
 
 ```sh
-sudo apt install ./WindowWarp_0.1.7_linuxmint22.2_kde5_amd64.deb
+sudo apt install ./window-warp_0.1.8_linuxmint22.2_amd64.deb
 ```
 
 Run the command from the download directory, using the downloaded filename if a
