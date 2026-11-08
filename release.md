@@ -84,15 +84,50 @@ for the Microsoft Store without installing or signing it.
 ### Microsoft Store automation
 
 Microsoft's [Store publishing action guidance](https://learn.microsoft.com/en-us/windows/apps/publish/msstore-dev-cli/github-actions)
-currently covers updates to an existing, published free app. The initial app
-submission, Partner Center package identity, and Store product ID must be set up
-first. An update workflow can then build and validate the MSIX and use
-`microsoft/microsoft-store-apppublisher` with the Microsoft Store CLI. It needs
-a Partner Center-linked Microsoft Entra application with the appropriate role,
-plus tenant ID, client ID, client secret, seller ID, and Store product ID.
-Keep credentials in GitHub Actions secrets and restrict the workflow to stable
-releases; verify certification and release state in Partner Center. No Microsoft
-Store workflow is enabled until these account and package details are verified.
+currently covers updates to an existing, published free app. Window Warp's
+Store product ID is `9NVBS6W8RV54`. Before enabling the workflow, confirm that
+the app's MSIX identity and publisher in Partner Center match
+`desktop/packaging/msix/AppxManifest.xml`.
+
+One-time account setup:
+
+1. Associate a Microsoft Entra tenant with the Partner Center account. Register
+   an Entra application and add it under Partner Center's **Account settings →
+   User management → Microsoft Entra applications**, with the Manager role.
+2. Create a client secret for that application. In the repository's
+   [Actions secrets](https://github.com/Ryushe/window-warp/settings/secrets/actions),
+   set `AZURE_AD_TENANT_ID`, `AZURE_AD_APPLICATION_CLIENT_ID`,
+   `AZURE_AD_APPLICATION_SECRET`, and `SELLER_ID` to the corresponding tenant,
+   application, secret value, and Partner Center seller IDs. Never put their
+   values in the repository or chat. The client secret is shown only once.
+3. When the Firefox listing URL is known, set the repository Actions variable
+   `WINDOW_WARP_FIREFOX_ADDON_URL` to that URL for Store builds.
+4. After the workflow is integrated into the default branch, run **Publish
+   Microsoft Store update** manually from the Actions tab. This manual run only
+   verifies access and app identity; it does not create or change a submission.
+
+For each **stable** GitHub release, `.github/workflows/microsoft-store.yml`
+checks the release tag, runs the desktop checks, builds an MSIX from that commit,
+and submits it using the Microsoft Store CLI. Pre-releases do not submit. The
+workflow keeps the package as an Actions artifact; Microsoft certification
+still determines when the update becomes available. Confirm its result in
+Partner Center. A release created by another workflow using `GITHUB_TOKEN` does
+not normally trigger a release-event workflow; see the Firefox section above.
+
+The CLI replaces a pending Partner Center submission when publishing. The
+workflow checks for one immediately before submission and stops if it finds
+one; finish or remove that draft deliberately before rerunning the release.
+This check is not atomic with publishing, so do not create a Partner Center
+draft while the Store workflow is running. Microsoft documents this behavior in
+its [MSIX CLI reference](https://learn.microsoft.com/en-us/windows/apps/publish/msstore-dev-cli/publish-command).
+Run `desktop/tests/windows/check-msstore.ps1` to exercise the read-only checks
+without credentials. GitHub can run the release workflow from a tagged commit
+that contains it even before that commit is merged into `main`; do not publish
+a stable tag from this branch before integration and account checks. The manual
+Actions run is available after the workflow exists on the default branch.
+
+Script index: `desktop/scripts/check-msstore.ps1` checks the Store account,
+package identity, and existing submission without modifying Partner Center.
 
 ## Chrome Web Store
 
