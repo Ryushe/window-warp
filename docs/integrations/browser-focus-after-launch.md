@@ -31,30 +31,35 @@ profile is treated as ambiguous. Cancellation is rechecked under the queue lock.
 - The focused regression was first run against a single observation and failed
   as expected. All 49 Windows browser-bridge tests then passed with loopback.
   The regression also verifies that ambiguous windows remain unmatched after
-  all retries. A fresh native Chromium run is pending after propagation.
+  all retries. The integrated Windows Chromium fixture passed, including opening
+  a new browser window and focusing the saved tab; receipt:
+  `WARP-NATIVE-e7c4c6f5-2902-42b5-9afb-b526271f9005`.
 - Independent review identified the need for a shared time budget, stable
   titles, and handling an extension that polls every five seconds. An initial
   fix passed 49 bridge tests but still failed the native Chromium fixture; the
   revised single-snapshot approach passed all 49 bridge tests, including
-  deadline, ambiguous URL, and mixed matched/unmatched cases. The real browser
-  fixture and final review remain pending after propagation.
+  deadline, ambiguous URL, and mixed matched/unmatched cases. Independent final
+  review of `d03e926` found no actionable release blocker.
 
 ## Blockers and deferred work
 
-- Run `cargo test --offline --manifest-path desktop/src-tauri/Cargo.toml
-  browser_bridge::tests` and the isolated Windows `node
-  desktop/tests/windows/native.mjs --chromium-only` fixture after integrating
-  the fix. The native test must verify the real launched browser and extension.
+- The Firefox native extension fixture and final cross-platform release checks
+  still need to run against the fully integrated release candidate.
 
 ## Interruption / resume handoff
 
 - **Owning feature branch/ref:** `codex/fix-focus-after-launch`
 - **Latest immutable recovery checkpoint:** `1b99c0c`
-- **Exact resume point:** finish focused tests, record results, commit, merge
-  into affected descendants, and re-run the release checks.
+- **Exact resume point:** merge the reviewed fix into the release candidate,
+  then run Firefox acceptance and the final cross-platform release checks.
 - **Activation boundary:** a rebuilt app is required; no installed app was changed.
 
 ## Decision gates
 
-- **Integration gate:** focused regression, bridge tests, and review.
+- **Integration gate:** met by focused regression, bridge tests, and review.
 - **Promotion gate:** native browser acceptance and the existing release gates.
+
+## Decision record
+
+- 2026-11-07 — accept the fix for integration; retain the Firefox native test
+  and platform packaging checks as release-promotion gates.
