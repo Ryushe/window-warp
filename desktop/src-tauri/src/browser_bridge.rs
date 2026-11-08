@@ -147,7 +147,15 @@ struct Request {
     #[serde(default)]
     saved_browser_id: String,
     #[serde(default)]
+    expected_revision: String,
+    #[serde(default)]
+    operation_id: String,
+    #[serde(default)]
+    make_current: Option<bool>,
+    #[serde(default)]
     supports_focus: bool,
+    #[serde(default)]
+    expected_destination_id: Option<String>,
 }
 #[derive(Clone)]
 struct Snapshot {
@@ -192,6 +200,7 @@ struct State {
     prepared: HashMap<String, PreparedExtension>,
     extension_update_error: Option<String>,
     live_destinations: HashMap<String, HashMap<i64, (String, String)>>,
+    extension_operations: HashMap<String, (String, Option<serde_json::Value>)>,
     focus_pending: HashMap<String, Vec<FocusCommand>>,
     focus_results: HashMap<String, bool>,
 }
@@ -297,20 +306,31 @@ impl Bridge {
         // Include competing browser windows on other virtual desktops; the
         // extension can report those windows even though restore targets only
         // the current desktop.
-        let current = match crate::platform::snapshot_for_restore(app) {
-            Ok(current) => current,
-            Err(_) => return requested,
-        };
-        let snapshots = self.capture_focus_snapshots(cancelled);
-        if cancelled.load(Ordering::Relaxed) {
-            return Vec::new();
-        }
-        let plans = focus_plans(workspace, results, &current, &snapshots, &capable);
+        let observation_deadline = Instant::now() + Duration::from_secs(8);
+        let snapshots = self.capture_focus_snapshots_until(cancelled, observation_deadline);
+        let plans = focus_plans_after_launch(
+            workspace,
+            results,
+            &requested,
+            &capable,
+            &snapshots,
+            cancelled,
+            observation_deadline,
+            || {
+                let before = crate::platform::snapshot_for_restore(app).ok()?;
+                let after = crate::platform::snapshot_for_restore(app).ok()?;
+                Some((before, after))
+            },
+            std::thread::sleep,
+        );
         if cancelled.load(Ordering::Relaxed) {
             return Vec::new();
         }
         let mut waiting = Vec::new();
         if let Ok(mut state) = self.state.lock() {
+            if cancelled.load(Ordering::Relaxed) {
+                return Vec::new();
+            }
             for (index, client, command) in plans {
                 waiting.push((index, client.clone(), command.id.clone()));
                 state.focus_pending.entry(client).or_default().push(command);
@@ -380,7 +400,7 @@ impl Bridge {
                 })
                 .collect(),
         };
-        remember_opened(&mut state.config, active.clone());
+        remember_opened_for_state(&mut state, active.clone());
         state.config.active.insert(desktop, active);
         write_config(app, &state.config)
     }
@@ -397,7 +417,7 @@ impl Bridge {
             saved: workspace.items.iter().map(saved_window_key).collect(),
         };
         let mut state = self.state.lock().map_err(|error| error.to_string())?;
-        remember_opened(&mut state.config, active);
+        remember_opened_for_state(&mut state, active);
         write_config(app, &state.config)
     }
 
@@ -439,8 +459,8 @@ impl Bridge {
                 })
                 .collect();
             if targets.iter().any(Option::is_some) {
-                remember_opened(
-                    &mut state.config,
+                remember_opened_for_state(
+                    &mut state,
                     Active {
                         id: profile.id.clone(),
                         targets,
@@ -534,7 +554,14 @@ impl Bridge {
         }
     }
     fn capture_focus_snapshots(&self, cancelled: &AtomicBool) -> CapturedSnapshots {
-        let deadline = Instant::now() + Duration::from_secs(8);
+        self.capture_focus_snapshots_until(cancelled, Instant::now() + Duration::from_secs(8))
+    }
+
+    fn capture_focus_snapshots_until(
+        &self,
+        cancelled: &AtomicBool,
+        deadline: Instant,
+    ) -> CapturedSnapshots {
         let _guard = loop {
             if cancelled.load(Ordering::Relaxed) || Instant::now() >= deadline {
                 return CapturedSnapshots::default();
@@ -632,6 +659,19 @@ fn remember_opened(config: &mut Config, active: Active) {
         }
     }
     config.opened.insert(active.id.clone(), active);
+}
+
+// A browser window may have been reused by another destination. Cached
+// extension window IDs do not carry enough native identity to update just one
+// safely, so forget the labels until a fresh match is available.
+fn remember_opened_for_state(state: &mut State, active: Active) {
+    remember_opened(&mut state.config, active);
+    state.live_destinations.clear();
+}
+
+fn commit_opened_config(state: &mut State, config: Config) {
+    state.config = config;
+    state.live_destinations.clear();
 }
 
 fn snapshot_wait(state: &State, discover: bool) -> Duration {
@@ -2184,11 +2224,11 @@ fn read_request(stream: &mut TcpStream) -> Result<(Option<String>, Vec<u8>), Str
     Ok((origin, data[end..end + length].to_vec()))
 }
 
-fn save_browser_from_extension(
+fn capture_extension_window(
     app: &AppHandle,
     request: &Request,
     client_id: &str,
-) -> Result<serde_json::Value, String> {
+) -> Result<(crate::workspaces::Workspace, (String, u32)), String> {
     let name = request.name.trim();
     if name.is_empty() || name.len() > 240 {
         return Err("Give the saved browser a name (up to 240 characters).".into());
@@ -2224,11 +2264,23 @@ fn save_browser_from_extension(
                 .into(),
         );
     }
-    // A standalone restore should open its own window rather than take over a
-    // browser that already belongs to another workspace.
-    item.launch.new_window = true;
     let target = (item.window.id.clone(), item.window.pid);
     profile.items = vec![item];
+    Ok((profile, target))
+}
+
+fn save_browser_from_extension(
+    app: &AppHandle,
+    request: &Request,
+    client_id: &str,
+) -> Result<serde_json::Value, String> {
+    let (mut profile, target) = capture_extension_window(app, request, client_id)?;
+    let window_id = request
+        .window_id
+        .ok_or("Choose a browser window to save.")?;
+    // A standalone restore should open its own window rather than take over a
+    // browser that already belongs to another workspace.
+    profile.items[0].launch.new_window = true;
     let runtime = app.state::<crate::Runtime>();
     let _guard = runtime.workspace_io.lock().map_err(|e| e.to_string())?;
     let mut saved_browsers = crate::workspaces::load_saved_browsers(app)?;
@@ -2244,16 +2296,12 @@ fn save_browser_from_extension(
         )
     };
     if let Some(index) = replace_index {
+        check_revision(&saved_browsers.profiles[index], &request.expected_revision)?;
         profile.id = saved_browsers.profiles[index].id.clone();
     }
     let workspaces = crate::workspaces::load(app)?;
     let bridge = app.state::<Bridge>();
     let mut state = bridge.state.lock().map_err(|e| e.to_string())?;
-    if replace_index.is_some() {
-        for destinations in state.live_destinations.values_mut() {
-            destinations.retain(|_, (id, _)| id != &profile.id);
-        }
-    }
     let existing = state
         .config
         .opened
@@ -2278,34 +2326,449 @@ fn save_browser_from_extension(
                 .find(|p| p.id == owner.id)
                 .map(|p| (p.id.clone(), p.name.clone()))
         });
-    let destination = if let Some(existing) = existing.filter(|owner| owner.0 != profile.id) {
-        existing
-    } else {
+    let mut destination = existing.clone();
+    let link_config = if request.make_current != Some(false)
+        && !(request.make_current != Some(true)
+            && existing.as_ref().is_some_and(|owner| owner.0 != profile.id))
+    {
+        let mut config = state.config.clone();
         remember_opened(
-            &mut state.config,
+            &mut config,
             Active {
                 id: profile.id.clone(),
                 targets: vec![Some(target)],
                 saved: vec![saved_window_key(&profile.items[0])],
             },
         );
-        write_config(app, &state.config)?;
-        (profile.id.clone(), profile.name.clone())
+        Some(config)
+    } else {
+        None
     };
+    let profile_id = profile.id.clone();
+    let profile_name = profile.name.clone();
     if let Some(index) = replace_index {
         saved_browsers.profiles[index] = profile;
     } else {
         saved_browsers.profiles.push(profile);
     }
     crate::workspaces::save_saved_browsers(app, &saved_browsers)?;
+    if replace_index.is_some() {
+        for destinations in state.live_destinations.values_mut() {
+            destinations.retain(|_, (id, _)| id != &profile_id);
+        }
+        if destination
+            .as_ref()
+            .is_some_and(|owner| owner.0 == profile_id)
+        {
+            destination = Some((profile_id.clone(), profile_name.clone()));
+        }
+    }
+    let mut warning = None;
+    if let Some(config) = link_config {
+        if write_config(app, &config).is_ok() {
+            commit_opened_config(&mut state, config);
+            destination = Some((profile_id, profile_name));
+        } else {
+            warning = Some("Saved the browser, but could not link it as the current sync destination. Choose it again from the destination menu.");
+        }
+    }
+    if let Some(destination) = &destination {
+        state
+            .live_destinations
+            .entry(client_id.to_string())
+            .or_default()
+            .insert(window_id, destination.clone());
+    } else if let Some(destinations) = state.live_destinations.get_mut(client_id) {
+        destinations.remove(&window_id);
+    }
+    drop(state);
+    let _ = app.emit("warp-saved-browsers-updated", ());
+    Ok(
+        serde_json::json!({"saved":true,"destination":destination.map(|value| value.1),"warning":warning}),
+    )
+}
+
+fn revision<T: Serialize>(value: &T) -> Result<String, String> {
+    use std::hash::{Hash, Hasher};
+    let bytes = serde_json::to_vec(value).map_err(|error| error.to_string())?;
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hash);
+    Ok(format!("{:016x}", hash.finish()))
+}
+
+fn check_revision<T: Serialize>(value: &T, expected: &str) -> Result<(), String> {
+    if !expected.is_empty() && revision(value)? != expected {
+        return Err("The saved tabs changed. Reopen the chooser and review them again.".into());
+    }
+    Ok(())
+}
+
+fn require_revision<T: Serialize>(value: &T, expected: &str) -> Result<(), String> {
+    if expected.is_empty() {
+        return Err("Reopen the chooser to review the latest saved tabs.".into());
+    }
+    check_revision(value, expected)
+}
+
+fn save_workspace_from_extension(
+    app: &AppHandle,
+    request: &Request,
+    client_id: &str,
+) -> Result<serde_json::Value, String> {
+    let (profile, target) = capture_extension_window(app, request, client_id)?;
+    let runtime = app.state::<crate::Runtime>();
+    let _guard = runtime
+        .workspace_io
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let mut store = crate::workspaces::load(app)?;
+    store.profiles.push(profile.clone());
+    crate::workspaces::save(app, &store)?;
+    let bridge = app.state::<Bridge>();
+    let linked = if request.make_current == Some(true) {
+        (|| -> Result<(), String> {
+            let mut state = bridge.state.lock().map_err(|error| error.to_string())?;
+            let mut config = state.config.clone();
+            remember_opened(
+                &mut config,
+                Active {
+                    id: profile.id.clone(),
+                    targets: vec![Some(target)],
+                    saved: vec![saved_window_key(&profile.items[0])],
+                },
+            );
+            write_config(app, &config)?;
+            commit_opened_config(&mut state, config);
+            if let Some(window_id) = request.window_id {
+                state
+                    .live_destinations
+                    .entry(client_id.to_string())
+                    .or_default()
+                    .insert(window_id, (profile.id.clone(), profile.name.clone()));
+            }
+            Ok(())
+        })()
+    } else if request.make_current.is_none() {
+        bridge.link_new_captures(app, std::slice::from_ref(&profile))
+    } else {
+        Ok(())
+    };
+    let _ = app.emit("warp-browser-updated", profile.id.clone());
+    Ok(
+        serde_json::json!({"saved":true,"name":profile.name,"warning":linked.err().map(|_| "Workspace saved, but its browser could not be linked. Open it in Window Warp to link it.")}),
+    )
+}
+
+fn selected_extension_window(request: &Request) -> Result<&ExtensionWindow, String> {
+    let id = request.window_id.ok_or("Choose a browser window first.")?;
+    request
+        .windows
+        .iter()
+        .find(|window| window.id == id && !window.tabs.is_empty())
+        .ok_or_else(|| "That browser window is no longer available. Choose it again.".into())
+}
+
+fn replace_target_tabs(
+    item: &mut WorkspaceItem,
+    request: &Request,
+    window: &ExtensionWindow,
+) -> Result<(), String> {
+    if !is_browser_kind(item, request.browser)
+        || item
+            .browser
+            .as_ref()
+            .is_some_and(|browser| browser.kind != request.browser)
+    {
+        return Err("Choose a matching browser window.".into());
+    }
+    require_revision(&*item, &request.expected_revision)?;
+    let mut browser = item
+        .browser
+        .clone()
+        .unwrap_or_else(|| browser_from(request, window, None));
+    browser.tabs = window.tabs.clone();
+    browser.active_tab = window.active_tab;
+    browser.validate()?;
+    item.browser = Some(browser);
+    item.capture_note.clear();
+    Ok(())
+}
+
+fn replace_tabs_elsewhere(app: &AppHandle, request: &Request) -> Result<serde_json::Value, String> {
+    let window = selected_extension_window(request)?;
+    let runtime = app.state::<crate::Runtime>();
+    let _guard = runtime
+        .workspace_io
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let standalone = !request.saved_browser_id.is_empty();
+    let mut store = if standalone {
+        crate::workspaces::load_saved_browsers(app)?
+    } else {
+        crate::workspaces::load(app)?
+    };
+    let id = if standalone {
+        &request.saved_browser_id
+    } else {
+        &request.workspace_id
+    };
+    let profile = store
+        .profiles
+        .iter_mut()
+        .find(|profile| &profile.id == id)
+        .ok_or("That saved destination no longer exists. Choose it again.")?;
+    let name = profile.name.clone();
+    let index = if standalone {
+        0
+    } else {
+        request
+            .item_index
+            .ok_or("Choose a browser window in the workspace.")?
+    };
+    let item = profile
+        .items
+        .get_mut(index)
+        .ok_or("The workspace changed. Choose its browser window again.")?;
+    replace_target_tabs(item, request, window)?;
+    if standalone {
+        crate::workspaces::save_saved_browsers(app, &store)?;
+        let _ = app.emit("warp-saved-browsers-updated", ());
+    } else {
+        crate::workspaces::save(app, &store)?;
+        let _ = app.emit("warp-browser-updated", id.to_string());
+    }
+    let bridge = app.state::<Bridge>();
+    let state = bridge.state.lock().map_err(|error| error.to_string())?;
+    let live_elsewhere = state.live_destinations.iter().any(|(client, windows)| {
+        client_live(&state, client)
+            && windows.iter().any(|(window, (owner, _))| {
+                owner == id && !(client == &request.client_id && Some(*window) == request.window_id)
+            })
+    });
+    Ok(
+        serde_json::json!({"updated":1,"destination":name,"warning":live_elsewhere.then_some("Another browser has live updates for this destination and may change its tabs again.")}),
+    )
+}
+
+fn link_current_from_extension(
+    app: &AppHandle,
+    request: &Request,
+    client_id: &str,
+) -> Result<serde_json::Value, String> {
+    let window = selected_extension_window(request)?;
+    let snapshot = Snapshot {
+        client_id: client_id.to_string(),
+        browser: request.browser,
+        profile_path: request.profile_path.clone(),
+        profile_name: request.profile_name.clone(),
+        windows: request.windows.clone(),
+        updated: Instant::now(),
+    };
+    let observed = crate::workspaces::capture(crate::platform::snapshot(app)?, String::new());
+    let matches: Vec<_> = match_snapshot(&observed.items, &snapshot)
+        .into_iter()
+        .filter(|(_, extension)| snapshot.windows[*extension].id == window.id)
+        .collect();
+    let [(native_index, _)] = matches.as_slice() else {
+        return Err(
+            "Could not uniquely identify this browser window. Try again with it focused.".into(),
+        );
+    };
+    let native = &observed.items[*native_index].window;
+    let runtime = app.state::<crate::Runtime>();
+    let _guard = runtime
+        .workspace_io
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let standalone = !request.saved_browser_id.is_empty();
+    let store = if standalone {
+        crate::workspaces::load_saved_browsers(app)?
+    } else {
+        crate::workspaces::load(app)?
+    };
+    let id = if standalone {
+        &request.saved_browser_id
+    } else {
+        &request.workspace_id
+    };
+    let profile = store
+        .profiles
+        .iter()
+        .find(|profile| &profile.id == id)
+        .ok_or("That saved destination no longer exists. Choose it again.")?;
+    let index = if standalone {
+        0
+    } else {
+        request
+            .item_index
+            .ok_or("Choose a browser window in the workspace.")?
+    };
+    let item = profile
+        .items
+        .get(index)
+        .ok_or("The workspace changed. Choose its browser window again.")?;
+    require_revision(item, &request.expected_revision)?;
+    if !is_browser_kind(item, request.browser) {
+        return Err("Choose a matching browser window.".into());
+    }
+    if item.browser.as_ref().is_some_and(|browser| {
+        !browser.profile_path.is_empty()
+            && !snapshot.profile_path.is_empty()
+            && !same_path(&browser.profile_path, &snapshot.profile_path)
+    }) {
+        return Err(
+            "That saved browser uses a different profile. Choose a matching destination.".into(),
+        );
+    }
+    let mut check = item.clone();
+    check.window = native.clone();
+    if !assign_browser(&mut check, &snapshot, window, false) {
+        return Err("This browser profile does not match the saved destination.".into());
+    }
+    let bridge = app.state::<Bridge>();
+    let mut state = bridge.state.lock().map_err(|error| error.to_string())?;
+    let previous = state.config.opened.get(&profile.id);
+    let saved: Vec<_> = profile.items.iter().map(saved_window_key).collect();
+    let mut targets: Vec<_> = saved
+        .iter()
+        .map(|key| {
+            let previous = previous?;
+            let mut matches = previous
+                .saved
+                .iter()
+                .enumerate()
+                .filter(|(_, old)| *old == key);
+            let (Some((position, _)), None) = (matches.next(), matches.next()) else {
+                return None;
+            };
+            previous.targets.get(position).cloned().flatten()
+        })
+        .collect();
+    assign_opened_target(&mut targets, index, (native.id.clone(), native.pid));
+    let mut config = state.config.clone();
+    remember_opened(
+        &mut config,
+        Active {
+            id: profile.id.clone(),
+            targets,
+            saved,
+        },
+    );
+    write_config(app, &config)?;
+    commit_opened_config(&mut state, config);
     state
         .live_destinations
         .entry(client_id.to_string())
         .or_default()
-        .insert(window_id, destination.clone());
-    drop(state);
-    let _ = app.emit("warp-saved-browsers-updated", ());
-    Ok(serde_json::json!({"saved":true,"destination":destination.1}))
+        .insert(window.id, (profile.id.clone(), profile.name.clone()));
+    Ok(serde_json::json!({"linked":true,"destination":profile.name}))
+}
+
+fn assign_opened_target(
+    targets: &mut [Option<(String, u32)>],
+    index: usize,
+    target: (String, u32),
+) {
+    for (position, previous) in targets.iter_mut().enumerate() {
+        if position != index && previous.as_ref() == Some(&target) {
+            *previous = None;
+        }
+    }
+    targets[index] = Some(target);
+}
+
+fn open_from_extension(
+    app: &AppHandle,
+    request: &Request,
+    client_id: &str,
+) -> Result<serde_json::Value, String> {
+    let saved_browser = request.action == "open-saved-browser";
+    let id = if saved_browser {
+        &request.saved_browser_id
+    } else {
+        &request.workspace_id
+    };
+    let store = if saved_browser {
+        crate::workspaces::load_saved_browsers(app)?
+    } else {
+        crate::workspaces::load(app)?
+    };
+    let profile = store
+        .profiles
+        .iter()
+        .find(|profile| &profile.id == id)
+        .ok_or("That saved destination no longer exists.")?;
+    if saved_browser
+        && (profile.items.len() != 1 || !is_browser_kind(&profile.items[0], request.browser))
+    {
+        return Err("Choose a saved browser for this extension.".into());
+    }
+    let operation = uuid::Uuid::new_v4().simple().to_string();
+    {
+        let bridge = app.state::<Bridge>();
+        let mut state = bridge.state.lock().map_err(|error| error.to_string())?;
+        if state
+            .extension_operations
+            .get(client_id)
+            .is_some_and(|(_, result)| result.is_none())
+        {
+            return Err("A browser or workspace is already opening. Wait for it to finish.".into());
+        }
+        if !state.extension_operations.contains_key(client_id)
+            && state.extension_operations.len() >= 16
+        {
+            if let Some(finished) = state
+                .extension_operations
+                .iter()
+                .find_map(|(client, (_, result))| result.is_some().then(|| client.clone()))
+            {
+                state.extension_operations.remove(&finished);
+            } else {
+                return Err("Too many browser operations are active. Try again shortly.".into());
+            }
+        }
+        state
+            .extension_operations
+            .insert(client_id.to_string(), (operation.clone(), None));
+    }
+    let app = app.clone();
+    let id = id.clone();
+    let client = client_id.to_string();
+    let operation_for_thread = operation.clone();
+    std::thread::spawn(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tauri::async_runtime::block_on(crate::restore_destination(
+                app.clone(),
+                id,
+                saved_browser,
+                saved_browser,
+            ))
+        }));
+        let result = match result {
+            Ok(Ok(results)) => {
+                let opened = results.iter().filter(|result| result.restored).count();
+                let failed = results.iter().filter(|result| !result.restored).count();
+                if opened == 0 {
+                    serde_json::json!({"done":true,"error":results.iter().find_map(|result| result.error.clone()).unwrap_or_else(|| "Nothing was opened. Check the saved destination in Window Warp.".into())})
+                } else {
+                    let warning = results.iter().find_map(|result| result.warning.clone());
+                    serde_json::json!({"done":true,"opened":opened,"failed":failed,"warning":warning})
+                }
+            }
+            Ok(Err(error)) => serde_json::json!({"done":true,"error":error}),
+            Err(_) => {
+                serde_json::json!({"done":true,"error":"Opening stopped unexpectedly. Check Window Warp and try again."})
+            }
+        };
+        if let Ok(mut state) = app.state::<Bridge>().state.lock() {
+            if let Some((id, stored)) = state.extension_operations.get_mut(&client) {
+                if id == &operation_for_thread {
+                    *stored = Some(result);
+                }
+            }
+        }
+    });
+    Ok(serde_json::json!({"operationId":operation}))
 }
 
 fn handle(
@@ -2321,6 +2784,15 @@ fn handle(
         "disconnect",
         "set-live",
         "save-browser",
+        "save-workspace",
+        "sync-current",
+        "update-elsewhere",
+        "link-current",
+        "get-saved-tabs",
+        "rename-saved-browser",
+        "open-saved-browser",
+        "open-workspace",
+        "operation-status",
         "create-workspace",
         "open-workspaces",
         "focus-result",
@@ -2332,6 +2804,12 @@ fn handle(
     if request.profile_path.len() > 32768
         || request.profile_name.len() > 1000
         || request.windows.len() > 100
+        || request.expected_revision.len() > 100
+        || request.operation_id.len() > 100
+        || request
+            .expected_destination_id
+            .as_ref()
+            .is_some_and(|id| id.len() > 200)
     {
         return Err("Browser snapshot is too large.".into());
     }
@@ -2362,6 +2840,7 @@ fn handle(
             }
             state.config.live_clients.insert(client_id.clone(), false);
             state.live_destinations.remove(&client_id);
+            state.extension_operations.remove(&client_id);
             write_config(app, &state.config)?;
             return Ok(serde_json::json!({"disconnected":true}));
         }
@@ -2387,7 +2866,6 @@ fn handle(
                 .insert(client_id.clone(), request.live);
             if !request.live {
                 state.snapshots.retain(|old| old.client_id != client_id);
-                state.live_destinations.remove(&client_id);
             }
             write_config(app, &state.config)?;
             return Ok(serde_json::json!({"live":request.live}));
@@ -2403,6 +2881,18 @@ fn handle(
                 serde_json::json!({"live":client_live(&state, &client_id),"requestId":request_id,"extensionVersion":update_version(&state, &request),"focusCommands":focus}),
             );
         }
+        if request.action == "operation-status" {
+            let (id, result) = state
+                .extension_operations
+                .get(&client_id)
+                .ok_or("That browser operation is no longer available.")?;
+            if id != &request.operation_id {
+                return Err("That browser operation is no longer available.".into());
+            }
+            return Ok(result
+                .clone()
+                .unwrap_or_else(|| serde_json::json!({"done":false})));
+        }
     }
     if request.action == "create-workspace" {
         crate::app_actions::dispatch(app, "update-workspace");
@@ -2411,6 +2901,44 @@ fn handle(
     if request.action == "open-workspaces" {
         crate::app_actions::show_workspaces(app)?;
         return Ok(serde_json::json!({"opened":true}));
+    }
+    if request.action == "open-workspace" || request.action == "open-saved-browser" {
+        return open_from_extension(app, &request, &client_id);
+    }
+    if request.action == "get-saved-tabs" || request.action == "rename-saved-browser" {
+        let runtime = app.state::<crate::Runtime>();
+        let _guard = runtime
+            .workspace_io
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let mut store = crate::workspaces::load_saved_browsers(app)?;
+        let profile = store
+            .profiles
+            .iter_mut()
+            .find(|profile| profile.id == request.saved_browser_id)
+            .ok_or("That saved browser no longer exists.")?;
+        let [item] = profile.items.as_slice() else {
+            return Err("That saved browser cannot be opened.".into());
+        };
+        let browser = item
+            .browser
+            .as_ref()
+            .filter(|browser| browser.kind == request.browser)
+            .ok_or("Choose a saved browser for this extension.")?;
+        if request.action == "get-saved-tabs" {
+            return Ok(
+                serde_json::json!({"tabs":browser.tabs,"activeTab":browser.active_tab,"name":profile.name}),
+            );
+        }
+        require_revision(&*profile, &request.expected_revision)?;
+        let name = request.name.trim();
+        if name.is_empty() || name.len() > 240 {
+            return Err("Give the saved browser a name (up to 240 characters).".into());
+        }
+        profile.name = name.to_string();
+        crate::workspaces::save_saved_browsers(app, &store)?;
+        let _ = app.emit("warp-saved-browsers-updated", ());
+        return Ok(serde_json::json!({"renamed":true}));
     }
     if request.action != "status" {
         for window in &request.windows {
@@ -2451,6 +2979,18 @@ fn handle(
     if request.action == "save-browser" {
         return save_browser_from_extension(app, &request, &client_id);
     }
+    if request.action == "save-workspace" {
+        return save_workspace_from_extension(app, &request, &client_id);
+    }
+    if request.action == "sync-current" {
+        return sync_current_from_extension(app, &request, &client_id);
+    }
+    if request.action == "update-elsewhere" {
+        return replace_tabs_elsewhere(app, &request);
+    }
+    if request.action == "link-current" {
+        return link_current_from_extension(app, &request, &client_id);
+    }
     if request.action == "snapshot" {
         if request.live {
             let snapshot = Snapshot {
@@ -2466,12 +3006,6 @@ fn handle(
                 .iter()
                 .map(|(id, (_, name))| (*id, name.clone()))
                 .collect();
-            bridge
-                .state
-                .lock()
-                .map_err(|e| e.to_string())?
-                .live_destinations
-                .insert(client_id, destinations);
             return Ok(serde_json::json!({"received":true,"destinations":visible}));
         }
         return Ok(serde_json::json!({"received":true}));
@@ -2482,20 +3016,32 @@ fn handle(
         Err(_) if request.action == "status" => (Vec::new(), false),
         Err(error) => return Err(error),
     };
-    let (active, live, extension_version, destination) = {
+    let (active, live, extension_version, destination, destination_revision, has_owners) = {
         let state = bridge.state.lock().map_err(|e| e.to_string())?;
+        let destination = request.window_id.and_then(|id| {
+            state
+                .live_destinations
+                .get(&client_id)
+                .and_then(|windows| windows.get(&id))
+                .cloned()
+        });
+        let destination_revision = destination
+            .as_ref()
+            .and_then(|(id, _)| state.config.opened.get(id))
+            .map(revision)
+            .transpose()?;
         (
             desktop
                 .and_then(|key| active_on_desktop(&state.config.active, &key, &current).cloned()),
             client_live(&state, &client_id),
             update_version(&state, &request).map(str::to_owned),
-            request.window_id.and_then(|id| {
-                state
-                    .live_destinations
-                    .get(&client_id)
-                    .and_then(|windows| windows.get(&id))
-                    .cloned()
-            }),
+            destination,
+            destination_revision,
+            state
+                .config
+                .opened
+                .values()
+                .any(|owner| owner.targets.iter().any(Option::is_some)),
         )
     };
     let mut storage_error = None;
@@ -2520,14 +3066,21 @@ fn handle(
     } else {
         None
     };
-    let destination = if let Some((id, name)) = destination {
-        let exists = store.profiles.iter().any(|p| p.id == id)
-            || saved_browsers
-                .as_ref()
-                .is_some_and(|store| store.profiles.iter().any(|p| p.id == id));
-        exists.then_some(name)
-    } else {
-        None
+    let destination = destination.and_then(|(id, _)| {
+        store
+            .profiles
+            .iter()
+            .chain(
+                saved_browsers
+                    .iter()
+                    .flat_map(|store| store.profiles.iter()),
+            )
+            .find(|profile| profile.id == id)
+            .map(|profile| (profile.id.clone(), profile.name.clone()))
+    });
+    let (destination_id, destination_name) = match (destination, destination_revision) {
+        (Some((_, name)), Some(revision)) => (Some(revision), Some(name)),
+        _ => (None, None),
     };
     let workspace = active
         .as_ref()
@@ -2689,25 +3242,28 @@ fn handle(
     let choices: Vec<_> = store
         .profiles
         .iter()
-        .filter_map(|workspace| {
+        .map(|workspace| {
             let items: Vec<_> = workspace
                 .items
                 .iter()
                 .enumerate()
                 .filter(|(_, item)| is_browser_kind(item, request.browser))
-                .map(|(index, item)| serde_json::json!({"index":index,"label":item.label}))
+                .map(|(index, item)| serde_json::json!({"index":index,"label":item.label,"revision":revision(item).unwrap_or_default()}))
                 .collect();
-            (!items.is_empty())
-                .then(|| serde_json::json!({"id":workspace.id,"name":workspace.name,"items":items}))
+            serde_json::json!({"id":workspace.id,"name":workspace.name,"items":items,"windowCount":workspace.items.len()})
         })
         .collect();
     let saved_choices: Vec<_> = saved_browsers
         .into_iter()
         .flat_map(|store| store.profiles)
-        .map(|profile| serde_json::json!({"id":profile.id,"name":profile.name}))
+        .filter_map(|profile| {
+            let [item] = profile.items.as_slice() else { return None; };
+            let browser = item.browser.as_ref().filter(|browser| browser.kind == request.browser)?;
+            Some(serde_json::json!({"id":profile.id,"name":profile.name,"tabCount":browser.tabs.len(),"revision":revision(&profile).unwrap_or_default(),"itemRevision":revision(item).unwrap_or_default()}))
+        })
         .collect();
     Ok(
-        serde_json::json!({"workspace":workspace.map(|p| &p.name), "destination":destination, "profiles":profiles(request.browser), "workspaces":choices, "savedBrowsers":saved_choices, "live":live, "extensionVersion":extension_version, "storageError":storage_error, "windowsAvailable":windows_available}),
+        serde_json::json!({"libraryVersion":1, "workspace":workspace.map(|p| &p.name), "destination":destination_name, "destinationId":destination_id, "hasOwners":has_owners, "profiles":profiles(request.browser), "workspaces":choices, "savedBrowsers":saved_choices, "live":live, "extensionVersion":extension_version, "storageError":storage_error, "windowsAvailable":windows_available}),
     )
 }
 
@@ -2955,6 +3511,73 @@ fn match_focus_snapshot(items: &[WorkspaceItem], snapshot: &Snapshot) -> Vec<(us
         .collect()
 }
 
+fn focus_plans_after_launch<Observe, Pause>(
+    workspace: &crate::workspaces::Workspace,
+    results: &[RestoreResult],
+    requested: &[usize],
+    capable: &HashSet<String>,
+    snapshots: &CapturedSnapshots,
+    cancelled: &AtomicBool,
+    deadline: Instant,
+    mut observe: Observe,
+    mut pause: Pause,
+) -> Vec<(usize, String, FocusCommand)>
+where
+    Observe: FnMut() -> Option<(
+        Vec<crate::workspaces::WindowInfo>,
+        Vec<crate::workspaces::WindowInfo>,
+    )>,
+    Pause: FnMut(Duration),
+{
+    // Newly created browser windows can still be called "Untitled" when the
+    // extension has already reported their final tab titles. Reobserve the
+    // native windows briefly without waiting for another extension poll.
+    let mut last_plans = Vec::new();
+    for attempt in 0..3 {
+        if cancelled.load(Ordering::Relaxed) {
+            return Vec::new();
+        }
+        if attempt > 0 && Instant::now() >= deadline {
+            return last_plans;
+        }
+        let Some((before, after)) = observe() else {
+            return Vec::new();
+        };
+        if cancelled.load(Ordering::Relaxed) {
+            return Vec::new();
+        }
+        let mut plans = focus_plans(workspace, results, &after, snapshots, capable);
+        // A target whose title is still changing is not a reliable match.
+        plans.retain(|(index, _, _)| {
+            let Some((id, pid)) = results
+                .get(*index)
+                .and_then(|result| result.target.as_ref())
+            else {
+                return false;
+            };
+            let old = before
+                .iter()
+                .find(|window| &window.id == id && &window.pid == pid);
+            let new = after
+                .iter()
+                .find(|window| &window.id == id && &window.pid == pid);
+            old.zip(new)
+                .is_some_and(|(old, new)| old.title == new.title)
+        });
+        let pending_launch = requested.iter().any(|&index| {
+            results.get(index).is_some_and(|result| result.launched)
+                && !plans.iter().any(|(planned, _, _)| *planned == index)
+        });
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if !pending_launch || attempt == 2 || remaining <= Duration::from_millis(250) {
+            return plans;
+        }
+        last_plans = plans;
+        pause(Duration::from_millis(250));
+    }
+    Vec::new()
+}
+
 fn focus_plans(
     workspace: &crate::workspaces::Workspace,
     results: &[RestoreResult],
@@ -3044,6 +3667,25 @@ fn focus_plans(
             let (snapshot, window) = matches[0];
             let browser = workspace.items[index].browser.as_ref()?;
             let selected = browser.tabs.get(browser.active_tab.saturating_sub(1))?;
+            // Titles from the OS and extension can briefly describe different
+            // moments. If another potentially matching profile has the same
+            // selected URL, title alone cannot safely distinguish its window.
+            let matching_windows = snapshots
+                .0
+                .iter()
+                .filter(|other| {
+                    capable.contains(&other.client_id)
+                        && other.browser == snapshot.browser
+                        && (snapshot.profile_path.is_empty()
+                            || other.profile_path.is_empty()
+                            || same_path(&snapshot.profile_path, &other.profile_path))
+                })
+                .flat_map(|other| &other.windows)
+                .filter(|other| other.tabs.iter().any(|tab| tab.url == selected.url))
+                .count();
+            if matching_windows != 1 {
+                return None;
+            }
             let matching: Vec<_> = window
                 .tabs
                 .iter()
@@ -3100,7 +3742,11 @@ fn assign_browser(
         window_id: None,
         name: String::new(),
         saved_browser_id: String::new(),
+        expected_revision: String::new(),
+        operation_id: String::new(),
+        make_current: None,
         supports_focus: false,
+        expected_destination_id: None,
     };
     let mut browser = browser_from(&request, window, item.browser.as_ref());
     if snapshot.browser == BrowserKind::Firefox {
@@ -3154,6 +3800,17 @@ fn apply_live_snapshot(
     opened: &HashMap<String, Active>,
     windows: &[crate::workspaces::WindowInfo],
     snapshot: &Snapshot,
+) -> (Vec<String>, Vec<String>, HashMap<i64, (String, String)>) {
+    apply_owned_snapshot(workspaces, saved_browsers, opened, windows, snapshot, None)
+}
+
+fn apply_owned_snapshot(
+    workspaces: &mut crate::workspaces::WorkspaceStore,
+    saved_browsers: &mut crate::workspaces::WorkspaceStore,
+    opened: &HashMap<String, Active>,
+    windows: &[crate::workspaces::WindowInfo],
+    snapshot: &Snapshot,
+    only_window: Option<i64>,
 ) -> (Vec<String>, Vec<String>, HashMap<i64, (String, String)>) {
     let mut claims: HashMap<(String, u32), Vec<(String, usize, bool)>> = HashMap::new();
     for owner in opened.values() {
@@ -3233,6 +3890,9 @@ fn apply_live_snapshot(
     let mut changed_browsers = HashSet::new();
     let mut destinations = HashMap::new();
     for (native_index, extension_index) in match_snapshot(&observed, snapshot) {
+        if only_window.is_some_and(|id| snapshot.windows[extension_index].id != id) {
+            continue;
+        }
         let candidate = &mut observed[native_index];
         let identity = (candidate.window.id.clone(), candidate.window.pid);
         let Some([(id, index, saved_browser)]) = claims.get(&identity).map(Vec::as_slice) else {
@@ -3284,6 +3944,100 @@ fn apply_live_snapshot(
     )
 }
 
+fn sync_current_from_extension(
+    app: &AppHandle,
+    request: &Request,
+    client_id: &str,
+) -> Result<serde_json::Value, String> {
+    let window = selected_extension_window(request)?;
+    let runtime = app.state::<crate::Runtime>();
+    if runtime.restoring.load(Ordering::SeqCst) {
+        return Err("Wait for the workspace to finish opening, then sync again.".into());
+    }
+    let windows = crate::platform::snapshot(app)?;
+    let snapshot = Snapshot {
+        client_id: client_id.to_string(),
+        browser: request.browser,
+        profile_path: request.profile_path.clone(),
+        profile_name: request.profile_name.clone(),
+        windows: request.windows.clone(),
+        updated: Instant::now(),
+    };
+    let _guard = runtime
+        .workspace_io
+        .lock()
+        .map_err(|error| error.to_string())?;
+    if runtime.restoring.load(Ordering::SeqCst) {
+        return Err("Wait for the workspace to finish opening, then sync again.".into());
+    }
+    let bridge = app.state::<Bridge>();
+    let mut state = bridge.state.lock().map_err(|error| error.to_string())?;
+    let mut workspaces = crate::workspaces::load(app)?;
+    let mut saved = crate::workspaces::load_saved_browsers(app)?;
+    let (changed_workspaces, changed_browsers, destinations) = apply_owned_snapshot(
+        &mut workspaces,
+        &mut saved,
+        &state.config.opened,
+        &windows,
+        &snapshot,
+        Some(window.id),
+    );
+    let destination = destinations
+        .get(&window.id)
+        .cloned()
+        .ok_or("This window has no unique saved destination. Choose a current sync destination above, or use Sync elsewhere for a one-time update.")?;
+    let current_revision = revision(
+        state
+            .config
+            .opened
+            .get(&destination.0)
+            .ok_or("The current sync destination is no longer available.")?,
+    )?;
+    confirm_sync_destination(
+        &mut state,
+        client_id,
+        window.id,
+        request.expected_destination_id.as_deref(),
+        &destination,
+        &current_revision,
+    )?;
+    if !changed_workspaces.is_empty() {
+        crate::workspaces::save(app, &workspaces)?;
+        for id in changed_workspaces {
+            let _ = app.emit("warp-browser-updated", id);
+        }
+    }
+    if !changed_browsers.is_empty() {
+        crate::workspaces::save_saved_browsers(app, &saved)?;
+        let _ = app.emit("warp-saved-browsers-updated", ());
+    }
+    state
+        .live_destinations
+        .entry(client_id.to_string())
+        .or_default()
+        .insert(window.id, destination.clone());
+    Ok(serde_json::json!({"updated":1,"destination":destination.1}))
+}
+
+fn confirm_sync_destination(
+    state: &mut State,
+    client_id: &str,
+    window_id: i64,
+    expected: Option<&str>,
+    destination: &(String, String),
+    current_revision: &str,
+) -> Result<(), String> {
+    if expected.is_some_and(|expected| expected != current_revision) {
+        state
+            .live_destinations
+            .entry(client_id.to_string())
+            .or_default()
+            .insert(window_id, destination.clone());
+        return Err("The current sync destination changed. Review it and try again.".into());
+    }
+    Ok(())
+}
+
 fn save_live_snapshot(
     app: &AppHandle,
     snapshot: &Snapshot,
@@ -3294,6 +4048,11 @@ fn save_live_snapshot(
     }
     let bridge = app.state::<Bridge>();
     if snapshot.windows.is_empty() {
+        let mut state = bridge.state.lock().map_err(|e| e.to_string())?;
+        if !client_live(&state, &snapshot.client_id) {
+            return Err("Live tab sharing is off.".into());
+        }
+        cache_live_destinations(&mut state, &snapshot.client_id, HashMap::new());
         return Ok(HashMap::new());
     }
     let windows = crate::platform::snapshot(app)?;
@@ -3301,12 +4060,12 @@ fn save_live_snapshot(
     if runtime.restoring.load(Ordering::SeqCst) {
         return Ok(HashMap::new());
     }
-    let state = bridge.state.lock().map_err(|e| e.to_string())?;
+    let mut state = bridge.state.lock().map_err(|e| e.to_string())?;
     if !client_live(&state, &snapshot.client_id) {
         return Err("Live tab sharing is off.".into());
     }
-    let opened = &state.config.opened;
-    if opened.is_empty() {
+    if state.config.opened.is_empty() {
+        cache_live_destinations(&mut state, &snapshot.client_id, HashMap::new());
         return Ok(HashMap::new());
     }
     let mut workspaces = crate::workspaces::load(app)?;
@@ -3314,7 +4073,7 @@ fn save_live_snapshot(
     let (changed_workspaces, changed_browsers, destinations) = apply_live_snapshot(
         &mut workspaces,
         &mut saved_browsers,
-        opened,
+        &state.config.opened,
         &windows,
         snapshot,
     );
@@ -3328,7 +4087,25 @@ fn save_live_snapshot(
         crate::workspaces::save_saved_browsers(app, &saved_browsers)?;
         let _ = app.emit("warp-saved-browsers-updated", ());
     }
+    // Publish the cache under the same ownership lock used to compute it.
+    // A later workspace open then clears it rather than being followed by a
+    // delayed cache write for the previous owner.
+    cache_live_destinations(&mut state, &snapshot.client_id, destinations.clone());
     Ok(destinations)
+}
+
+fn cache_live_destinations(
+    state: &mut State,
+    client_id: &str,
+    destinations: HashMap<i64, (String, String)>,
+) {
+    if destinations.is_empty() {
+        state.live_destinations.remove(client_id);
+    } else {
+        state
+            .live_destinations
+            .insert(client_id.to_string(), destinations);
+    }
 }
 pub(crate) fn same_path(left: &str, right: &str) -> bool {
     let left = fs::canonicalize(left).unwrap_or_else(|_| PathBuf::from(left));
@@ -3587,6 +4364,38 @@ mod tests {
     }
 
     #[test]
+    fn one_time_update_preserves_target_profile_and_rejects_stale_confirmation() {
+        let mut target = item("saved", "Example - Google Chrome", 10);
+        target.browser = Some(Browser {
+            kind: BrowserKind::Chromium,
+            profile_path: "target-profile".into(),
+            profile_name: "Target".into(),
+            tabs: vec![Tab {
+                url: "https://old.test/".into(),
+                title: "Old".into(),
+            }],
+            active_tab: 1,
+        });
+        let mut request: Request = serde_json::from_value(serde_json::json!({
+            "token":"fixture", "action":"update-elsewhere", "browser":"chromium"
+        }))
+        .unwrap();
+        request.profile_path = "source-profile".into();
+        request.expected_revision = revision(&target).unwrap();
+        let window = snapshot().windows.remove(0);
+        replace_target_tabs(&mut target, &request, &window).unwrap();
+        let browser = target.browser.as_ref().unwrap();
+        assert_eq!(browser.profile_path, "target-profile");
+        assert_eq!(browser.profile_name, "Target");
+        assert_eq!(browser.tabs[0].url, "https://example.test/");
+        let changed = serde_json::to_value(&target).unwrap();
+        assert!(replace_target_tabs(&mut target, &request, &window).is_err());
+        assert_eq!(serde_json::to_value(&target).unwrap(), changed);
+        request.expected_revision.clear();
+        assert!(replace_target_tabs(&mut target, &request, &window).is_err());
+    }
+
+    #[test]
     fn focus_capability_must_belong_to_the_saved_browser_profile() {
         let mut state = State {
             running: Some(Arc::new(AtomicBool::new(true))),
@@ -3690,6 +4499,205 @@ mod tests {
         other_window.id = 2;
         live.windows.push(other_window);
         assert!(match_focus_snapshot(&[target, other], &live).is_empty());
+    }
+
+    #[test]
+    fn focus_waits_for_a_new_browser_window_title_to_settle() {
+        let mut saved = item("native", "Example - Google Chrome", 10);
+        let tabs = vec![
+            Tab {
+                url: "https://example.test/".into(),
+                title: "Example".into(),
+            },
+            Tab {
+                url: "https://second.test/".into(),
+                title: "Second".into(),
+            },
+        ];
+        saved.browser = Some(Browser {
+            kind: BrowserKind::Chromium,
+            tabs: tabs.clone(),
+            active_tab: 2,
+            ..Default::default()
+        });
+        let workspace = crate::workspaces::Workspace {
+            id: "work".into(),
+            name: "Work".into(),
+            platform: std::env::consts::OS.into(),
+            items: vec![saved.clone()],
+        };
+        let result = RestoreResult {
+            label: "Browser".into(),
+            restored: true,
+            launched: true,
+            error: None,
+            warning: None,
+            target: Some((saved.window.id.clone(), saved.window.pid)),
+        };
+        let mut live = snapshot();
+        live.windows[0].tabs = tabs;
+        let captured = CapturedSnapshots(vec![live.clone()]);
+        let mut observations = 0;
+        let pauses = std::cell::Cell::new(0);
+        let plans = focus_plans_after_launch(
+            &workspace,
+            std::slice::from_ref(&result),
+            &[0],
+            &HashSet::from(["fixture".to_string()]),
+            &captured,
+            &AtomicBool::new(false),
+            Instant::now() + Duration::from_secs(1),
+            || {
+                observations += 1;
+                let mut native = saved.window.clone();
+                if observations == 1 {
+                    native.title = "Untitled - Google Chrome".into();
+                }
+                Some((vec![native], vec![saved.window.clone()]))
+            },
+            |_| pauses.set(pauses.get() + 1),
+        );
+        assert_eq!(observations, 2);
+        assert_eq!(pauses.get(), 1);
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].2.window_id, 1);
+        assert_eq!(plans[0].2.tab_index, 1);
+
+        // Repeated observations must never choose between identical windows.
+        let mut ambiguous = live.clone();
+        let mut other = ambiguous.windows[0].clone();
+        other.id = 2;
+        ambiguous.windows.push(other);
+        let ambiguous_capture = CapturedSnapshots(vec![ambiguous.clone()]);
+        let mut attempts = 0;
+        let plans = focus_plans_after_launch(
+            &workspace,
+            std::slice::from_ref(&result),
+            &[0],
+            &HashSet::from(["fixture".to_string()]),
+            &ambiguous_capture,
+            &AtomicBool::new(false),
+            Instant::now() + Duration::from_secs(1),
+            || {
+                attempts += 1;
+                Some((vec![saved.window.clone()], vec![saved.window.clone()]))
+            },
+            |_| {},
+        );
+        assert!(plans.is_empty());
+        assert_eq!(attempts, 3);
+
+        // A slow observation consumes the shared budget and is not retried.
+        let mut slow_attempts = 0;
+        let slow_pauses = std::cell::Cell::new(0);
+        let plans = focus_plans_after_launch(
+            &workspace,
+            std::slice::from_ref(&result),
+            &[0],
+            &HashSet::from(["fixture".to_string()]),
+            &ambiguous_capture,
+            &AtomicBool::new(false),
+            Instant::now() + Duration::from_millis(100),
+            || {
+                slow_attempts += 1;
+                std::thread::sleep(Duration::from_millis(150));
+                Some((vec![saved.window.clone()], vec![saved.window.clone()]))
+            },
+            |_| slow_pauses.set(slow_pauses.get() + 1),
+        );
+        assert!(plans.is_empty());
+        assert_eq!(slow_attempts, 1);
+        assert_eq!(slow_pauses.get(), 0);
+
+        // A title swap during capture must not redirect focus to another window.
+        let mut swapped_live = live.clone();
+        let mut other = swapped_live.windows[0].clone();
+        other.id = 2;
+        other.title = "Second".into();
+        swapped_live.windows[0].tabs = vec![Tab {
+            url: "https://different.test/".into(),
+            title: "Example".into(),
+        }];
+        swapped_live.windows.push(other);
+        let swapped_capture = CapturedSnapshots(vec![swapped_live]);
+        let original_other = item("other", "Second - Google Chrome", 20).window;
+        let mut after_target = saved.window.clone();
+        after_target.title = "Second - Google Chrome".into();
+        let mut after_other = original_other.clone();
+        after_other.title = saved.window.title.clone();
+        let plans = focus_plans_after_launch(
+            &workspace,
+            std::slice::from_ref(&result),
+            &[0],
+            &HashSet::from(["fixture".to_string()]),
+            &swapped_capture,
+            &AtomicBool::new(false),
+            Instant::now() + Duration::from_secs(1),
+            || {
+                Some((
+                    vec![saved.window.clone(), original_other.clone()],
+                    vec![after_target.clone(), after_other.clone()],
+                ))
+            },
+            |_| {},
+        );
+        assert!(plans.is_empty());
+
+        // Even stable but stale native titles cannot disambiguate two windows
+        // that both contain the selected URL.
+        let mut stale_live = live.clone();
+        stale_live.windows[0].title = "Second".into();
+        let mut stale_other = live.windows[0].clone();
+        stale_other.id = 2;
+        stale_live.windows.push(stale_other);
+        let stale_capture = CapturedSnapshots(vec![stale_live]);
+        let plans = focus_plans_after_launch(
+            &workspace,
+            std::slice::from_ref(&result),
+            &[0],
+            &HashSet::from(["fixture".to_string()]),
+            &stale_capture,
+            &AtomicBool::new(false),
+            Instant::now() + Duration::from_secs(1),
+            || {
+                Some((
+                    vec![saved.window.clone(), original_other.clone()],
+                    vec![saved.window.clone(), original_other.clone()],
+                ))
+            },
+            |_| {},
+        );
+        assert!(plans.is_empty());
+
+        // A missing second target must not discard a valid first target when
+        // too little time remains for another observation.
+        let mut two_windows = workspace.clone();
+        let mut missing = saved.clone();
+        missing.window.id = "missing".into();
+        two_windows.items.push(missing);
+        let missing_result = RestoreResult {
+            label: "Missing".into(),
+            restored: true,
+            launched: true,
+            error: None,
+            warning: None,
+            target: Some(("missing".into(), saved.window.pid)),
+        };
+        let short_pause = std::cell::Cell::new(0);
+        let plans = focus_plans_after_launch(
+            &two_windows,
+            &[result, missing_result],
+            &[0, 1],
+            &HashSet::from(["fixture".to_string()]),
+            &captured,
+            &AtomicBool::new(false),
+            Instant::now() + Duration::from_millis(100),
+            || Some((vec![saved.window.clone()], vec![saved.window.clone()])),
+            |_| short_pause.set(short_pause.get() + 1),
+        );
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].0, 0);
+        assert_eq!(short_pause.get(), 0);
     }
 
     #[test]
@@ -3895,6 +4903,137 @@ mod tests {
     }
 
     #[test]
+    fn a_live_cache_write_cannot_follow_a_new_owner() {
+        let state = Arc::new(Mutex::new(State::default()));
+        let (cached_tx, cached_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let writer_state = state.clone();
+        let writer = std::thread::spawn(move || {
+            let mut state = writer_state.lock().unwrap();
+            cache_live_destinations(
+                &mut state,
+                "client",
+                HashMap::from([(7, ("a".into(), "A".into()))]),
+            );
+            cached_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        cached_rx.recv().unwrap();
+        let owner_state = state.clone();
+        let owner = std::thread::spawn(move || {
+            let mut state = owner_state.lock().unwrap();
+            remember_opened_for_state(
+                &mut state,
+                Active {
+                    id: "b".into(),
+                    targets: vec![],
+                    saved: vec![],
+                },
+            );
+        });
+        release_tx.send(()).unwrap();
+        writer.join().unwrap();
+        owner.join().unwrap();
+        let state = state.lock().unwrap();
+        assert!(state.config.opened.contains_key("b"));
+        assert!(state.live_destinations.is_empty());
+    }
+
+    #[test]
+    fn a_changed_owner_invalidates_old_labels_and_rejects_a_stale_sync() {
+        let saved = item("saved", "Example", 10);
+        let active = |id: &str| Active {
+            id: id.into(),
+            targets: vec![Some(("open".into(), 1))],
+            saved: vec![saved_window_key(&saved)],
+        };
+        let mut state = State::default();
+        let old_revision = revision(&active("workspace-a")).unwrap();
+        let new_revision = revision(&active("workspace-b")).unwrap();
+        remember_opened_for_state(&mut state, active("workspace-a"));
+        state
+            .live_destinations
+            .entry("client".into())
+            .or_default()
+            .insert(7, ("workspace-a".into(), "Workspace A".into()));
+
+        remember_opened_for_state(&mut state, active("workspace-b"));
+        assert!(state.live_destinations.is_empty());
+        assert!(state.config.opened["workspace-a"].targets[0].is_none());
+        let current = ("workspace-b".into(), "Workspace B".into());
+        assert!(confirm_sync_destination(
+            &mut state,
+            "client",
+            7,
+            Some(&old_revision),
+            &current,
+            &new_revision
+        )
+        .is_err());
+        assert_eq!(state.live_destinations["client"][&7], current);
+        assert!(confirm_sync_destination(
+            &mut state,
+            "client",
+            7,
+            Some(&new_revision),
+            &current,
+            &new_revision
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn relinking_within_a_workspace_moves_the_claim_and_changes_the_sync_revision() {
+        let first = item("saved-a", "Example", 10);
+        let second = item("saved-b", "Example", 10);
+        let mut owner = Active {
+            id: "work".into(),
+            targets: vec![Some(("open".into(), 1)), None],
+            saved: vec![saved_window_key(&first), saved_window_key(&second)],
+        };
+        let previous_revision = revision(&owner).unwrap();
+        assign_opened_target(&mut owner.targets, 1, ("open".into(), 1));
+        let new_revision = revision(&owner).unwrap();
+        assert_ne!(previous_revision, new_revision);
+        assert!(owner.targets[0].is_none());
+        let mut store = crate::workspaces::WorkspaceStore {
+            version: 1,
+            profiles: vec![crate::workspaces::Workspace {
+                id: "work".into(),
+                name: "Work".into(),
+                platform: std::env::consts::OS.into(),
+                items: vec![first, second],
+            }],
+        };
+        let mut saved = crate::workspaces::WorkspaceStore::default();
+        let (changed, _, destinations) = apply_owned_snapshot(
+            &mut store,
+            &mut saved,
+            &HashMap::from([("work".into(), owner)]),
+            &[item("open", "Example", 10).window],
+            &snapshot(),
+            Some(1),
+        );
+        assert_eq!(changed, vec!["work"]);
+        assert!(destinations.contains_key(&1));
+        assert!(store.profiles[0].items[0].browser.is_none());
+        assert_eq!(
+            store.profiles[0].items[1].browser.as_ref().unwrap().tabs[0].url,
+            "https://example.test/"
+        );
+        let mut state = State::default();
+        assert!(confirm_sync_destination(
+            &mut state,
+            "client",
+            1,
+            Some(&previous_revision),
+            &destinations[&1],
+            &new_revision
+        )
+        .is_err());
+    }
+
+    #[test]
     fn live_tabs_update_only_the_workspace_that_owns_each_open_window() {
         let old = Browser {
             kind: BrowserKind::Chromium,
@@ -3966,6 +5105,53 @@ mod tests {
             }],
         });
         let windows = vec![current_first.clone(), current_second.clone()];
+        let mut single = workspaces.clone();
+        let mut single_browsers = browsers.clone();
+        let (changed, _, selected) = apply_owned_snapshot(
+            &mut single,
+            &mut single_browsers,
+            &opened,
+            &windows,
+            &incoming,
+            Some(1),
+        );
+        assert_eq!(changed, vec!["work"]);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(
+            single.profiles[0].items[0]
+                .browser
+                .as_ref()
+                .unwrap()
+                .tabs
+                .len(),
+            2
+        );
+        assert_eq!(
+            single.profiles[1].items[0].browser.as_ref().unwrap(),
+            &old,
+            "syncing one browser leaves the other owned window untouched"
+        );
+        let mut ambiguous = incoming.clone();
+        let mut duplicate = ambiguous.windows[0].clone();
+        duplicate.id = 3;
+        ambiguous.windows.push(duplicate);
+        let mut untouched = workspaces.clone();
+        let (_, _, selected) = apply_owned_snapshot(
+            &mut untouched,
+            &mut single_browsers,
+            &opened,
+            &windows,
+            &ambiguous,
+            Some(1),
+        );
+        assert!(
+            selected.is_empty(),
+            "an explicit sync still rejects competing browser windows"
+        );
+        assert_eq!(
+            untouched.profiles[0].items[0].browser.as_ref().unwrap(),
+            &old
+        );
         let (changed, _, destinations) =
             apply_live_snapshot(&mut workspaces, &mut browsers, &opened, &windows, &incoming);
         assert_eq!(changed.len(), 2);

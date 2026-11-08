@@ -694,7 +694,7 @@ async fn restore_workspace(
     app: AppHandle,
     id: String,
 ) -> Result<Vec<workspaces::RestoreResult>, String> {
-    restore_destination(app, id, false).await
+    restore_destination(app, id, false, false).await
 }
 
 #[tauri::command]
@@ -702,13 +702,14 @@ async fn restore_saved_browser(
     app: AppHandle,
     id: String,
 ) -> Result<Vec<workspaces::RestoreResult>, String> {
-    restore_destination(app, id, true).await
+    restore_destination(app, id, true, false).await
 }
 
 async fn restore_destination(
     app: AppHandle,
     id: String,
     saved_browser: bool,
+    force_new: bool,
 ) -> Result<Vec<workspaces::RestoreResult>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use std::sync::atomic::Ordering;
@@ -725,15 +726,19 @@ async fn restore_destination(
         let _reset = Reset(&runtime.restoring);
         runtime.cancel_restore.store(false, Ordering::SeqCst);
         let store = if saved_browser { workspaces::load_saved_browsers(&app)? } else { workspaces::load(&app)? };
-        let profile = store
+        let mut profile = store
             .profiles
             .iter()
             .find(|p| p.id == id)
+            .cloned()
             .ok_or("Workspace no longer exists.")?;
-        let active_targets = browser_bridge::workspace_active_targets_here(&app, profile)?;
+        if saved_browser && force_new {
+            for item in &mut profile.items { item.launch.new_window = true; }
+        }
+        let active_targets = browser_bridge::workspace_active_targets_here(&app, &profile)?;
         let desktop = platform::current_desktop_key(&app).ok();
-        let mut results = workspaces::restore(&app, profile, &runtime.cancel_restore, desktop.as_deref(), &active_targets)?;
-        for index in app.state::<browser_bridge::Bridge>().focus_restored_tabs(&app, profile, &results, &runtime.cancel_restore) {
+        let mut results = workspaces::restore(&app, &profile, &runtime.cancel_restore, desktop.as_deref(), &active_targets)?;
+        for index in app.state::<browser_bridge::Bridge>().focus_restored_tabs(&app, &profile, &results, &runtime.cancel_restore) {
             if let Some(result) = results.get_mut(index) {
                 let message = "Could not confirm the saved browser tab is selected. Check the browser extension or select it manually.";
                 result.warning = Some(match result.warning.take() { Some(previous) => format!("{previous} {message}"), None => message.into() });
@@ -743,9 +748,9 @@ async fn restore_destination(
             let remembered = desktop.ok_or_else(|| "The current desktop could not be identified.".to_string()).and_then(|desktop| {
                 if platform::current_desktop_key(&app)? != desktop { return Err("The desktop changed while the workspace was opening.".into()); }
                 if saved_browser {
-                    app.state::<browser_bridge::Bridge>().set_saved_browser_opened(&app, profile, &results)
+                    app.state::<browser_bridge::Bridge>().set_saved_browser_opened(&app, &profile, &results)
                 } else {
-                    app.state::<browser_bridge::Bridge>().set_active(&app, desktop, profile, &results)
+                    app.state::<browser_bridge::Bridge>().set_active(&app, desktop, &profile, &results)
                 }
             });
             if remembered.is_err() {

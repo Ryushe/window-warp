@@ -109,6 +109,7 @@ def wait_for_reloaded(source, timeout=15):
             if evaluate(source):
                 return
         except RuntimeError as error:
+            # WebKit may briefly invalidate the frame while location.reload completes.
             if 'no such frame' not in str(error) or 'unload event' not in str(error):
                 raise
         time.sleep(0.2)
@@ -755,7 +756,20 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         wait_for("return document.querySelector('#status').classList.contains('active')")
         invoke_shortcut("toggle-pause")
         wait_for("return document.querySelector('#status').textContent.includes('Paused')")
-        wait_for_script_state(False, True)
+        script_deadline = time.monotonic() + 5
+        observed_script_states = []
+        while time.monotonic() < script_deadline:
+            pause_loaded = kwin_loaded("window-warp-pause-session")
+            main_loaded = kwin_loaded()
+            observed_script_states.append((pause_loaded, main_loaded))
+            if pause_loaded and not main_loaded:
+                break
+            time.sleep(0.05)
+        pause_loaded = kwin_loaded("window-warp-pause-session")
+        main_loaded = kwin_loaded()
+        if not (pause_loaded and not main_loaded):
+            print(json.dumps({"pauseScript": pause_loaded, "mainScript": main_loaded, "observed": observed_script_states, "status": invoke("get_status")}), flush=True)
+        assert pause_loaded and not main_loaded
         click("#toggle")
         wait_for("return document.querySelector('#status').classList.contains('active')")
         assert kwin_loaded(), "App reported active but no KWin script was loaded"
@@ -764,6 +778,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         (output / "window-warp-kde.png").write_bytes(base64.b64decode(screenshot))
         click("#toggle")
         wait_for("return document.querySelector('#status').textContent.includes('Paused')")
+        wait_for("return !document.querySelector('#toggle').disabled")
         assert not kwin_loaded(), "Pause did not unload the KWin script"
         settings = list(Path(temporary).glob("config/**/settings.json"))
         assert len(settings) == 1
@@ -773,6 +788,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         if not evaluate("return document.querySelector('.binding:nth-child(2)').classList.contains('is-open')"):
             click(".binding:nth-child(2) .binding-summary")
         wait_for("const row=document.querySelector('.binding:nth-child(2)'); const button=row.querySelector('.reassign'); return row.classList.contains('is-open') && !button.disabled && button.getClientRects().length > 0")
+        evaluate("document.querySelector('.binding:nth-child(2) .reassign').scrollIntoView({block:'center'}); return true;")
         click(".binding:nth-child(2) .reassign")
         wait_for("return !document.querySelector('.binding:nth-child(2) .reassignment').hidden && !document.querySelector('.binding:nth-child(2) .confirm-reassignment').disabled")
         assert "Push window left" in evaluate("return document.querySelector('.binding:nth-child(2) .reassignment-summary').textContent")
@@ -780,10 +796,13 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         evaluate("document.querySelector('.binding:nth-child(2)').scrollIntoView({block:'center'}); return true;")
         screenshot = request("GET", f"/session/{session}/screenshot")
         (output / "window-warp-reassignment-kde.png").write_bytes(base64.b64decode(screenshot))
+        evaluate("document.querySelector('.binding:nth-child(2) .cancel-reassignment').scrollIntoView({block:'center'}); return true;")
         click(".binding:nth-child(2) .cancel-reassignment")
         assert evaluate("return document.querySelector('[data-field=enabled]').checked")
+        evaluate("document.querySelector('.binding:nth-child(2) .reassign').scrollIntoView({block:'center'}); return true;")
         click(".binding:nth-child(2) .reassign")
         wait_for("return !document.querySelector('.binding:nth-child(2) .confirm-reassignment').disabled")
+        evaluate("document.querySelector('.binding:nth-child(2) .confirm-reassignment').scrollIntoView({block:'center'}); return true;")
         click(".binding:nth-child(2) .confirm-reassignment")
         assert not evaluate("return document.querySelector('[data-field=enabled]').checked")
         assert invoke("get_config")["bindings"][0]["enabled"], "Review must not auto-save"
@@ -815,9 +834,14 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         assert any(item["window"]["active"] for item in captured["items"]), "Owned fixture must be active for editor capture"
         invoke("set_enabled", {"enabled": True})
         main_handle = request("GET", f"/session/{session}/window")
-        original_count = len(invoke("get_config")["bindings"])
-        expected_app = next(item["window"]["appId"] for item in captured["items"] if item["window"]["active"])
+        old_bindings = invoke("get_config")["bindings"]
+        original_count = len(old_bindings)
         invoke_shortcut("open-editor")
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not invoke("quick_is_open"):
+            time.sleep(0.1)
+        assert invoke("quick_is_open"), "The current-app shortcut did not open its quick popup"
+        expected_app = next(item["window"]["appId"] for item in captured["items"] if item["window"]["active"])
         quick_handle = None
         deadline_quick = time.monotonic() + 25
         while time.monotonic() < deadline_quick and not quick_handle:
@@ -829,6 +853,7 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             if not quick_handle: time.sleep(.15)
         assert quick_handle, "Current-app popup did not open"
         wait_for("return !!document.querySelector('#quick-app')?.textContent && !document.querySelector('#quick-apply').disabled")
+        assert expected_app.casefold() in evaluate("return document.querySelector('#quick-app').textContent").casefold()
         from wayland_input import Input
         with Input() as keys:
             keys.key(45, True); keys.key(45, False)  # X
@@ -838,7 +863,11 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
         for _ in range(80):
             if len(invoke("get_config")["bindings"]) == original_count + 1: break
             time.sleep(.1)
-        assert len(invoke("get_config")["bindings"]) == original_count + 1
+        new_bindings = invoke("get_config")["bindings"]
+        assert len(new_bindings) == original_count + 1
+        assert new_bindings[-1]["appMatch"].casefold() == expected_app.casefold()
+        assert new_bindings[-1]["shortcut"].endswith("+X")
+        assert invoke("get_status")["enabled"], "The quick popup should preserve active shortcuts"
         evaluate("location.reload(); return true;")
         wait_for(f"return document.querySelectorAll('.binding').length === {original_count + 1}")
         assert evaluate("return document.querySelector('.binding:last-child [data-field=appMatch]').value") == expected_app
@@ -1008,6 +1037,11 @@ with tempfile.TemporaryDirectory(prefix="window-warp-gui-") as temporary, (outpu
             state_item["window"] = hold_windows[0]
             config = invoke("get_config")
             hold_index = len(config["bindings"]) - 1
+            # Reserve the two chords this isolated hold/reassignment fixture uses.
+            # The expanded default shortcut list may already assign J or K.
+            for index, binding in enumerate(config["bindings"]):
+                if index != hold_index and binding["shortcut"] in ("Ctrl+Alt+Shift+J", "Ctrl+Alt+Shift+K"):
+                    binding["enabled"] = False
             config["bindings"][hold_index]["appMatch"] = state_item["window"]["appId"]
             next(binding for binding in config["bindings"] if binding["action"] == "toggle-pause")["shortcut"] = "Ctrl+Alt+Shift+P"
             config["bindings"][1].update({"action":"focus-app", "appMatch":state_item["window"]["appId"]})

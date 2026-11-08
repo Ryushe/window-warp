@@ -1,8 +1,9 @@
-# Window Warp 0.1.7 candidate validation
+# Window Warp 0.1.7 earlier candidate validation
 
 Built on 2026-11-07 from checkpoint `4bb57ee4f033f41f3996ed165cf499e47cce14e7`
-with the app and package versions updated to 0.1.7. This is a local candidate;
-it has not been published or installed over the user's application.
+with the app and package versions updated to 0.1.7. This earlier local candidate
+does not include the subsequent extension redesign or integration with `main`;
+its checks and artifacts are historical and are not validation of this release.
 
 ## Windows
 

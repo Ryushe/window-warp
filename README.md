@@ -9,14 +9,14 @@ Put every window in its place. Window Warp is a Windows and KDE Plasma app for m
 
 ## Install
 
-- **Windows:** download the Windows installer from the [0.1.6 preview release](https://github.com/Ryushe/window-warp/releases/tag/v0.1.6) for the latest Firefox connection features. Window Warp is also listed in the [Microsoft Store](https://apps.microsoft.com/detail/9NVBS6W8RV54?hl=en-us&gl=US&ocid=pdpshare); its version may differ.
-- **KDE Plasma:** download the Debian package from the [0.1.6 preview release](https://github.com/Ryushe/window-warp/releases/tag/v0.1.6). It targets Ubuntu/Kubuntu 24.04 amd64 with Plasma 5.27.11 on Wayland:
+- **Windows:** install [Window Warp from the Microsoft Store](https://apps.microsoft.com/detail/9NVBS6W8RV54?hl=en-us&gl=US&ocid=pdpshare), or download the installer from the [latest GitHub release](https://github.com/Ryushe/window-warp/releases/latest). Store availability may lag a GitHub release.
+- **KDE Plasma:** download the Debian package from the [latest GitHub release](https://github.com/Ryushe/window-warp/releases/latest). It targets Linux Mint 22.2 amd64 with KDE Plasma 5 on Wayland:
 
 ```sh
-sudo apt install ./window-warp_0.1.6_kubuntu24.04_amd64.deb
+sudo apt install ./WindowWarp_0.1.7_linuxmint22.2_kde5_amd64.deb
 ```
 
-Run the command from the download directory, using the downloaded filename if a newer release is available. This package requires `kwin-common` version `4:5.27.11-0ubuntu3`. Other KWin versions, including Plasma 6, need a matching companion and package build. See the [KDE setup notes](desktop/README.md#kde-setup) for details.
+Run the command from the download directory, using the downloaded filename if a newer release is available. `apt` installs the package and resolves its dependencies; `sudo dpkg -i` also works if the dependencies are already installed. This package requires `kwin-common` version `4:5.27.11-0ubuntu3`. Other KWin versions, including Plasma 6, need a matching companion and package build. See the [KDE setup notes](desktop/README.md#kde-setup) for details.
 
 ## What it does
 

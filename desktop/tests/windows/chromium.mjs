@@ -111,11 +111,15 @@ export async function testChromium({output,marker,invoke,until,checks,report,eva
         await popupSocket.evaluate("document.querySelector('#save-browser').click(); true");
         await until(()=>popupSocket.evaluate("!document.querySelector('#save-browser-form').hidden"),Boolean,"browser save form",10000);
         await popupSocket.evaluate("document.querySelector('#browser-name').value=''; document.querySelector('#confirm-save-browser').click(); true");
-        assert.match(await popupSocket.evaluate("document.querySelector('#save-feedback').textContent"),/Give this browser a name/);
+        assert.match(await popupSocket.evaluate("document.querySelector('#save-feedback').textContent"),/Give this item a name/);
         assert.equal((await invoke('get_saved_browsers')).profiles.length,0,'an invalid save does not create a browser');
         await popupSocket.evaluate("document.querySelector('#browser-name').focus(); true");
         await popupSocket.call('Input.insertText',{text:'Owned saved browser'});
         assert.equal(await popupSocket.evaluate("document.querySelector('#browser-name').value"),'Owned saved browser','keyboard input reaches the name field');
+        await popupSocket.call('Input.dispatchKeyEvent',{type:'keyDown',key:'Tab',code:'Tab',windowsVirtualKeyCode:9});
+        await popupSocket.call('Input.dispatchKeyEvent',{type:'keyUp',key:'Tab',code:'Tab',windowsVirtualKeyCode:9});
+        assert.equal(await popupSocket.evaluate("document.activeElement.id"),'save-link','the current-destination option is reachable by keyboard');
+        assert.equal(await popupSocket.evaluate("document.querySelector('#save-link').checked"),true,'the first saved browser becomes the current destination');
         await popupSocket.call('Input.dispatchKeyEvent',{type:'keyDown',key:'Tab',code:'Tab',windowsVirtualKeyCode:9});
         await popupSocket.call('Input.dispatchKeyEvent',{type:'keyUp',key:'Tab',code:'Tab',windowsVirtualKeyCode:9});
         assert.equal(await popupSocket.evaluate("document.activeElement.id"),'confirm-save-browser','the save action is reachable by keyboard');
@@ -141,12 +145,12 @@ export async function testChromium({output,marker,invoke,until,checks,report,eva
         await until(()=>popupSocket.evaluate("chrome.storage.local.get('liveSharing').then(value=>!value.liveSharing && !document.querySelector('#live').disabled)"),Boolean,"turn standalone live sharing off",10000);
         const replacementUrl=`http://127.0.0.1:${pages.address().port}/replacement`;
         const replacementTab=await workerSocket.evaluate(`chrome.tabs.create({windowId:${savedWindowId},url:${JSON.stringify(replacementUrl)},active:false})`);
-        await popupSocket.evaluate("document.querySelector('#save-browser').click(); true");
-        await until(()=>popupSocket.evaluate("!document.querySelector('#save-browser-form').hidden && document.querySelector('#save-target').options.length>1"),Boolean,"choose an existing saved browser",10000);
-        await popupSocket.evaluate(`document.querySelector('#save-target').value=${JSON.stringify(savedBrowser.profiles[0].id)}; document.querySelector('#save-target').dispatchEvent(new Event('change',{bubbles:true})); document.querySelector('#confirm-save-browser').click(); true`);
-        await until(()=>popupSocket.evaluate("!document.querySelector('#replace-browser-confirmation').hidden"),Boolean,"replacement confirmation",10000);
+        await popupSocket.evaluate("document.querySelector('#sync-elsewhere').click(); true");
+        await until(()=>popupSocket.evaluate("!document.querySelector('#chooser').hidden && document.querySelector('#target-destination').options.length>1"),Boolean,"choose an existing saved browser",10000);
+        await popupSocket.evaluate(`document.querySelector('#target-destination').value=${JSON.stringify('saved:'+savedBrowser.profiles[0].id)}; document.querySelector('#target-destination').dispatchEvent(new Event('change',{bubbles:true})); document.querySelector('#chooser-review').click(); true`);
+        await until(()=>popupSocket.evaluate("!document.querySelector('#chooser-confirm').hidden"),Boolean,"replacement confirmation",10000);
         assert.equal((await invoke('get_saved_browsers')).profiles[0].items[0].browser.tabs.length,2,'saved tabs stay intact until replacement is confirmed');
-        await popupSocket.evaluate("document.querySelector('#confirm-replace-browser').click(); true");
+        await popupSocket.evaluate("document.querySelector('#chooser-confirm-button').click(); true");
         await until(()=>invoke('get_saved_browsers'),store=>store.profiles.length===1 && store.profiles[0].items[0].browser.tabs.some(t=>t.url===replacementUrl),'replace one saved browser after confirmation',30000);
         const refreshUrl=`http://127.0.0.1:${pages.address().port}/automatic-saved-refresh`;
         const refreshTab=await workerSocket.evaluate(`chrome.tabs.create({windowId:${savedWindowId},url:${JSON.stringify(refreshUrl)},active:false})`);
@@ -159,6 +163,7 @@ export async function testChromium({output,marker,invoke,until,checks,report,eva
         checks.push("an existing saved browser is replaced only after explicit confirmation");
 
         await click('#show-settings');
+        await popupSocket.evaluate("document.querySelector('#workspaces-tab').click(); true");
         await popupSocket.evaluate("document.querySelector('#open-workspaces').click(); true");
         await wait("!document.querySelector('#workspaces-page').hidden",'extension opens the Workspaces page',15000);
         checks.push("the extension opens Window Warp directly to Workspaces");
@@ -231,7 +236,7 @@ export async function testChromium({output,marker,invoke,until,checks,report,eva
         checks.push("real Chromium popup controls connection and per-profile live sharing");
         await popupSocket.evaluate("document.querySelector('#update').click(); true");
         try {
-            await until(()=>popupSocket.evaluate("document.querySelector('#status')?.textContent || ''"),text=>/Updated 1 browser window/.test(text),"extension URL update",30000);
+            await until(()=>popupSocket.evaluate("document.querySelector('#status')?.textContent || ''"),text=>/Synced tabs to/.test(text),"extension URL update",30000);
         } catch(error) {
             const observed=await workerSocket.evaluate("chrome.windows.getAll({populate:true,windowTypes:['normal']})").catch(()=>[]);
             const native=(await invoke("get_windows")).filter(window=>window.pid===child.pid).map(window=>({id:window.id,title:window.title,rect:window.rect}));
