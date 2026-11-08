@@ -1001,6 +1001,23 @@ test("ambiguous Firefox capture can be resolved by choosing a saved browser wind
     assert.equal(e.stored().profiles[0].items[0].captureNote, '');
 });
 
+test("choosing a saved Firefox window protects manually edited URLs", async () => {
+    const p=profile('session-confirm','Research'); p.items[0].window.appId='firefox.exe';
+    p.items[0].browser={profilePath:'/profiles/work',profileName:'Work',tabs:[{url:'https://old.test',title:''}],activeTab:1};
+    const sessions=[{tabs:[{url:'https://session.test',title:'Session'}],activeTab:1}];
+    const e=await editor({profiles:[p],browserSessions:sessions});
+    await e.click('[data-action="edit"]');
+    e.input('[data-browser="tabs"]','https://manual.test');
+    await e.click('.find-browser-tabs');
+    e.document.querySelector('.browser-session').value='0';
+    await e.click('.use-browser-session');
+    assert.equal(e.document.querySelector('#workspace-tabs-confirm').hidden,false);
+    await e.click('#workspace-tabs-keep');
+    assert.equal(e.document.querySelector('[data-browser="tabs"]').value,'https://manual.test');
+    await e.click('.use-browser-session'); await e.click('#workspace-tabs-replace');
+    assert.equal(e.document.querySelector('[data-browser="tabs"]').value,'https://session.test');
+});
+
 test("Firefox tab recovery appears below URLs and reports errors beside the control", async () => {
     const p = profile("missing-browser", "Research");
     p.items[0].browser = {profilePath:"",profileName:"",tabs:[],activeTab:1};
@@ -1726,6 +1743,19 @@ test("focused browser tab follows URL edits and asks when the chosen URL disappe
     await e.click('#save-workspace');
     assert.equal(e.stored().profiles[0].items[0].browser.activeTab,2);
     assert.equal(e.stored().profiles[0].items[0].browser.tabs[1].url,'https://one.test');
+});
+
+test("one remaining URL becomes focused after an unresolved selection", async () => {
+    const p=profile('one-url','Research'); p.items[0].window.appId='firefox.exe';
+    p.items[0].browser={profilePath:'',profileName:'',tabs:['one','two','three'].map(url=>({url:'https://' + url + '.test',title:''})),activeTab:2};
+    const e=await editor({profiles:[p]}); await e.click('[data-action="edit"]');
+    e.input('[data-browser="tabs"]','https://one.test\nhttps://three.test');
+    assert.equal(e.document.querySelector('[data-browser="activeTab"]').value,'');
+    e.input('[data-browser="tabs"]','https://one.test');
+    assert.equal(e.document.querySelector('[data-browser="activeTab"]').value,'1');
+    await e.click('#save-workspace');
+    assert.equal(e.stored().profiles[0].items[0].browser.activeTab,1);
+    assert.equal(e.stored().profiles[0].items[0].browser.tabs[0].url,'https://one.test');
 });
 
 test("updating browser tabs asks before replacing manually edited URLs", async () => {

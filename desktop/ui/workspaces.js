@@ -1153,16 +1153,20 @@
                     if (sessionSelect.value === "") { window.WarpErrorTimer.set(sessionStatus, "Choose a saved Firefox window first.", {error:true}); return; }
                     const session = sessions[Number(sessionSelect.value)];
                     if (!session) return;
-                    browser.tabs = clone(session.tabs);
-                    browser.activeTab = session.activeTab;
-                    invalidFocusedTabs.delete(item); draftDirty = true;
-                    item.browser = browser; restoreBrowser.checked = true; ignoredBrowserTabs.delete(index);
-                    showTabCount();
-                    tabsInput.value = browser.tabs.map(tab => tab.url).join("\n");
-                    item.captureNote = "";
-                    note.textContent = ""; note.hidden = true;
-                    reviewTabs.hidden = true; refreshBrowserGuide(); renderComparison();
-                    window.WarpErrorTimer.set(sessionStatus, "Tabs added to this draft. Review them before saving.");
+                    const useSession = () => {
+                        browser.tabs = clone(session.tabs);
+                        browser.activeTab = session.activeTab;
+                        invalidFocusedTabs.delete(item); editedBrowserUrls.delete(item); draftDirty = true;
+                        item.browser = browser; restoreBrowser.checked = true; ignoredBrowserTabs.delete(index);
+                        showTabCount();
+                        tabsInput.value = browser.tabs.map(tab => tab.url).join("\n");
+                        item.captureNote = "";
+                        note.textContent = ""; note.hidden = true;
+                        reviewTabs.hidden = true; refreshBrowserGuide(); renderComparison();
+                        window.WarpErrorTimer.set(sessionStatus, "Tabs added to this draft. Review them before saving.");
+                    };
+                    if (editedBrowserUrls.has(item)) confirmTabUpdate(useSession);
+                    else useSession();
                 });
                 native.core.invoke("browser_profiles", {browser:firefox ? "firefox" : "chromium"}).then(profiles => {
                     const counts = new Map();
@@ -1203,7 +1207,7 @@
                             browser.tabs = next;
                             if (browser.tabs.length) { item.browser = browser; restoreBrowser.checked = true; ignoredBrowserTabs.delete(index); }
                             if (!browser.tabs.length) { invalidFocusedTabs.delete(item); browser.activeTab = 1; }
-                            else if (!previous.length) { invalidFocusedTabs.delete(item); browser.activeTab = 1; }
+                            else if (browser.tabs.length === 1 || !previous.length) { invalidFocusedTabs.delete(item); browser.activeTab = 1; }
                             else if (focused) { invalidFocusedTabs.delete(item); browser.activeTab = focused; }
                             else invalidFocusedTabs.add(item);
                             showTabCount();

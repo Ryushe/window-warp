@@ -212,18 +212,44 @@ pub struct BridgeInfo {
 }
 
 impl Bridge {
-    pub fn supports_tab_focus(&self, kind: BrowserKind) -> bool {
+    pub fn supports_tab_focus(&self, browser: &Browser) -> bool {
         self.state.lock().ok().is_some_and(|state| {
             state
                 .running
                 .as_ref()
                 .is_some_and(|running| running.load(Ordering::SeqCst))
-                && state.connections.iter().any(|connection| {
-                    connection.browser == kind
-                        && connection.supports_focus
-                        && connection.updated.elapsed() < Duration::from_secs(15)
+                && state.snapshots.iter().any(|snapshot| {
+                    snapshot.browser == browser.kind
+                        && snapshot.updated.elapsed() < SNAPSHOT_LIFETIME
+                        && !browser.profile_path.is_empty()
+                        && !snapshot.profile_path.is_empty()
+                        && same_path(&browser.profile_path, &snapshot.profile_path)
+                        && state.connections.iter().any(|connection| {
+                            connection.client_id == snapshot.client_id
+                                && connection.browser == browser.kind
+                                && connection.supports_focus
+                                && connection.updated.elapsed() < Duration::from_secs(15)
+                        })
                 })
         })
+    }
+
+    pub fn refresh_focus_profiles(&self, cancelled: &AtomicBool) -> bool {
+        let connected = self.state.lock().ok().is_some_and(|state| {
+            state
+                .running
+                .as_ref()
+                .is_some_and(|running| running.load(Ordering::SeqCst))
+                && state.connections.iter().any(|connection| {
+                    connection.supports_focus
+                        && connection.updated.elapsed() < Duration::from_secs(15)
+                })
+        });
+        if !connected || cancelled.load(Ordering::Relaxed) {
+            return false;
+        }
+        self.capture_focus_snapshots(cancelled);
+        true
     }
 
     pub fn focus_restored_tabs(
@@ -246,7 +272,7 @@ impl Bridge {
                 .then_some(index)
             })
             .collect();
-        if requested.is_empty() {
+        if requested.is_empty() || cancelled.load(Ordering::Relaxed) {
             return Vec::new();
         }
         let capable: HashSet<_> = self
@@ -268,14 +294,20 @@ impl Bridge {
         if capable.is_empty() {
             return requested;
         }
-        let current = match crate::platform::snapshot_current(app) {
+        // Include competing browser windows on other virtual desktops; the
+        // extension can report those windows even though restore targets only
+        // the current desktop.
+        let current = match crate::platform::snapshot_for_restore(app) {
             Ok(current) => current,
             Err(_) => return requested,
         };
-        let snapshots = self.capture_snapshots();
+        let snapshots = self.capture_focus_snapshots(cancelled);
+        if cancelled.load(Ordering::Relaxed) {
+            return Vec::new();
+        }
         let plans = focus_plans(workspace, results, &current, &snapshots, &capable);
         if cancelled.load(Ordering::Relaxed) {
-            return requested;
+            return Vec::new();
         }
         let mut waiting = Vec::new();
         if let Ok(mut state) = self.state.lock() {
@@ -310,6 +342,9 @@ impl Bridge {
             state
                 .focus_pending
                 .retain(|_, commands| !commands.is_empty());
+        }
+        if cancelled.load(Ordering::Relaxed) {
+            return Vec::new();
         }
         requested
             .into_iter()
@@ -421,6 +456,18 @@ impl Bridge {
         Ok(())
     }
     fn request_snapshots(&self, timeout: Duration, discover: bool) {
+        self.request_snapshots_cancellable(timeout, discover, None);
+    }
+
+    fn request_snapshots_cancellable(
+        &self,
+        timeout: Duration,
+        discover: bool,
+        cancelled: Option<&AtomicBool>,
+    ) {
+        if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return;
+        }
         let (request_id, discovery_until) = {
             let Ok(mut state) = self.state.lock() else {
                 return;
@@ -455,6 +502,9 @@ impl Bridge {
         };
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
+            if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                break;
+            }
             std::thread::sleep(Duration::from_millis(100));
             let Ok(state) = self.state.lock() else {
                 return;
@@ -483,6 +533,38 @@ impl Bridge {
             }
         }
     }
+    fn capture_focus_snapshots(&self, cancelled: &AtomicBool) -> CapturedSnapshots {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let _guard = loop {
+            if cancelled.load(Ordering::Relaxed) || Instant::now() >= deadline {
+                return CapturedSnapshots::default();
+            }
+            match self.snapshot_request.try_lock() {
+                Ok(guard) => break guard,
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    return CapturedSnapshots::default();
+                }
+            }
+        };
+        let timeout = self
+            .state
+            .lock()
+            .ok()
+            .map(|state| snapshot_wait(&state, false))
+            .unwrap_or(Duration::from_secs(8))
+            .min(deadline.saturating_duration_since(Instant::now()));
+        self.request_snapshots_cancellable(timeout, false, Some(cancelled));
+        CapturedSnapshots(
+            self.state
+                .lock()
+                .map(|state| state.snapshots.clone())
+                .unwrap_or_default(),
+        )
+    }
+
     pub fn capture_snapshots(&self) -> CapturedSnapshots {
         self.capture_snapshots_with_discovery(false, false)
     }
@@ -2849,6 +2931,30 @@ fn match_snapshot(items: &[WorkspaceItem], snapshot: &Snapshot) -> Vec<(usize, u
         })
         .collect()
 }
+// Browser and native geometry can use different DPI coordinate systems.
+// Focus only when the active title identifies exactly one window on both sides.
+fn match_focus_snapshot(items: &[WorkspaceItem], snapshot: &Snapshot) -> Vec<(usize, usize)> {
+    let mut pairs = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        if !app_is_browser(item, snapshot.browser) {
+            continue;
+        }
+        for (window_index, window) in snapshot.windows.iter().enumerate() {
+            if title_matches(&item.window.title, &window.title) {
+                pairs.push((index, window_index));
+            }
+        }
+    }
+    pairs
+        .iter()
+        .filter_map(|&(index, window)| {
+            let item_unique = pairs.iter().filter(|&&(other, _)| other == index).count() == 1;
+            let window_unique = pairs.iter().filter(|&&(_, other)| other == window).count() == 1;
+            (item_unique && window_unique).then_some((index, window))
+        })
+        .collect()
+}
+
 fn focus_plans(
     workspace: &crate::workspaces::Workspace,
     results: &[RestoreResult],
@@ -2902,7 +3008,7 @@ fn focus_plans(
         .iter()
         .filter(|snapshot| capable.contains(&snapshot.client_id))
     {
-        for (native, extension) in match_snapshot(&observed, snapshot) {
+        for (native, extension) in match_focus_snapshot(&observed, snapshot) {
             let Some(index) = owners[native].filter(|_| !ambiguous.contains(&native)) else {
                 continue;
             };
@@ -3478,6 +3584,216 @@ mod tests {
                 }],
             }],
         }
+    }
+
+    #[test]
+    fn focus_capability_must_belong_to_the_saved_browser_profile() {
+        let mut state = State {
+            running: Some(Arc::new(AtomicBool::new(true))),
+            ..Default::default()
+        };
+        state.connections.push(Connection {
+            client_id: "fixture".into(),
+            browser: BrowserKind::Chromium,
+            updated: Instant::now(),
+            supports_focus: true,
+        });
+        let mut live = snapshot();
+        live.profile_path = "/profiles/connected".into();
+        live.profile_name = "Connected".into();
+        state.snapshots.push(live);
+        let bridge = Bridge {
+            state: Arc::new(Mutex::new(state)),
+            ..Default::default()
+        };
+        let mut browser = Browser {
+            kind: BrowserKind::Chromium,
+            profile_path: "/profiles/connected".into(),
+            ..Default::default()
+        };
+        assert!(bridge.supports_tab_focus(&browser));
+        browser.profile_path = "/profiles/unpaired".into();
+        assert!(!bridge.supports_tab_focus(&browser));
+        browser.profile_path.clear();
+        browser.profile_name = "Connected".into();
+        assert!(
+            !bridge.supports_tab_focus(&browser),
+            "profile names can be shared"
+        );
+        browser.profile_name.clear();
+        assert!(!bridge.supports_tab_focus(&browser));
+        bridge.state.lock().unwrap().connections[0].supports_focus = false;
+        browser.profile_path = "/profiles/connected".into();
+        assert!(!bridge.supports_tab_focus(&browser));
+    }
+
+    #[test]
+    fn focus_preflight_can_discover_a_connected_profile_after_restart() {
+        let bridge = Arc::new(Bridge::default());
+        {
+            let mut state = bridge.state.lock().unwrap();
+            state.running = Some(Arc::new(AtomicBool::new(true)));
+            state.connections.push(Connection {
+                client_id: "fixture".into(),
+                browser: BrowserKind::Chromium,
+                updated: Instant::now(),
+                supports_focus: true,
+            });
+        }
+        let browser = Browser {
+            kind: BrowserKind::Chromium,
+            profile_path: "/profiles/connected".into(),
+            ..Default::default()
+        };
+        assert!(!bridge.supports_tab_focus(&browser));
+        let worker_bridge = bridge.clone();
+        let worker = std::thread::spawn(move || {
+            worker_bridge.refresh_focus_profiles(&AtomicBool::new(false))
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let mut state = bridge.state.lock().unwrap();
+            if !state.request_id.is_empty() {
+                let mut live = snapshot();
+                live.profile_path = "/profiles/connected".into();
+                state.snapshots.push(live);
+                state.awaiting.remove("fixture");
+                break;
+            }
+            drop(state);
+            assert!(Instant::now() < deadline, "focus preflight did not start");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(worker.join().unwrap());
+        assert!(bridge.supports_tab_focus(&browser));
+        let other = Browser {
+            profile_path: "/profiles/unpaired".into(),
+            ..browser
+        };
+        assert!(!bridge.supports_tab_focus(&other));
+    }
+
+    #[test]
+    fn focus_matching_uses_unique_titles_when_geometry_uses_different_dpi() {
+        let target = item("target", "Example - Google Chrome", 10);
+        let mut live = snapshot();
+        live.windows[0].x = Some(3000);
+        assert_eq!(match_focus_snapshot(&[target], &live), [(0, 0)]);
+    }
+
+    #[test]
+    fn focus_matching_rejects_identical_titles_on_other_desktops() {
+        let target = item("target", "Example - Google Chrome", 10);
+        let other = item("other", "Example - Google Chrome", 10);
+        let mut live = snapshot();
+        let mut other_window = live.windows[0].clone();
+        other_window.id = 2;
+        live.windows.push(other_window);
+        assert!(match_focus_snapshot(&[target, other], &live).is_empty());
+    }
+
+    #[test]
+    fn focus_matching_does_not_assign_another_windows_saved_tabs_to_the_target() {
+        let mut target = item("target", "Example - Google Chrome", 10);
+        let saved_tabs = vec![
+            Tab {
+                url: "https://example.test/".into(),
+                title: "Example".into(),
+            },
+            Tab {
+                url: "https://second.test/".into(),
+                title: "Second".into(),
+            },
+        ];
+        target.browser = Some(Browser {
+            kind: BrowserKind::Chromium,
+            tabs: saved_tabs.clone(),
+            active_tab: 2,
+            ..Default::default()
+        });
+        let other = item("other", "Example - Google Chrome", 1010);
+        let mut live = snapshot();
+        live.windows[0].tabs = vec![Tab {
+            url: "https://different.test/".into(),
+            title: "Example".into(),
+        }];
+        let mut other_window = live.windows[0].clone();
+        other_window.id = 2;
+        other_window.x = Some(1010);
+        other_window.tabs = saved_tabs;
+        live.windows.push(other_window);
+        let workspace = crate::workspaces::Workspace {
+            id: "work".into(),
+            name: "Work".into(),
+            platform: std::env::consts::OS.into(),
+            items: vec![target.clone()],
+        };
+        let result = RestoreResult {
+            label: "Browser".into(),
+            restored: true,
+            launched: false,
+            error: None,
+            warning: None,
+            target: Some((target.window.id.clone(), target.window.pid)),
+        };
+        assert!(focus_plans(
+            &workspace,
+            &[result],
+            &[target.window, other.window],
+            &CapturedSnapshots(vec![live]),
+            &HashSet::from(["fixture".to_string()]),
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn cancelling_focus_snapshot_does_not_wait_for_another_request() {
+        let bridge = Arc::new(Bridge::default());
+        let guard = bridge.snapshot_request.lock().unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_bridge = bridge.clone();
+        let worker_cancelled = cancelled.clone();
+        let (done, finished) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            worker_bridge.capture_focus_snapshots(&worker_cancelled);
+            done.send(()).unwrap();
+        });
+        cancelled.store(true, Ordering::Relaxed);
+        assert!(finished.recv_timeout(Duration::from_secs(2)).is_ok());
+        drop(guard);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn cancelling_an_active_focus_snapshot_clears_its_request() {
+        let bridge = Arc::new(Bridge::default());
+        {
+            let mut state = bridge.state.lock().unwrap();
+            state.running = Some(Arc::new(AtomicBool::new(true)));
+            state.connections.push(Connection {
+                client_id: "fixture".into(),
+                browser: BrowserKind::Chromium,
+                updated: Instant::now(),
+                supports_focus: true,
+            });
+        }
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_bridge = bridge.clone();
+        let worker_cancelled = cancelled.clone();
+        let (done, finished) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            worker_bridge.capture_focus_snapshots(&worker_cancelled);
+            done.send(()).unwrap();
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while bridge.state.lock().unwrap().request_id.is_empty() {
+            assert!(Instant::now() < deadline, "snapshot request did not start");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        cancelled.store(true, Ordering::Relaxed);
+        assert!(finished.recv_timeout(Duration::from_secs(2)).is_ok());
+        worker.join().unwrap();
+        assert!(bridge.state.lock().unwrap().request_id.is_empty());
     }
 
     #[test]

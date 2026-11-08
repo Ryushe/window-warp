@@ -1,6 +1,6 @@
 # Workspace editor flow integration dossier
 
-- **Status:** implemented and exercised; independent review and integration pending
+- **Status:** independently reviewed and verified; candidate merge authorized
 - **Owner:** Codex
 - **Branch:** `codex/workspace-editor-flow`
 - **Base commit:** `bffd59af4fb2605b32c1df59921cf503fbb1b702`
@@ -56,7 +56,7 @@ or silently discard saved URLs.
 - Full JavaScript suite passed with the installed `linkedom` and `web-ext`
   dependencies and local loopback access. `npm run check` and `cargo fmt --check`
   passed.
-- Full Windows Rust suite passed: 172 passed, 9 opt-in tests ignored.
+- Full Windows Rust suite passed after review fixes: 179 passed, 9 opt-in tests ignored.
 - `node desktop/tests/windows/native.mjs --ux-only` passed on Windows with
   isolated settings and the task-owned cargo target. It exercised workspace
   monitor selection and restore, the single non-browser divider, the add button
@@ -68,7 +68,15 @@ or silently discard saved URLs.
   window, including URL order in the latter. The full
   `node desktop/tests/windows/native.mjs --chromium-only` fixture passed using
   the installed Edge browser and a short temporary fixture directory.
-- Self-review completed. Independent code review remains required before merge.
+- Independent review by `workspace_review` identified browser-profile fallback,
+  competing-window focus, edited-URL replacement, sole-tab selection, and
+  cancellation issues. Fixes and focused regression tests were reviewed again;
+  no actionable blockers remained. The reviewer's 132 focused JavaScript tests
+  passed independently. Full JavaScript, Windows UX, and Edge extension fixtures
+  passed again after the fixes. Duplicate browser titles now decline automatic
+  focus instead of risking another window.
+- User explicitly requested review, candidate integration, and an isolated
+  preview on 2026-11-07.
 
 ## Blockers and deferred work
 
@@ -84,9 +92,9 @@ or silently discard saved URLs.
 
 - **Owning feature branch/ref:** `refs/heads/codex/workspace-editor-flow`
 - **Latest immutable recovery checkpoint:** `13ae194ea65a8fa75b99bd2e8cb0e7f932a2bb36`
-- **Exact resume point:** independent review, paired-browser acceptance, and
-  candidate-branch reconciliation.
-- **Working-tree state at handoff:** implementation checkpoint followed by this dossier-only update.
+- **Exact resume point:** merge the reviewed feature into the candidate branch,
+  verify the integrated tree, and open an isolated preview.
+- **Working-tree state at handoff:** reviewed fixes and verification ready for integration.
 
 ## Decision gates
 
