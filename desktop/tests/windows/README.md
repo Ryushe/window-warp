@@ -94,7 +94,9 @@ The test covers:
 
 `result.json` records checks, skips and errors. Screenshots, the isolated build
 configuration and build/app logs stay in the run directory. Existing startup
-configuration is preserved and reported as skipped. The fixture closes its own
+configuration is preserved and reported as skipped. Set `WARP_TEST_OUTPUT_DIR`
+to a short temporary directory when Windows path length limits prevent a
+disposable browser profile from starting. The fixture closes its own
 process tree and helper; standalone fixture windows also have a bounded lifetime.
 It does not change unrelated windows or terminate unrelated processes.
 The helper uses per-monitor DPI awareness, releases only its own injected held

@@ -492,7 +492,9 @@ def checked_app_window(hwnd, expected_class=None):
         if not handle:
             raise c.WinError(c.get_last_error())
         try:
-            expected = Path(__file__).resolve().parents[2] / "src-tauri/target/windows-validation" / args.marker / "window-warp-fixture.exe"
+            output_root = Path(os.environ.get("WARP_TEST_OUTPUT_DIR") or
+                               Path(__file__).resolve().parents[2] / "src-tauri/target/windows-validation")
+            expected = output_root / args.marker / "window-warp-fixture.exe"
             if process_image(handle) != os.path.normcase(os.path.realpath(expected)):
                 raise RuntimeError("Lifecycle target is not this run's fixture executable")
             app_process_created = process_times(handle)[0]

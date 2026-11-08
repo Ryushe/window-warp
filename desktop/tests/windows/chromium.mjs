@@ -188,8 +188,8 @@ export async function testChromium({output,marker,invoke,until,checks,report,eva
         await wait("document.querySelector('[data-action=edit]') !== null",'saved Chromium workspace displayed',30000);
         await click('[data-action="edit"]');
         await wait("!document.querySelector('#workspace-editor').hidden",'unconnected Chromium draft',30000);
-        await wait("document.querySelector('#workspace-browser-guide-message').textContent.includes(\"isn't connected\")",'unconnected browser warning',10000);
-        await click('#show-settings');
+        await wait("document.querySelector('.browser-connection-dot')?.dataset.status === 'disconnected'",'unconnected browser indicator',10000);
+        await click('.browser-connection-dot');
         await popupSocket.evaluate("document.querySelector('#connection').click(); true");
         await until(()=>popupSocket.evaluate("chrome.storage.local.get('enabled').then(value=>value.enabled && !document.querySelector('#connection').disabled)"),Boolean,"reconnect the isolated browser",10000);
         await focusFixture();
@@ -249,6 +249,54 @@ export async function testChromium({output,marker,invoke,until,checks,report,eva
         const after=(await invoke("get_windows")).filter(window=>window.pid===child.pid && window.title.includes(marker));
         assert.equal(after.length,1); assert.equal(after[0].id,nativeWindow.id);
         checks.push("real Chromium extension updates the active owned workspace with both live URLs and profile without duplicating its window");
+
+        const focusStore = await invoke('get_workspaces');
+        const focusProfile = focusStore.profiles.find(profile => profile.id === captured.profile.id);
+        focusProfile.items[0].browser.activeTab = focusProfile.items[0].browser.tabs.findIndex(tab => tab.url === urls[0]) + 1;
+        await invoke('save_workspaces',{store:focusStore});
+        await evaluate("window.dispatchEvent(new CustomEvent('warp-browser-updated')); true");
+        await workerSocket.evaluate("chrome.tabs.query({windowId:" + windowId + "}).then(tabs=>chrome.tabs.update(tabs.find(tab=>tab.url===" + JSON.stringify(urls[1]) + ").id,{active:true}))");
+        await until(()=>invoke('get_windows'),windows=>windows.some(window=>window.id===nativeWindow.id && window.title.includes(marker + ' Chrome 2')),'other owned tab is active',30000);
+        await focusFixture();
+        const focused = await invoke('restore_workspace',{id:focusProfile.id});
+        assert.equal(focused[0].restored,true,JSON.stringify(focused));
+        assert.equal(focused[0].launched,false,'restoring the selected tab reuses the browser window');
+        assert.ok(!focused[0].warning?.includes('Could not confirm the saved browser tab'),JSON.stringify(focused));
+        await until(()=>workerSocket.evaluate("chrome.tabs.query({windowId:" + windowId + ",active:true}).then(tabs=>tabs[0]?.url)"),
+            url=>url===urls[0],'saved tab is focused in the reused Chromium window',30000);
+        checks.push('real Chromium extension focuses the saved tab in a reused workspace window');
+
+        const newProfile = structuredClone(focusProfile);
+        newProfile.id += '-focus-new';
+        newProfile.name = 'Focused new browser window';
+        newProfile.items[0].launch.newWindow = true;
+        const freshUrls = urls.map(url => url + '?new-focus=1');
+        newProfile.items[0].browser.tabs = freshUrls.map(url => ({url,title:''}));
+        newProfile.items[0].browser.activeTab = 2;
+        const newStore = await invoke('get_workspaces');
+        newStore.profiles.push(newProfile);
+        await invoke('save_workspaces',{store:newStore});
+        await evaluate("window.dispatchEvent(new CustomEvent('warp-browser-updated')); true");
+        const existingWindowIds = await workerSocket.evaluate("chrome.windows.getAll({populate:true,windowTypes:['normal']}).then(windows=>windows.map(window=>window.id))");
+        await focusFixture();
+        const openedFocus = await invoke('restore_workspace',{id:newProfile.id});
+        assert.equal(openedFocus[0].restored,true,JSON.stringify(openedFocus));
+        assert.equal(openedFocus[0].launched,true,'a new browser window is launched when requested');
+        assert.ok(!openedFocus[0].warning?.includes('Could not confirm the saved browser tab'),JSON.stringify(openedFocus));
+        const newWindow = await until(()=>workerSocket.evaluate("chrome.windows.getAll({populate:true,windowTypes:['normal']})"),
+            windows=>windows.find(window=>!existingWindowIds.includes(window.id) && window.tabs.some(tab=>tab.url===freshUrls[0])),
+            'new focused Chromium window',30000);
+        const focusedWindow = newWindow.find(window=>!existingWindowIds.includes(window.id) && window.tabs.some(tab=>tab.url===freshUrls[0]));
+        assert.deepEqual(focusedWindow.tabs.map(tab=>tab.url),freshUrls,'the updated extension preserves URL order');
+        assert.equal(focusedWindow.tabs.find(tab=>tab.active).url,freshUrls[1]);
+        await workerSocket.evaluate("chrome.windows.remove(" + focusedWindow.id + ")");
+        const resetStore = await invoke('get_workspaces');
+        resetStore.profiles = resetStore.profiles.filter(profile=>profile.id!==newProfile.id);
+        await invoke('save_workspaces',{store:resetStore});
+        await evaluate("window.dispatchEvent(new CustomEvent('warp-browser-updated')); true");
+        await focusFixture();
+        await invoke('restore_workspace',{id:focusProfile.id});
+        checks.push('real Chromium extension preserves tab order and focuses the saved tab in a new workspace window');
         const shortcuts=await invoke('get_config');
         for (const binding of shortcuts.bindings) binding.enabled=['update-workspace','toggle-pause'].includes(binding.action);
         await invoke('save_config',{config:shortcuts});
@@ -258,7 +306,7 @@ export async function testChromium({output,marker,invoke,until,checks,report,eva
         await wait("!document.querySelector('#workspace-hotkey-choice').hidden",'workspace capture choices',30000);
         await click('#workspace-hotkey-new');
         await wait("!document.querySelector('#workspace-editor').hidden",'automatic Chromium workspace capture',90000);
-        const selected=await evaluate(`(()=>{let count=0;for(const card of document.querySelectorAll('.workspace-item')){const keep=card.querySelector('.window-title').textContent.includes(${JSON.stringify(marker)}) && card.querySelector('[data-window=appId]').value.toLowerCase()==='chrome.exe';const box=card.querySelector('.include-window');box.checked=keep;box.dispatchEvent(new Event('change',{bubbles:true}));if(keep)count++;}return count;})()`);
+        const selected=await evaluate(`(()=>{let count=0;for(const card of document.querySelectorAll('.workspace-item')){const keep=card.querySelector('.window-title').textContent.includes(${JSON.stringify(marker)}) && card.querySelector('[data-window=appId]').value.toLowerCase()===${JSON.stringify(path.basename(program).toLowerCase())};const box=card.querySelector('.include-window');box.checked=keep;box.dispatchEvent(new Event('change',{bubbles:true}));if(keep)count++;}return count;})()`);
         assert.equal(selected,1,'Only the owned Chromium window is selected');
         await input('#workspace-name','Automatically captured Chromium workspace');
         await wait("!document.querySelector('#save-workspace').disabled",'Chromium workspace ready to save',10000);
@@ -356,7 +404,7 @@ export async function testChromium({output,marker,invoke,until,checks,report,eva
         await click('.saved-browser-card [data-action=add]');
         await wait("[...document.querySelectorAll('.saved-browser-popover button')].some(button=>button.textContent==='Two owned browser windows')",'workspace chooser shown',30000);
         await evaluate("[...document.querySelectorAll('.saved-browser-popover button')].find(button=>button.textContent==='Two owned browser windows').click()");
-        await wait("document.querySelector('#saved-browser-destination').open && !document.querySelector('#saved-browser-new').disabled",'browser destination dialog ready',30000);
+        await wait("document.querySelector('#saved-browser-destination').open && document.querySelectorAll('#saved-browser-targets input').length === 2",'browser destination dialog ready',30000);
         assert.equal(await evaluate("document.querySelectorAll('#saved-browser-targets input').length"),2);
         const sourceUrls=await evaluate("[...document.querySelectorAll('#saved-browser-source-content .saved-browser-urls li')].map(item=>item.textContent)");
         await evaluate("document.querySelectorAll('#saved-browser-targets .saved-browser-target')[1].querySelector('li').click()");
@@ -373,7 +421,7 @@ export async function testChromium({output,marker,invoke,until,checks,report,eva
         await click('.saved-browser-card [data-action=add]');
         await wait("[...document.querySelectorAll('.saved-browser-popover button')].some(button=>button.textContent==='Two owned browser windows')",'workspace chooser shown again',30000);
         await evaluate("[...document.querySelectorAll('.saved-browser-popover button')].find(button=>button.textContent==='Two owned browser windows').click()");
-        await wait("document.querySelector('#saved-browser-destination').open && !document.querySelector('#saved-browser-new').disabled",'replacement dialog ready',30000);
+        await wait("document.querySelector('#saved-browser-destination').open && document.querySelectorAll('#saved-browser-targets input').length === 2",'replacement dialog ready',30000);
         const replacementUrls=await evaluate("[...document.querySelectorAll('#saved-browser-source-content .saved-browser-urls li')].map(item=>item.textContent)");
         await evaluate("document.querySelectorAll('#saved-browser-targets input')[0].click()");
         const replaceKey=async()=>{

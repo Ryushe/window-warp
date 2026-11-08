@@ -545,6 +545,7 @@ pub fn restore(
         .any(|i| i.terminal.is_some())
         .then(crate::terminal::Capture::new);
     let mut results = Vec::new();
+    let mut focus_profiles_requested = false;
     for (index, item) in profile.items.iter().enumerate() {
         if cancelled.load(Ordering::Relaxed) {
             break;
@@ -752,7 +753,20 @@ pub fn restore(
                     .map(|w| w.id.clone())
                     .collect();
                 let commands = if let Some(browser) = &item.browser {
-                    browser.launch_commands(&item.launch)?
+                    let bridge = app.state::<crate::browser_bridge::Bridge>();
+                    let mut preserve_order = bridge.supports_tab_focus(browser);
+                    if !preserve_order
+                        && !focus_profiles_requested
+                        && browser.tabs.len() > 1
+                        && !browser.profile_path.is_empty()
+                    {
+                        focus_profiles_requested = bridge.refresh_focus_profiles(cancelled);
+                        preserve_order = bridge.supports_tab_focus(browser);
+                    }
+                    if cancelled.load(Ordering::Relaxed) {
+                        return Err("Workspace restore canceled.".into());
+                    }
+                    browser.launch_commands(&item.launch, preserve_order)?
                 } else if let Some(terminal) = &item.terminal {
                     vec![terminal.launch_command(&item.launch)?]
                 } else {
@@ -839,8 +853,7 @@ fn check_restore_desktop(app: &AppHandle, expected: Option<&str>) -> Result<(), 
 }
 
 fn same_browser_tabs(current: &crate::firefox::Browser, saved: &crate::firefox::Browser) -> bool {
-    current.active_tab == saved.active_tab
-        && current.tabs.len() == saved.tabs.len()
+    current.tabs.len() == saved.tabs.len()
         && current
             .tabs
             .iter()

@@ -33,7 +33,7 @@ const runFirefox = firefoxOnly || process.argv.includes("--firefox");
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const buildTarget = process.env.WARP_TEST_CARGO_TARGET_DIR || path.join(desktop, "src-tauri/target");
 const marker = "WARP-NATIVE-" + randomUUID();
-const output = path.join(desktop, "src-tauri/target/windows-validation", marker);
+const output = path.join(process.env.WARP_TEST_OUTPUT_DIR || path.join(desktop, "src-tauri/target/windows-validation"), marker);
 const state = path.join(output, "state");
 fs.mkdirSync(state, {recursive:true});
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -1779,7 +1779,17 @@ try {
         const capture = await invoke('capture_workspace',{name:'UX fixture workspace'});
         capture.profile.items = capture.profile.items.filter(item=>item.window.pid===fixture.pid).slice(0,1);
         assert.equal(capture.profile.items.length,1,'Workspace uses only a fixture-owned window');
-        await invoke('save_workspaces',{store:{version:1,profiles:[capture.profile]}});
+        const browserFixture = structuredClone(capture.profile);
+        browserFixture.id = 'browser-' + randomUUID();
+        browserFixture.name = 'Browser fixture';
+        browserFixture.items[0].label = 'Research - Firefox';
+        browserFixture.items[0].window.appId = 'firefox.exe';
+        browserFixture.items[0].browser = {kind:'firefox',profilePath:'',profileName:'',activeTab:2,tabs:[
+            {url:'https://example.com/research',title:'Research'},
+            {url:'https://example.org/notes',title:'Notes'},
+            {url:'https://example.net/reference',title:'Reference'}
+        ]};
+        await invoke('save_workspaces',{store:{version:1,profiles:[capture.profile,browserFixture]}});
         await click('#show-workspaces');
         await wait("document.querySelector('#workspace-list .workspace-card') !== null",'owned workspace');
         await click('.workspace-card [data-action=restore]');
@@ -1800,7 +1810,11 @@ try {
         } else skipped.push('Moving an owned workspace window to another monitor requires two displays');
         await sleep(350); await screenshot('ux-workspace-monitor.png');
         await click('.workspace-item-toggle');
-        assert.equal(await evaluate("document.querySelector('.workspace-window-options > details:last-child').open"),true);
+        assert.equal(await evaluate("document.querySelector('.workspace-window-options').open"),true);
+        assert.equal(await evaluate("getComputedStyle(document.querySelector('.workspace-advanced')).borderTopWidth"),'0px',
+            'Non-browser windows have a single divider above Advanced');
+        assert.equal(await evaluate("document.querySelector('#add-workspace-window').textContent.trim()"),'Add window',
+            'The Add window button has no dropdown arrow');
         await evaluate("document.querySelector('#workspace-editor').scrollIntoView({block:'start'})");
         await sleep(350); await screenshot('ux-workspace-expanded.png');
         await input('#workspace-name',''); await click('#save-workspace');
@@ -1811,7 +1825,9 @@ try {
         await wait("document.querySelector('#workspace-editor').hidden",'workspace draft saved');
         if (targetMonitor) {
             const saved = (await invoke('get_workspaces')).profiles[0].items[0].window;
-            assert.equal(saved.monitor,targetMonitor); assert.equal(saved.monitorName,'');
+            assert.equal(saved.monitor,targetMonitor);
+            const chosen = monitorOptions.find(monitor => monitor.index === targetMonitor);
+            assert.equal(saved.monitorName, chosen?.stable && chosen.id || chosen?.sourceId || '');
             assert.deepEqual(saved.rect,capture.profile.items[0].window.rect);
             assert.deepEqual(saved.workArea,capture.profile.items[0].window.workArea);
             await invoke('restore_workspace',{id:capture.profile.id});
@@ -1819,6 +1835,19 @@ try {
             checks.push('workspace monitor selector saves and restores the owned window on the selected monitor');
         }
         checks.push('workspace editor exposes related options and identifies save errors in context');
+
+        await click('[data-workspace-id="' + browserFixture.id + '"] [data-action=edit]');
+        await wait("!document.querySelector('#workspace-editor').hidden",'browser workspace draft');
+        assert.equal(await evaluate("(() => {const dot=document.querySelector('.browser-connection-dot').getBoundingClientRect(); const count=document.querySelector('.window-tabs-summary').getBoundingClientRect(); return dot.right <= count.left + 1;})()"),true,
+            'The connection dot appears to the left of the tab count');
+        await click('.workspace-item-toggle');
+        assert.match(await evaluate("document.querySelector('[data-browser=tabs]').value"),/example.org\/notes/);
+        await sleep(350); await screenshot('ux-workspace-browser.png');
+        await click('.browser-connection-dot');
+        await wait("!document.querySelector('#settings-page').hidden && document.querySelector('#browser-extensions-settings').open",'browser extension settings');
+        await click('#show-workspaces');
+        await wait("!document.querySelector('#workspace-editor').hidden",'browser draft preserved after settings');
+        checks.push('browser connection dot precedes the tab count and opens settings without losing the draft');
     }
     if (runFirefox) {
         await testFirefox({output,marker,native,invoke,evaluate,wait,click,screenshot,until,checks,report,profileLock:firefoxProfileLock});
@@ -1830,16 +1859,18 @@ try {
         await click('#show-workspaces');
         await wait("document.querySelector('.saved-browser-card [data-action=add]') !== null",'saved browser');
         await click('.saved-browser-card [data-action=add]');
-        await wait("document.querySelector('#saved-browser-destination').open && !document.querySelector('#saved-browser-new').disabled",'chooser ready');
-        assert.equal(await evaluate("document.querySelector('#saved-browser-replace').disabled"),true);
+        await wait("document.querySelector('#saved-browser-destination').open && document.querySelectorAll('#saved-browser-targets input').length === 2",'chooser ready');
+        assert.equal(await evaluate("document.querySelector('#saved-browser-new').disabled"),false);
+        assert.equal(await evaluate("['append','replace'].every(action => document.querySelector('#saved-browser-' + action).disabled)"),true);
         await evaluate("document.querySelectorAll('#saved-browser-targets .saved-browser-target')[1].querySelector('li').click()");
         assert.equal(await evaluate("document.querySelectorAll('#saved-browser-targets input')[1].checked"),true);
+        assert.equal(await evaluate("['new','append','replace'].every(action => !document.querySelector('#saved-browser-' + action).disabled)"),true);
         await screenshot('chooser-select.png');
         await click('#saved-browser-destination-cancel');
         await wait("!document.querySelector('#saved-browser-destination').open",'chooser canceled');
         assert.equal((await invoke('get_workspaces')).profiles[0].items[1].browser.tabs[0].url,'https://example.net/');
         await click('.saved-browser-card [data-action=add]');
-        await wait("document.querySelector('#saved-browser-destination').open && !document.querySelector('#saved-browser-new').disabled",'chooser reopened');
+        await wait("document.querySelector('#saved-browser-destination').open && document.querySelectorAll('#saved-browser-targets input').length === 2",'chooser reopened');
         await evaluate("document.querySelectorAll('#saved-browser-targets .saved-browser-target')[1].querySelector('li').click()");
         const window=await native('app_window');
         let replaceKey=()=>native('chooser_press',{window,key:82,gap_ms:30});
