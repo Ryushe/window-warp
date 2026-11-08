@@ -298,18 +298,19 @@ impl Bridge {
         // extension can report those windows even though restore targets only
         // the current desktop.
         let observation_deadline = Instant::now() + Duration::from_secs(8);
+        let snapshots = self.capture_focus_snapshots_until(cancelled, observation_deadline);
         let plans = focus_plans_after_launch(
             workspace,
             results,
             &requested,
             &capable,
+            &snapshots,
             cancelled,
             observation_deadline,
             || {
                 let before = crate::platform::snapshot_for_restore(app).ok()?;
-                let snapshots = self.capture_focus_snapshots_until(cancelled, observation_deadline);
                 let after = crate::platform::snapshot_for_restore(app).ok()?;
-                Some((before, snapshots, after))
+                Some((before, after))
             },
             std::thread::sleep,
         );
@@ -2977,6 +2978,7 @@ fn focus_plans_after_launch<Observe, Pause>(
     results: &[RestoreResult],
     requested: &[usize],
     capable: &HashSet<String>,
+    snapshots: &CapturedSnapshots,
     cancelled: &AtomicBool,
     deadline: Instant,
     mut observe: Observe,
@@ -2985,27 +2987,29 @@ fn focus_plans_after_launch<Observe, Pause>(
 where
     Observe: FnMut() -> Option<(
         Vec<crate::workspaces::WindowInfo>,
-        CapturedSnapshots,
         Vec<crate::workspaces::WindowInfo>,
     )>,
     Pause: FnMut(Duration),
 {
     // Newly created browser windows can still be called "Untitled" when the
-    // extension has already reported their final tab titles. Reobserve both
-    // sides briefly, but keep the same unique-window and profile checks.
+    // extension has already reported their final tab titles. Reobserve the
+    // native windows briefly without waiting for another extension poll.
+    let mut last_plans = Vec::new();
     for attempt in 0..3 {
-        if cancelled.load(Ordering::Relaxed) || Instant::now() >= deadline {
+        if cancelled.load(Ordering::Relaxed) {
             return Vec::new();
         }
-        let Some((before, snapshots, after)) = observe() else {
+        if attempt > 0 && Instant::now() >= deadline {
+            return last_plans;
+        }
+        let Some((before, after)) = observe() else {
             return Vec::new();
         };
         if cancelled.load(Ordering::Relaxed) {
             return Vec::new();
         }
-        let mut plans = focus_plans(workspace, results, &after, &snapshots, capable);
-        // A title change during the extension snapshot could otherwise pair
-        // the target with a different browser window that has the same tabs.
+        let mut plans = focus_plans(workspace, results, &after, snapshots, capable);
+        // A target whose title is still changing is not a reliable match.
         plans.retain(|(index, _, _)| {
             let Some((id, pid)) = results
                 .get(*index)
@@ -3027,10 +3031,11 @@ where
                 && !plans.iter().any(|(planned, _, _)| *planned == index)
         });
         let remaining = deadline.saturating_duration_since(Instant::now());
-        if !pending_launch || attempt == 2 || remaining.is_zero() {
+        if !pending_launch || attempt == 2 || remaining <= Duration::from_millis(250) {
             return plans;
         }
-        pause(Duration::from_millis(250).min(remaining));
+        last_plans = plans;
+        pause(Duration::from_millis(250));
     }
     Vec::new()
 }
@@ -3124,6 +3129,25 @@ fn focus_plans(
             let (snapshot, window) = matches[0];
             let browser = workspace.items[index].browser.as_ref()?;
             let selected = browser.tabs.get(browser.active_tab.saturating_sub(1))?;
+            // Titles from the OS and extension can briefly describe different
+            // moments. If another potentially matching profile has the same
+            // selected URL, title alone cannot safely distinguish its window.
+            let matching_windows = snapshots
+                .0
+                .iter()
+                .filter(|other| {
+                    capable.contains(&other.client_id)
+                        && other.browser == snapshot.browser
+                        && (snapshot.profile_path.is_empty()
+                            || other.profile_path.is_empty()
+                            || same_path(&snapshot.profile_path, &other.profile_path))
+                })
+                .flat_map(|other| &other.windows)
+                .filter(|other| other.tabs.iter().any(|tab| tab.url == selected.url))
+                .count();
+            if matching_windows != 1 {
+                return None;
+            }
             let matching: Vec<_> = window
                 .tabs
                 .iter()
@@ -3807,6 +3831,7 @@ mod tests {
         };
         let mut live = snapshot();
         live.windows[0].tabs = tabs;
+        let captured = CapturedSnapshots(vec![live.clone()]);
         let mut observations = 0;
         let pauses = std::cell::Cell::new(0);
         let plans = focus_plans_after_launch(
@@ -3814,6 +3839,7 @@ mod tests {
             std::slice::from_ref(&result),
             &[0],
             &HashSet::from(["fixture".to_string()]),
+            &captured,
             &AtomicBool::new(false),
             Instant::now() + Duration::from_secs(1),
             || {
@@ -3822,11 +3848,7 @@ mod tests {
                 if observations == 1 {
                     native.title = "Untitled - Google Chrome".into();
                 }
-                Some((
-                    vec![native],
-                    CapturedSnapshots(vec![live.clone()]),
-                    vec![saved.window.clone()],
-                ))
+                Some((vec![native], vec![saved.window.clone()]))
             },
             |_| pauses.set(pauses.get() + 1),
         );
@@ -3841,21 +3863,19 @@ mod tests {
         let mut other = ambiguous.windows[0].clone();
         other.id = 2;
         ambiguous.windows.push(other);
+        let ambiguous_capture = CapturedSnapshots(vec![ambiguous.clone()]);
         let mut attempts = 0;
         let plans = focus_plans_after_launch(
             &workspace,
             std::slice::from_ref(&result),
             &[0],
             &HashSet::from(["fixture".to_string()]),
+            &ambiguous_capture,
             &AtomicBool::new(false),
             Instant::now() + Duration::from_secs(1),
             || {
                 attempts += 1;
-                Some((
-                    vec![saved.window.clone()],
-                    CapturedSnapshots(vec![ambiguous.clone()]),
-                    vec![saved.window.clone()],
-                ))
+                Some((vec![saved.window.clone()], vec![saved.window.clone()]))
             },
             |_| {},
         );
@@ -3870,16 +3890,13 @@ mod tests {
             std::slice::from_ref(&result),
             &[0],
             &HashSet::from(["fixture".to_string()]),
+            &ambiguous_capture,
             &AtomicBool::new(false),
             Instant::now() + Duration::from_millis(100),
             || {
                 slow_attempts += 1;
                 std::thread::sleep(Duration::from_millis(150));
-                Some((
-                    vec![saved.window.clone()],
-                    CapturedSnapshots(vec![ambiguous.clone()]),
-                    vec![saved.window.clone()],
-                ))
+                Some((vec![saved.window.clone()], vec![saved.window.clone()]))
             },
             |_| slow_pauses.set(slow_pauses.get() + 1),
         );
@@ -3892,7 +3909,12 @@ mod tests {
         let mut other = swapped_live.windows[0].clone();
         other.id = 2;
         other.title = "Second".into();
+        swapped_live.windows[0].tabs = vec![Tab {
+            url: "https://different.test/".into(),
+            title: "Example".into(),
+        }];
         swapped_live.windows.push(other);
+        let swapped_capture = CapturedSnapshots(vec![swapped_live]);
         let original_other = item("other", "Second - Google Chrome", 20).window;
         let mut after_target = saved.window.clone();
         after_target.title = "Second - Google Chrome".into();
@@ -3900,21 +3922,77 @@ mod tests {
         after_other.title = saved.window.title.clone();
         let plans = focus_plans_after_launch(
             &workspace,
-            &[result],
+            std::slice::from_ref(&result),
             &[0],
             &HashSet::from(["fixture".to_string()]),
+            &swapped_capture,
             &AtomicBool::new(false),
             Instant::now() + Duration::from_secs(1),
             || {
                 Some((
                     vec![saved.window.clone(), original_other.clone()],
-                    CapturedSnapshots(vec![swapped_live.clone()]),
                     vec![after_target.clone(), after_other.clone()],
                 ))
             },
             |_| {},
         );
         assert!(plans.is_empty());
+
+        // Even stable but stale native titles cannot disambiguate two windows
+        // that both contain the selected URL.
+        let mut stale_live = live.clone();
+        stale_live.windows[0].title = "Second".into();
+        let mut stale_other = live.windows[0].clone();
+        stale_other.id = 2;
+        stale_live.windows.push(stale_other);
+        let stale_capture = CapturedSnapshots(vec![stale_live]);
+        let plans = focus_plans_after_launch(
+            &workspace,
+            std::slice::from_ref(&result),
+            &[0],
+            &HashSet::from(["fixture".to_string()]),
+            &stale_capture,
+            &AtomicBool::new(false),
+            Instant::now() + Duration::from_secs(1),
+            || {
+                Some((
+                    vec![saved.window.clone(), original_other.clone()],
+                    vec![saved.window.clone(), original_other.clone()],
+                ))
+            },
+            |_| {},
+        );
+        assert!(plans.is_empty());
+
+        // A missing second target must not discard a valid first target when
+        // too little time remains for another observation.
+        let mut two_windows = workspace.clone();
+        let mut missing = saved.clone();
+        missing.window.id = "missing".into();
+        two_windows.items.push(missing);
+        let missing_result = RestoreResult {
+            label: "Missing".into(),
+            restored: true,
+            launched: true,
+            error: None,
+            warning: None,
+            target: Some(("missing".into(), saved.window.pid)),
+        };
+        let short_pause = std::cell::Cell::new(0);
+        let plans = focus_plans_after_launch(
+            &two_windows,
+            &[result, missing_result],
+            &[0, 1],
+            &HashSet::from(["fixture".to_string()]),
+            &captured,
+            &AtomicBool::new(false),
+            Instant::now() + Duration::from_millis(100),
+            || Some((vec![saved.window.clone()], vec![saved.window.clone()])),
+            |_| short_pause.set(short_pause.get() + 1),
+        );
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].0, 0);
+        assert_eq!(short_pause.get(), 0);
     }
 
     #[test]

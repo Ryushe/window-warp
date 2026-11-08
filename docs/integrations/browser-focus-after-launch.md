@@ -17,9 +17,11 @@ window still had an `Untitled` title; the resulting focus request was omitted
 and the user saw a warning. Reobserve both sides briefly for a newly launched
 window. Continue requiring the same unique window, browser profile, and saved
 URL checks, and retain the warning if the match remains uncertain. Existing
-windows do not receive the launch-specific retry. All observations share one
-eight-second budget. The target's native title must stay unchanged across the
-extension snapshot, and cancellation is rechecked under the command-queue lock.
+windows do not receive the launch-specific retry. The extension is sampled
+once and native titles are rechecked within one eight-second budget, avoiding
+another five-second extension poll. A target title must be stable across two
+native observations, and a selected URL shared by another possibly matching
+profile is treated as ambiguous. Cancellation is rechecked under the queue lock.
 
 ## Evidence and review
 
@@ -30,10 +32,12 @@ extension snapshot, and cancellation is rechecked under the command-queue lock.
   as expected. All 49 Windows browser-bridge tests then passed with loopback.
   The regression also verifies that ambiguous windows remain unmatched after
   all retries. A fresh native Chromium run is pending after propagation.
-- Independent review identified the need for a shared time budget and a title
-  stability check. All 49 bridge tests passed again after those changes; the
-  regression covers both a slow observation and a title swap. A final review
-  and propagation remain pending.
+- Independent review identified the need for a shared time budget, stable
+  titles, and handling an extension that polls every five seconds. An initial
+  fix passed 49 bridge tests but still failed the native Chromium fixture; the
+  revised single-snapshot approach passed all 49 bridge tests, including
+  deadline, ambiguous URL, and mixed matched/unmatched cases. The real browser
+  fixture and final review remain pending after propagation.
 
 ## Blockers and deferred work
 
